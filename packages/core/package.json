@@ -1,0 +1,39 @@
+{
+  "name": "@mogram/core",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Mogram file format and diagram rules: parsing, validation, state, layout, routing, timeline and edit commands. Pure TypeScript.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./model": "./src/model/index.ts",
+    "./presets": "./src/presets/index.ts",
+    "./format": "./src/format/index.ts",
+    "./state": "./src/state/index.ts",
+    "./layout": "./src/layout/index.ts",
+    "./routing": "./src/routing/index.ts",
+    "./timeline": "./src/timeline/index.ts",
+    "./tours": "./src/tours/index.ts",
+    "./nested": "./src/nested/index.ts",
+    "./edit": "./src/edit/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@vitest/coverage-v8": "5.0.3",
+    "eslint": "10.12.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.3",
+    "@types/node": "24.19.1"
+  }
+}

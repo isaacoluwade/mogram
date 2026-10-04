@@ -1,0 +1,410 @@
+import "server-only";
+import { randomBytes } from "node:crypto";
+import { and, desc, eq, sql } from "drizzle-orm";
+import { setSetting } from "@mogram/core/edit";
+import { parseDiagram } from "@mogram/core/format";
+import type {
+  DiagramDetail,
+  DiagramSummary,
+  RevisionSummary,
+  SharedDiagram,
+  Visibility,
+} from "@/lib/api/contracts";
+import { getDb } from "../db/client";
+import { diagram, revision, user, type StoredFiles } from "../db/schema";
+import { isThumbnailDataUrl, sanitizeProjectFiles } from "./sanitize";
+
+/**
+ * Cloud diagrams (AC-3, AC-4). Every query is scoped to the owner, so a private diagram is
+ * invisible to everyone else — routes answer 404, never 403, so existence never leaks (AC-5).
+ */
+
+/**
+ * Saves by the same author within this window update one revision instead of adding many. The
+ * first version (as created, duplicated or imported) is never merged into, so it can always be
+ * restored.
+ */
+const REVISION_COALESCE_MS = 5 * 60 * 1000;
+const FIRST_VERSION = 1;
+
+export type ServiceResult<T> =
+  | { readonly ok: true; readonly value: T }
+  | {
+      readonly ok: false;
+      readonly code: "not_found" | "conflict" | "invalid";
+      readonly message: string;
+      readonly currentVersion?: number;
+    };
+
+const ok = <T>(value: T): ServiceResult<T> => ({ ok: true, value });
+const notFound = <T>(): ServiceResult<T> => ({
+  ok: false,
+  code: "not_found",
+  message: "Diagram not found.",
+});
+
+type DiagramRow = typeof diagram.$inferSelect;
+
+function toSummary(row: DiagramRow): DiagramSummary {
+  return {
+    id: row.id,
+    name: row.name,
+    updatedAt: row.updatedAt.toISOString(),
+    createdAt: row.createdAt.toISOString(),
+    visibility: row.visibility,
+    thumbnail: row.thumbnail,
+  };
+}
+
+function toDetail(row: DiagramRow): DiagramDetail {
+  return {
+    ...toSummary(row),
+    files: row.files,
+    version: row.version,
+    shareId: row.shareId,
+    allowViewerState: row.allowViewerState,
+  };
+}
+
+/** 128-bit random, URL-safe — not guessable, not derived from the diagram id. */
+function newShareId(): string {
+  return randomBytes(16).toString("base64url");
+}
+
+/** Thumbnails are small raster previews rendered in the browser; anything else is dropped. */
+function cleanThumbnail(thumbnail: string | null | undefined): string | null | undefined {
+  if (thumbnail === undefined || thumbnail === null) return thumbnail;
+  return isThumbnailDataUrl(thumbnail) ? thumbnail : null;
+}
+
+const isUuid = (value: string): boolean =>
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+
+async function ownedRow(ownerId: string, id: string): Promise<DiagramRow | null> {
+  if (!isUuid(id)) return null;
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(diagram)
+    .where(and(eq(diagram.id, id), eq(diagram.ownerId, ownerId)))
+    .limit(1);
+  return rows[0] ?? null;
+}
+
+export async function listDiagrams(ownerId: string): Promise<DiagramSummary[]> {
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(diagram)
+    .where(eq(diagram.ownerId, ownerId))
+    .orderBy(desc(diagram.updatedAt))
+    .limit(500);
+  return rows.map(toSummary);
+}
+
+export async function getDiagram(ownerId: string, id: string): Promise<DiagramDetail | null> {
+  const row = await ownedRow(ownerId, id);
+  return row === null ? null : toDetail(row);
+}
+
+export async function createDiagram(
+  ownerId: string,
+  input: { name: string; files: StoredFiles; thumbnail?: string | null | undefined },
+): Promise<ServiceResult<DiagramDetail>> {
+  const cleaned = sanitizeProjectFiles(input.files);
+  if ("error" in cleaned) return { ok: false, code: "invalid", message: cleaned.error };
+  const db = await getDb();
+  // The diagram and its first revision exist together or not at all.
+  const row = await db.transaction(async (tx) => {
+    const [inserted] = await tx
+      .insert(diagram)
+      .values({
+        ownerId,
+        name: input.name,
+        files: cleaned.files,
+        thumbnail: cleanThumbnail(input.thumbnail) ?? null,
+      })
+      .returning();
+    if (inserted === undefined) throw new Error("Insert returned no row");
+    await tx.insert(revision).values({
+      diagramId: inserted.id,
+      authorId: ownerId,
+      files: inserted.files,
+      version: inserted.version,
+    });
+    return inserted;
+  });
+  return ok(toDetail(row));
+}
+
+/**
+ * Saves a new working copy. `baseVersion` must match the stored version; otherwise another tab
+ * or device saved first and the caller gets a conflict instead of silently overwriting it.
+ */
+export async function saveDiagram(
+  ownerId: string,
+  id: string,
+  input: {
+    files: StoredFiles;
+    baseVersion: number;
+    name?: string | undefined;
+    thumbnail?: string | null | undefined;
+  },
+): Promise<ServiceResult<{ version: number; updatedAt: string }>> {
+  const cleaned = sanitizeProjectFiles(input.files);
+  if ("error" in cleaned) return { ok: false, code: "invalid", message: cleaned.error };
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [current] = await tx
+      .select()
+      .from(diagram)
+      .where(and(eq(diagram.id, id), eq(diagram.ownerId, ownerId)))
+      .limit(1)
+      .for("update");
+    if (current === undefined) return notFound<{ version: number; updatedAt: string }>();
+    if (current.version !== input.baseVersion) {
+      return {
+        ok: false as const,
+        code: "conflict" as const,
+        message: "This diagram was changed somewhere else since you opened it.",
+        currentVersion: current.version,
+      };
+    }
+    const now = new Date();
+    const thumbnail = cleanThumbnail(input.thumbnail);
+    const [updated] = await tx
+      .update(diagram)
+      .set({
+        files: cleaned.files,
+        version: current.version + 1,
+        updatedAt: now,
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(thumbnail !== undefined ? { thumbnail } : {}),
+      })
+      .where(eq(diagram.id, id))
+      .returning();
+    if (updated === undefined) throw new Error("Update returned no row");
+
+    const [latest] = await tx
+      .select()
+      .from(revision)
+      .where(eq(revision.diagramId, id))
+      .orderBy(desc(revision.createdAt))
+      .limit(1);
+    if (
+      latest !== undefined &&
+      latest.version !== FIRST_VERSION &&
+      latest.authorId === ownerId &&
+      now.getTime() - latest.createdAt.getTime() < REVISION_COALESCE_MS
+    ) {
+      await tx
+        .update(revision)
+        .set({ files: cleaned.files, version: updated.version, updatedAt: now })
+        .where(eq(revision.id, latest.id));
+    } else {
+      await tx.insert(revision).values({
+        diagramId: id,
+        authorId: ownerId,
+        files: cleaned.files,
+        version: updated.version,
+      });
+    }
+    return ok({ version: updated.version, updatedAt: updated.updatedAt.toISOString() });
+  });
+}
+
+/**
+ * Renames (the YAML `name:` changes too, so the editor and dashboard agree, and that is a new
+ * version) and/or replaces the dashboard thumbnail (metadata only, no new version).
+ */
+export async function updateDiagram(
+  ownerId: string,
+  id: string,
+  input: { name?: string | undefined; thumbnail?: string | null | undefined },
+): Promise<ServiceResult<DiagramSummary>> {
+  if ((await ownedRow(ownerId, id)) === null) return notFound();
+  const db = await getDb();
+  return db.transaction(async (tx) => {
+    const [current] = await tx
+      .select()
+      .from(diagram)
+      .where(eq(diagram.id, id))
+      .limit(1)
+      .for("update");
+    if (current === undefined) return notFound<DiagramSummary>();
+    const thumbnail = cleanThumbnail(input.thumbnail);
+    if (input.name === undefined || input.name === current.name) {
+      if (thumbnail === undefined) return ok(toSummary(current));
+      const [row] = await tx
+        .update(diagram)
+        .set({ thumbnail })
+        .where(eq(diagram.id, id))
+        .returning();
+      return row === undefined ? notFound<DiagramSummary>() : ok(toSummary(row));
+    }
+    const { diagram: parsed } = parseDiagram(current.files, "");
+    const files =
+      parsed.files.length === 0
+        ? current.files
+        : setSetting(current.files, parsed, { key: "name", value: input.name }).files;
+    const [row] = await tx
+      .update(diagram)
+      .set({
+        name: input.name,
+        files,
+        version: current.version + 1,
+        updatedAt: new Date(),
+        ...(thumbnail !== undefined ? { thumbnail } : {}),
+      })
+      .where(eq(diagram.id, id))
+      .returning();
+    if (row === undefined) return notFound<DiagramSummary>();
+    await tx
+      .insert(revision)
+      .values({ diagramId: id, authorId: ownerId, files: row.files, version: row.version });
+    return ok(toSummary(row));
+  });
+}
+
+export async function deleteDiagram(ownerId: string, id: string): Promise<boolean> {
+  if (!isUuid(id)) return false;
+  const db = await getDb();
+  const rows = await db
+    .delete(diagram)
+    .where(and(eq(diagram.id, id), eq(diagram.ownerId, ownerId)))
+    .returning({ id: diagram.id });
+  return rows.length > 0;
+}
+
+export async function duplicateDiagram(
+  ownerId: string,
+  id: string,
+): Promise<ServiceResult<DiagramDetail>> {
+  const row = await ownedRow(ownerId, id);
+  if (row === null) return notFound();
+  const name = `${row.name} copy`.slice(0, 120);
+  const { diagram: parsed } = parseDiagram(row.files, "");
+  const files =
+    parsed.files.length === 0
+      ? row.files
+      : setSetting(row.files, parsed, { key: "name", value: name }).files;
+  return createDiagram(ownerId, { name, files, thumbnail: row.thumbnail });
+}
+
+export async function updateShareSettings(
+  ownerId: string,
+  id: string,
+  input: {
+    visibility: Visibility;
+    allowViewerState: boolean;
+    regenerateLink?: boolean | undefined;
+  },
+): Promise<ServiceResult<DiagramDetail>> {
+  const row = await ownedRow(ownerId, id);
+  if (row === null) return notFound();
+  const needsId =
+    input.visibility === "link" && (row.shareId === null || input.regenerateLink === true);
+  const db = await getDb();
+  const [updated] = await db
+    .update(diagram)
+    .set({
+      visibility: input.visibility,
+      allowViewerState: input.allowViewerState,
+      ...(needsId ? { shareId: newShareId() } : {}),
+    })
+    .where(eq(diagram.id, id))
+    .returning();
+  return updated === undefined ? notFound() : ok(toDetail(updated));
+}
+
+/** The latest saved version behind a share link (SH-5); private diagrams are not found. */
+export async function getSharedDiagram(shareId: string): Promise<SharedDiagram | null> {
+  if (!/^[A-Za-z0-9_-]{16,64}$/.test(shareId)) return null;
+  const db = await getDb();
+  const rows = await db
+    .select()
+    .from(diagram)
+    .where(and(eq(diagram.shareId, shareId), eq(diagram.visibility, "link")))
+    .limit(1);
+  const row = rows[0];
+  if (row === undefined) return null;
+  return {
+    name: row.name,
+    files: row.files,
+    allowViewerState: row.allowViewerState,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+export async function listRevisions(
+  ownerId: string,
+  id: string,
+): Promise<RevisionSummary[] | null> {
+  if ((await ownedRow(ownerId, id)) === null) return null;
+  const db = await getDb();
+  const rows = await db
+    .select({
+      id: revision.id,
+      version: revision.version,
+      createdAt: revision.createdAt,
+      updatedAt: revision.updatedAt,
+      author: user.email,
+    })
+    .from(revision)
+    .leftJoin(user, eq(user.id, revision.authorId))
+    .where(eq(revision.diagramId, id))
+    .orderBy(desc(revision.createdAt))
+    .limit(200);
+  return rows.map((row) => ({
+    id: row.id,
+    version: row.version,
+    createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
+    author: row.author,
+  }));
+}
+
+export async function getRevisionFiles(
+  ownerId: string,
+  id: string,
+  revisionId: string,
+): Promise<StoredFiles | null> {
+  if ((await ownedRow(ownerId, id)) === null || !isUuid(revisionId)) return null;
+  const db = await getDb();
+  const rows = await db
+    .select({ files: revision.files })
+    .from(revision)
+    .where(and(eq(revision.id, revisionId), eq(revision.diagramId, id)))
+    .limit(1);
+  return rows[0]?.files ?? null;
+}
+
+/** Restoring never deletes history: it saves the old files as a new version. */
+export async function restoreRevision(
+  ownerId: string,
+  id: string,
+  revisionId: string,
+): Promise<ServiceResult<{ version: number; updatedAt: string }>> {
+  const current = await ownedRow(ownerId, id);
+  const files = await getRevisionFiles(ownerId, id, revisionId);
+  if (current === null || files === null) return notFound();
+  const db = await getDb();
+  const now = new Date();
+  // The name lives in the YAML too (renames write it there), so it comes back with the files.
+  const { diagram: parsed } = parseDiagram(files, "");
+  const name = parsed.files.length === 0 ? current.name : parsed.settings.name.slice(0, 120);
+  const updated = await db.transaction(async (tx) => {
+    const [row] = await tx
+      .update(diagram)
+      .set({ files, name, version: sql`${diagram.version} + 1`, updatedAt: now })
+      .where(and(eq(diagram.id, id), eq(diagram.ownerId, ownerId)))
+      .returning();
+    if (row === undefined) return null;
+    await tx
+      .insert(revision)
+      .values({ diagramId: id, authorId: ownerId, files, version: row.version });
+    return row;
+  });
+  if (updated === null) return notFound();
+  return ok({ version: updated.version, updatedAt: updated.updatedAt.toISOString() });
+}

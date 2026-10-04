@@ -1,0 +1,24 @@
+{
+  "name": "mogram",
+  "private": true,
+  "description": "Animated, stateful architecture diagrams that live in your repository as clean YAML.",
+  "packageManager": "pnpm@10.12.1",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "check:ui": "turbo run check:ui",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "prettier": "3.9.9",
+    "turbo": "2.11.7",
+    "typescript": "5.9.3"
+  }
+}

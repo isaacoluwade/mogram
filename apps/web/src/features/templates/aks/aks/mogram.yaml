@@ -1,0 +1,50 @@
+# Inside the AKS cluster. Ports connect this level to the diagram above.
+mogram: 1
+name: AKS cluster
+ports:
+  web: ingress
+  orders: orders_api
+
+containers:
+  storefront:
+    type: namespace
+  orders:
+    type: namespace
+
+components:
+  ingress:
+    type: tool/nginx
+    label: Ingress
+    card: NGINX ingress controller. Terminates traffic from the App Gateway.
+  web:
+    type: tool/nextjs
+    label: Web
+    in: storefront
+  checkout:
+    type: tool/nodejs
+    label: Checkout
+    in: storefront
+    card: Takes payment and creates the order. Three replicas, scaled on CPU.
+  orders_api:
+    type: tool/dotnet
+    label: Orders API
+    in: orders
+  fulfilment:
+    type: generic/worker
+    label: Fulfilment
+    in: orders
+
+connections:
+  ingress_to_web: { from: ingress, to: web, flow: traffic }
+  web_to_checkout: { from: web, to: checkout, flow: traffic }
+  checkout_to_orders: { from: checkout, to: orders_api, flow: traffic }
+  orders_to_fulfilment: { from: orders_api, to: fulfilment, flow: slow }
+
+layout:
+  ingress: [0, 10]
+  storefront: [14, 0]
+  web: [3, 6]
+  checkout: [19, 6]
+  orders: [54, 0]
+  orders_api: [3, 6]
+  fulfilment: [3, 22]

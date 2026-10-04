@@ -1,0 +1,32 @@
+{
+  "name": "@mogram/icons",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The Mogram icon catalogue: official Azure, AWS, Google Cloud and Kubernetes icons, generic icons and tool logos, with aliases and one search across every library.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./catalog": "./src/catalog.generated.ts",
+    "./assets/*": "./assets/*"
+  },
+  "scripts": {
+    "build:catalog": "tsx scripts/build-catalog.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.scripts.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.1",
+    "eslint": "10.12.0",
+    "fflate": "0.8.3",
+    "lucide-static": "1.51.0",
+    "simple-icons": "16.33.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.3"
+  }
+}

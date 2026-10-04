@@ -1,0 +1,15 @@
+sample-app/
+screenshots/
+pnpm-lock.yaml
+**/.next/
+**/dist/
+**/coverage/
+apps/web/public/icons/
+packages/icons/vendor/
+apps/web/src/generated/
+apps/web/drizzle/
+apps/web/playwright-report/
+apps/web/test-results/
+docs/screenshots/
+# Template content is written by hand, exactly as a user's project files would be.
+apps/web/src/features/templates/*/

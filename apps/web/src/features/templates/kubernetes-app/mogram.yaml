@@ -1,0 +1,98 @@
+# A web app and its database inside one namespace. Play the scenes.
+mogram: 1
+name: Web app on Kubernetes
+description: Ingress, services and deployments, autoscaled, with Postgres on a StatefulSet.
+theme: midnight
+
+containers:
+  cluster:
+    type: cluster
+    label: prod cluster
+  shop:
+    type: namespace
+    label: shop
+    in: cluster
+
+components:
+  users:
+    type: generic/users
+    label: Users
+  ingress:
+    type: k8s/ingress
+    label: Ingress
+    in: shop
+    card: Routes shop.example.com to web and /api to the API service.
+  web_svc:
+    type: k8s/service
+    label: web
+    in: shop
+  web:
+    type: k8s/deployment
+    label: web
+    in: shop
+  api_svc:
+    type: k8s/service
+    label: api
+    in: shop
+  api:
+    type: k8s/deployment
+    label: api
+    in: shop
+    card: Three to twelve replicas, scaled by the HorizontalPodAutoscaler on CPU.
+  api_hpa:
+    type: k8s/horizontal-pod-autoscaler
+    label: api-hpa
+    in: shop
+  config:
+    type: k8s/configmap
+    label: api-config
+    in: shop
+  secrets:
+    type: k8s/secret
+    label: db-credentials
+    in: shop
+  postgres:
+    type: k8s/statefulset
+    label: postgres
+    in: shop
+  data:
+    type: k8s/persistent-volume-claim
+    label: data
+    in: shop
+
+connections:
+  users_to_ingress: { from: users, to: ingress, flow: traffic, label: HTTPS }
+  ingress_to_web: { from: ingress, to: web_svc, flow: traffic }
+  web_svc_to_web: { from: web_svc, to: web, flow: traffic }
+  ingress_to_api: { from: ingress, to: api_svc, flow: traffic }
+  api_svc_to_api: { from: api_svc, to: api, flow: traffic }
+  hpa_to_api: { from: api_hpa, to: api, label: scales }
+  config_to_api: { from: config, to: api }
+  secrets_to_api: { from: secrets, to: api }
+  api_to_postgres: { from: api, to: postgres, flow: traffic }
+  postgres_to_data: { from: postgres, to: data }
+
+scenes:
+  traffic_spike:
+    api: { state: overloaded, motion: pulse }
+    api_hpa: { state: active, motion: glow }
+    web: scaling
+  database_down:
+    postgres: down
+    api_to_postgres: { flow: blocked }
+    api: degraded
+
+layout:
+  users: [0, 22]
+  cluster: [16, 0]
+  shop: [3, 6]
+  ingress: [4, 22]
+  web_svc: [22, 6]
+  web: [40, 6]
+  api_svc: [22, 22]
+  api: [40, 22]
+  api_hpa: [58, 6]
+  config: [58, 22]
+  secrets: [58, 38]
+  postgres: [40, 38]
+  data: [22, 38]

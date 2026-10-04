@@ -1,0 +1,65 @@
+# Two regions behind Traffic Manager. Play the scenes to watch a failover.
+mogram: 1
+name: Region failover
+description: Active/passive web app across two Azure regions.
+theme: midnight
+
+containers:
+  east_us:
+    type: region
+    label: East US (primary)
+  west_us:
+    type: region
+    label: West US (standby)
+
+components:
+  users:
+    type: generic/users
+  traffic_manager:
+    type: azure/traffic-manager-profiles
+    label: Traffic Manager
+    card: DNS-based routing. Health probes every 10 seconds; fails over after 3 misses.
+  app_east:
+    type: azure/app-services
+    label: App (East)
+    in: east_us
+  sql_east:
+    type: azure/sql-database
+    label: SQL primary
+    in: east_us
+  app_west:
+    type: azure/app-services
+    label: App (West)
+    in: west_us
+  sql_west:
+    type: azure/sql-database
+    label: SQL geo-replica
+    in: west_us
+    card: Readable secondary. Promoted to primary by the failover group.
+
+connections:
+  users_to_tm: { from: users, to: traffic_manager, flow: traffic }
+  tm_to_east: { from: traffic_manager, to: app_east, flow: traffic }
+  tm_to_west: { from: traffic_manager, to: app_west, backup_for: tm_to_east }
+  east_to_sql: { from: app_east, to: sql_east, flow: traffic }
+  west_to_sql: { from: app_west, to: sql_west, backup_for: east_to_sql }
+  replication: { from: sql_east, to: sql_west, flow: slow, label: geo-replication }
+
+scenes:
+  database_slow:
+    sql_east: degraded
+    east_to_sql: { flow: slow }
+  east_outage:
+    east_us: down
+  recovered:
+    sql_west: active
+
+layout:
+  users: [0, 16]
+  traffic_manager: [16, 16]
+  east_us: [34, 0]
+  app_east: [4, 6]
+  sql_east: [22, 6]
+  west_us: [34, 26]
+  app_west: [4, 6]
+  sql_west: [22, 6]

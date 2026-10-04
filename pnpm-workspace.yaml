@@ -1,0 +1,9 @@
+# sample-app/ is reference material supplied with the brief and is deliberately not a workspace member.
+packages:
+  - "apps/*"
+  - "packages/*"
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - "@tailwindcss/oxide"
+  - unrs-resolver

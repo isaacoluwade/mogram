@@ -1,0 +1,99 @@
+# Storefront on AKS. Double-click the cluster to open what runs inside it.
+mogram: 1
+name: Storefront on AKS
+description: Microservices on Azure Kubernetes Service behind Front Door.
+
+containers:
+  canada_central:
+    type: region
+    label: Canada Central
+  platform_vnet:
+    type: vnet
+    label: platform-vnet
+    in: canada_central
+
+components:
+  customers:
+    type: generic/users
+    card: People shopping on the web and in the mobile app.
+  front_door:
+    type: azure/front-door-and-cdn-profiles
+    label: Front Door
+    card: Global entry point with WAF. Routes to the App Gateway in Canada Central.
+  app_gateway:
+    type: azure/application-gateways
+    label: App Gateway
+    in: platform_vnet
+  aks:
+    type: azure/kubernetes-services
+    label: AKS cluster
+    in: platform_vnet
+    opens: ./aks
+    card: docs/aks.md
+  registry:
+    type: azure/container-registries
+    label: Container registry
+    in: canada_central
+  key_vault:
+    type: azure/key-vaults
+    label: Key Vault
+    in: canada_central
+  orders_db:
+    type: azure/azure-cosmos-db
+    label: Orders
+    in: canada_central
+    card: Cosmos DB holds orders and carts, replicated across availability zones.
+  events:
+    type: azure/azure-service-bus
+    label: Service Bus
+    in: canada_central
+
+connections:
+  customers_to_door: { from: customers, to: front_door, flow: traffic }
+  door_to_gateway: { from: front_door, to: app_gateway, flow: traffic, label: HTTPS }
+  gateway_to_aks: { from: app_gateway, to: aks.web, flow: traffic }
+  aks_to_orders: { from: aks.orders, to: orders_db, flow: traffic }
+  aks_to_events: { from: aks.orders, to: events, flow: slow }
+  registry_to_aks: { from: registry, to: aks, label: images }
+  aks_to_vault: { from: aks, to: key_vault, label: secrets }
+
+scenes:
+  black_friday:
+    front_door: active
+    aks.web: overloaded
+    aks.checkout: scaling
+  bad_deploy:
+    aks.checkout: down
+    aks.web_to_checkout: blocked
+
+tours:
+  how_an_order_flows:
+    title: How an order flows
+    start: customers
+    steps:
+      customers:
+        next: front_door
+      front_door:
+        next: aks
+      aks:
+        next: aks.checkout
+      aks.checkout:
+        next: orders_db
+      orders_db:
+        choices:
+          Normal day: events
+          Bad deploy:
+            next: aks.checkout
+            scene: bad_deploy
+
+layout:
+  customers: [0, 16]
+  front_door: [16, 16]
+  canada_central: [32, 0]
+  platform_vnet: [3, 6]
+  app_gateway: [3, 10]
+  aks: [20, 10]
+  registry: [23, 40]
+  orders_db: [52, 3]
+  events: [52, 16]
+  key_vault: [52, 31]

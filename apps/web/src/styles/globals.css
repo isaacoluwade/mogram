@@ -1,0 +1,243 @@
+@import "tailwindcss";
+@import "./tokens.css";
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+
+  html {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background: var(--color-page);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    overscroll-behavior-y: none;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    font-weight: 500;
+  }
+
+  ::selection {
+    background: rgb(92 151 118 / 0.45);
+    color: var(--color-fg);
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(255 255 255 / 0.5);
+    outline-offset: 2px;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(255 255 255 / 0.12) transparent;
+  }
+}
+
+@layer utilities {
+  /* Eden's two-tone headline: the line is secondary grey, emphasis is white. */
+  .headline-emphasis {
+    color: var(--color-accent);
+  }
+
+  /* Film grain on the sign-in and status pages (Eden "Enter the garden"): visible, blended in. */
+  .bg-grain {
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.14 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    mix-blend-mode: overlay;
+  }
+
+  /* Eden's sign-in backdrop: black corners, one soft band of light across the middle. */
+  .bg-backdrop {
+    background-color: #050505;
+    background-image:
+      radial-gradient(60% 50% at 62% 30%, rgb(255 255 255 / 0.035), transparent 70%),
+      linear-gradient(118deg, transparent 30%, rgb(255 255 255 / 0.045) 50%, transparent 70%);
+  }
+
+  /*
+   * Eden's marketing lighting. Sections are lit from above; the hero also from below, behind the
+   * product shot. Each light is a pseudo-element under the content.
+   */
+  .light-hero,
+  .light-section,
+  .light-cta {
+    position: relative;
+    isolation: isolate;
+    overflow-x: clip;
+  }
+
+  .light-hero::before,
+  .light-hero::after,
+  .light-section::before,
+  .light-cta::before {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    pointer-events: none;
+  }
+
+  .light-hero::before {
+    inset: 0;
+    background: radial-gradient(
+      95% 90% at 50% 0%,
+      rgb(255 255 255 / 0.07),
+      rgb(255 255 255 / 0.025) 35%,
+      rgb(255 255 255 / 0.01) 60%,
+      transparent 82%
+    );
+  }
+
+  .light-hero::after {
+    left: -20%;
+    right: -20%;
+    bottom: 0;
+    height: 95%;
+    background: radial-gradient(
+      95% 85% at 50% 100%,
+      rgb(255 255 255 / 0.16),
+      rgb(255 255 255 / 0.07) 38%,
+      rgb(255 255 255 / 0.02) 62%,
+      transparent 82%
+    );
+  }
+
+  .light-section::before {
+    inset: 0;
+    background: radial-gradient(70% 55% at 50% 0%, rgb(255 255 255 / 0.05), transparent 65%);
+  }
+
+  .light-cta::before {
+    inset: 0;
+    background: radial-gradient(
+      95% 90% at 50% 0%,
+      rgb(255 255 255 / 0.1),
+      rgb(255 255 255 / 0.035) 35%,
+      rgb(255 255 255 / 0.014) 60%,
+      transparent 82%
+    );
+  }
+
+  /* Eden's product-shot frame: a 1px gradient hairline (the element's padding shows it). */
+  .bg-frame-hairline {
+    background-image: linear-gradient(
+      135deg,
+      rgb(255 255 255 / 0.24),
+      rgb(255 255 255 / 0.11) 24%,
+      rgb(255 255 255 / 0.045) 62%,
+      rgb(255 255 255 / 0.12)
+    );
+  }
+
+  /* The green under-glow beneath product shots. */
+  .bg-frame-glow {
+    background-image: radial-gradient(
+      ellipse,
+      rgb(92 151 118 / 0.14),
+      rgb(255 255 255 / 0.03) 42%,
+      transparent 72%
+    );
+  }
+
+  /* Eden's footer top edge: a hairline that glows faintly green in the middle. */
+  .bg-brand-hairline {
+    background-image: linear-gradient(90deg, transparent, rgb(127 181 151 / 0.3), transparent);
+  }
+
+  /* Checkerboard behind transparent export previews. */
+  .bg-checker {
+    background-color: #161616;
+    background-image:
+      linear-gradient(45deg, #222 25%, transparent 25%),
+      linear-gradient(-45deg, #222 25%, transparent 25%),
+      linear-gradient(45deg, transparent 75%, #222 75%),
+      linear-gradient(-45deg, transparent 75%, #222 75%);
+    background-size: 16px 16px;
+    background-position:
+      0 0,
+      0 8px,
+      8px -8px,
+      -8px 0;
+  }
+
+  /* Keyboard focus on a diagram element in the viewer (SVG groups take an outline like boxes). */
+  [data-element][tabindex]:focus-visible {
+    outline: 2px solid rgb(255 255 255 / 0.6);
+    outline-offset: 4px;
+    border-radius: 12px;
+  }
+
+  [data-element][tabindex]:focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  /* A bigger touch target for small text buttons, without changing their layout. */
+  .hit-area {
+    position: relative;
+  }
+
+  .hit-area::after {
+    content: "";
+    position: absolute;
+    inset: -6px -4px;
+  }
+
+  /* Fades the edge of a horizontal scroller that hides more content (see useScrollFade). */
+  .scroll-fade[data-fade="end"] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  }
+
+  .scroll-fade[data-fade="start"] {
+    mask-image: linear-gradient(to right, transparent, #000 24px);
+  }
+
+  .scroll-fade[data-fade="both"] {
+    mask-image: linear-gradient(
+      to right,
+      transparent,
+      #000 24px,
+      #000 calc(100% - 24px),
+      transparent
+    );
+  }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+  }
+
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

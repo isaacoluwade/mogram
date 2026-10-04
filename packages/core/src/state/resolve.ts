@@ -1,0 +1,278 @@
+import type { Diagram, SceneEntry } from "../model/types";
+import { severityOf } from "../presets/state";
+import type { FlowPreset, MotionPreset, StatePreset } from "../presets/names";
+
+/**
+ * Effective state of every element for one moment (SC-1 … SC-4, NE-11, NE-12, D-12).
+ *
+ * Layers, lowest to highest priority: the element's base state in the file → the active
+ * scene's entry → the viewer's own change (SH-3). On top of that:
+ *  - cascade: anything inside an effectively-down container (or a down nested-diagram owner)
+ *    is down;
+ *  - roll-up: a container without its own state shows the worst state inside, softened so a
+ *    broken child makes the parent "degraded", not "down";
+ *  - connections into or out of something down are blocked unless the scene says otherwise,
+ *    and `backup_for` connections take over ("rerouted") when the one they back up is blocked.
+ */
+
+export type StateReason = "normal" | "base" | "scene" | "viewer" | "cascade" | "rollup";
+export type FlowReason = "normal" | "base" | "scene" | "viewer" | "endpoint-down" | "backup";
+
+export interface ElementStatus {
+  readonly state: StatePreset;
+  readonly motion: MotionPreset;
+  readonly reason: StateReason;
+}
+
+export interface ConnectionStatus {
+  readonly flow: FlowPreset;
+  readonly reason: FlowReason;
+}
+
+export interface ResolvedState {
+  readonly elements: ReadonlyMap<string, ElementStatus>;
+  readonly connections: ReadonlyMap<string, ConnectionStatus>;
+  /** Entries for each nested instance, keyed by the owning component, with the prefix removed (SC-10). */
+  readonly nested: ReadonlyMap<
+    string,
+    { readonly scene: readonly SceneEntry[]; readonly viewer: readonly SceneEntry[] }
+  >;
+}
+
+export interface ResolveInput {
+  readonly diagram: Diagram;
+  /** Entries of the active scene (empty for Normal). */
+  readonly scene?: readonly SceneEntry[];
+  /** Changes made by a viewer when the share allows it (SH-3). */
+  readonly viewer?: readonly SceneEntry[];
+  /** True when the component that opens this nested diagram is down (NE-11). */
+  readonly ownerDown?: boolean;
+  /**
+   * Worst state inside the nested instance opened by `component`, or null when it isn't loaded
+   * (NE-12). Provided by `@mogram/core/nested`, which resolves instances recursively.
+   */
+  readonly nestedWorst?: (component: string, entries: NestedEntries) => StatePreset | null;
+}
+
+export interface NestedEntries {
+  readonly scene: readonly SceneEntry[];
+  readonly viewer: readonly SceneEntry[];
+}
+
+interface Split {
+  readonly own: Map<string, SceneEntry>;
+  readonly nested: Map<string, SceneEntry[]>;
+}
+
+function split(entries: readonly SceneEntry[]): Split {
+  const own = new Map<string, SceneEntry>();
+  const nested = new Map<string, SceneEntry[]>();
+  for (const entry of entries) {
+    const dot = entry.target.indexOf(".");
+    if (dot === -1) {
+      own.set(entry.target, entry);
+      continue;
+    }
+    const owner = entry.target.slice(0, dot);
+    const list = nested.get(owner) ?? [];
+    list.push({ ...entry, target: entry.target.slice(dot + 1) });
+    nested.set(owner, list);
+  }
+  return { own, nested };
+}
+
+/** Roll-up of child states (D-12): only "scaling" and "degraded" ever reach the parent. */
+export function rollupState(
+  children: readonly StatePreset[],
+  rule: "worst" | "best" | "none",
+): StatePreset {
+  if (rule === "none" || children.length === 0) return "healthy";
+  const severities = children.map(severityOf);
+  const pick = rule === "worst" ? Math.max(...severities) : Math.min(...severities);
+  if (pick >= severityOf("degraded")) return "degraded";
+  if (pick === severityOf("scaling")) return "scaling";
+  return "healthy";
+}
+
+export function resolveState(input: ResolveInput): ResolvedState {
+  const { diagram } = input;
+  const scene = split(input.scene ?? []);
+  const viewer = split(input.viewer ?? []);
+
+  // 1. Own state: viewer > scene > base.
+  const own = new Map<string, ElementStatus & { explicit: boolean }>();
+  const placeables = [...diagram.containers.values(), ...diagram.components.values()];
+  for (const element of placeables) {
+    const viewerEntry = viewer.own.get(element.name);
+    const sceneEntry = scene.own.get(element.name);
+    const baseMotion = element.kind === "component" ? element.motion : "none";
+    const motion = viewerEntry?.motion ?? sceneEntry?.motion ?? baseMotion;
+    if (viewerEntry?.state != null) {
+      own.set(element.name, { state: viewerEntry.state, motion, reason: "viewer", explicit: true });
+    } else if (sceneEntry?.state != null) {
+      own.set(element.name, { state: sceneEntry.state, motion, reason: "scene", explicit: true });
+    } else if (element.hasExplicitState) {
+      own.set(element.name, { state: element.state, motion, reason: "base", explicit: true });
+    } else {
+      own.set(element.name, { state: "healthy", motion, reason: "normal", explicit: false });
+    }
+  }
+
+  // 2. Cascade top-down from down containers and a down owner.
+  const parentOf = (name: string): string | null =>
+    diagram.containers.get(name)?.parent ?? diagram.components.get(name)?.parent ?? null;
+  const cascades = new Map<string, boolean>();
+  const isCascaded = (name: string): boolean => {
+    const known = cascades.get(name);
+    if (known !== undefined) return known;
+    cascades.set(name, false); // guards against cycles
+    let result = input.ownerDown === true;
+    const parent = parentOf(name);
+    if (!result && parent !== null) {
+      const parentOwn = own.get(parent);
+      result = isCascaded(parent) || (parentOwn?.explicit === true && parentOwn.state === "down");
+    }
+    cascades.set(name, result);
+    return result;
+  };
+
+  const status = new Map<string, ElementStatus>();
+  for (const element of placeables) {
+    const mine = own.get(element.name);
+    if (mine === undefined) continue;
+    if (isCascaded(element.name))
+      status.set(element.name, { state: "down", motion: mine.motion, reason: "cascade" });
+    else status.set(element.name, { state: mine.state, motion: mine.motion, reason: mine.reason });
+  }
+
+  // 3. Nested roll-up for components that open a diagram (NE-12).
+  for (const component of diagram.components.values()) {
+    if (component.opens === null || input.nestedWorst === undefined) continue;
+    const current = status.get(component.name);
+    if (current === undefined || current.reason !== "normal") continue;
+    const worst = input.nestedWorst(component.name, {
+      scene: scene.nested.get(component.name) ?? [],
+      viewer: viewer.nested.get(component.name) ?? [],
+    });
+    if (worst === null) continue;
+    const rolled = rollupState([worst], "worst");
+    if (rolled !== "healthy")
+      status.set(component.name, { state: rolled, motion: current.motion, reason: "rollup" });
+  }
+
+  // 4. Container roll-up, deepest first.
+  const depth = (name: string): number => {
+    let d = 0;
+    let current = parentOf(name);
+    const seen = new Set<string>();
+    while (current !== null && !seen.has(current)) {
+      seen.add(current);
+      d++;
+      current = parentOf(current);
+    }
+    return d;
+  };
+  const containersDeepestFirst = [...diagram.containers.values()].sort(
+    (a, b) => depth(b.name) - depth(a.name),
+  );
+  for (const container of containersDeepestFirst) {
+    const current = status.get(container.name);
+    if (current === undefined || current.reason !== "normal") continue;
+    const childStates = placeables
+      .filter((element) => element.parent === container.name)
+      .map((element) => status.get(element.name)?.state ?? "healthy");
+    const rolled = rollupState(childStates, container.rollup);
+    if (rolled !== "healthy")
+      status.set(container.name, { state: rolled, motion: "none", reason: "rollup" });
+  }
+
+  // Down things stop moving: motion is about behaviour, and a down component has none.
+  for (const [name, value] of status) {
+    if (value.state === "down" && value.motion !== "none")
+      status.set(name, { ...value, motion: "none" });
+  }
+
+  // 5. Connections: explicit layers, then endpoint-down blocking, then backups.
+  const connections = new Map<string, ConnectionStatus & { explicit: boolean }>();
+  for (const connection of diagram.connections.values()) {
+    const viewerEntry = viewer.own.get(connection.name);
+    const sceneEntry = scene.own.get(connection.name);
+    if (viewerEntry?.flow != null) {
+      connections.set(connection.name, {
+        flow: viewerEntry.flow,
+        reason: "viewer",
+        explicit: true,
+      });
+    } else if (sceneEntry?.flow != null) {
+      connections.set(connection.name, { flow: sceneEntry.flow, reason: "scene", explicit: true });
+    } else {
+      const endDown =
+        status.get(connection.from.element)?.state === "down" ||
+        status.get(connection.to.element)?.state === "down";
+      if (endDown)
+        connections.set(connection.name, {
+          flow: "blocked",
+          reason: "endpoint-down",
+          explicit: false,
+        });
+      else
+        connections.set(connection.name, {
+          flow: connection.flow,
+          reason: connection.hasExplicitFlow ? "base" : "normal",
+          explicit: false,
+        });
+    }
+  }
+  for (let pass = 0; pass < diagram.connections.size; pass++) {
+    let changed = false;
+    for (const connection of diagram.connections.values()) {
+      if (connection.backupFor === null) continue;
+      const current = connections.get(connection.name);
+      if (
+        current === undefined ||
+        current.explicit ||
+        current.reason === "endpoint-down" ||
+        current.reason === "backup"
+      )
+        continue;
+      if (connections.get(connection.backupFor)?.flow === "blocked") {
+        connections.set(connection.name, { flow: "rerouted", reason: "backup", explicit: false });
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  const nested = new Map<string, { scene: SceneEntry[]; viewer: SceneEntry[] }>();
+  for (const component of diagram.components.values()) {
+    if (component.opens === null) continue;
+    nested.set(component.name, {
+      scene: scene.nested.get(component.name) ?? [],
+      viewer: viewer.nested.get(component.name) ?? [],
+    });
+  }
+
+  return {
+    elements: status,
+    connections: new Map(
+      [...connections].map(([name, value]) => [name, { flow: value.flow, reason: value.reason }]),
+    ),
+    nested,
+  };
+}
+
+/** Worst state among all elements, for nested roll-up (NE-12). */
+export function worstState(resolved: ResolvedState): StatePreset {
+  let worst: StatePreset = "healthy";
+  for (const status of resolved.elements.values()) {
+    if (severityOf(status.state) > severityOf(worst)) worst = status.state;
+  }
+  return worst;
+}
+
+/** Scene entries of a scene by name (`null` or "normal" = no entries). */
+export function sceneEntries(diagram: Diagram, scene: string | null): readonly SceneEntry[] {
+  if (scene === null || scene === "normal")
+    return diagram.scenes.find((s) => s.name === "normal")?.entries ?? [];
+  return diagram.scenes.find((s) => s.name === scene)?.entries ?? [];
+}

@@ -1,0 +1,239 @@
+/*
+ * Mogram design tokens — Eden's design language (docs/research/eden-design-system.md).
+ *
+ * This file is the single source of visual truth. Tailwind's default palette is removed, so
+ * utilities like `bg-red-500` do not exist; only the tokens below can be used (D-8).
+ * Values are Eden's own: page #0a0a0a, card #141414, surface #1a1a1a, sidebar #171717,
+ * main #111111, white-alpha layers for interactive states, Inter body, Geist 500 headings.
+ */
+
+@theme {
+  --color-*: initial;
+  --font-*: initial;
+
+  /* Surfaces (darkest → lightest) */
+  --color-page: #0a0a0a;
+  --color-main: #111111;
+  --color-card: #141414;
+  --color-sidebar: #171717;
+  --color-surface: #1a1a1a;
+  --color-raised: #1f1f1f;
+  --color-menu-active: #232323;
+  --color-overlay: rgb(0 0 0 / 0.6);
+
+  /* Interactive fills (white alpha layers, exactly Eden's) */
+  --color-fill-faint: rgb(255 255 255 / 0.025);
+  --color-fill-subtle: rgb(255 255 255 / 0.04);
+  --color-fill-track: rgb(255 255 255 / 0.055);
+  --color-fill-field: rgb(255 255 255 / 0.07);
+  --color-fill-hover: rgb(255 255 255 / 0.08);
+  --color-fill-button: rgb(255 255 255 / 0.09);
+  --color-fill-active: rgb(255 255 255 / 0.11);
+  --color-fill-strong: rgb(255 255 255 / 0.16);
+
+  /* Lines */
+  --color-border: rgb(255 255 255 / 0.08);
+  --color-border-subtle: rgb(255 255 255 / 0.04);
+  --color-border-muted: rgb(255 255 255 / 0.065);
+  --color-border-strong: rgb(255 255 255 / 0.15);
+  --color-border-emphasis: rgb(255 255 255 / 0.25);
+  --color-hairline: #222222;
+
+  /* Text */
+  --color-fg: #f5f5f5;
+  --color-fg-strong: rgb(255 255 255 / 0.92);
+  --color-fg-soft: rgb(255 255 255 / 0.72);
+  --color-fg-secondary: #a3a3a3;
+  --color-fg-muted: #737373;
+  --color-fg-faint: rgb(255 255 255 / 0.38);
+  /* Eden's eyebrows, idle chips and page subtitles. */
+  --color-fg-dim: rgb(255 255 255 / 0.42);
+  --color-fg-ghost: rgb(255 255 255 / 0.3);
+  --color-fg-inverse: #0a0a0a;
+  /* Eden's sign-in: an off-white heading, quiet grey small print, a white/40 placeholder. */
+  --color-fg-title: #e5e5e5;
+  --color-fg-quiet: #989898;
+  --color-fg-placeholder: rgb(255 255 255 / 0.4);
+
+  /* Accent: Eden's emphasis is white; brand green and cloudberry are used sparingly */
+  --color-accent: #fafafa;
+  --color-white: #ffffff;
+  --color-black: #000000;
+  --color-transparent: transparent;
+  --color-current: currentColor;
+  --color-brand: #5c9776;
+  --color-brand-bright: #73b490;
+  --color-cloudberry: #d17866;
+
+  /* Tones (badges, status) — tint 12–15%, border 35–45%, text 100% */
+  --color-green: #8fe5bb;
+  --color-green-fill: rgb(115 180 144 / 0.14);
+  --color-green-line: rgb(115 180 144 / 0.42);
+  --color-amber: #f3bd7f;
+  --color-amber-solid: #ecb95b;
+  --color-amber-fill: rgb(236 185 91 / 0.13);
+  --color-amber-line: rgb(236 185 91 / 0.42);
+  --color-orange: #fdba74;
+  --color-orange-fill: rgb(253 186 116 / 0.12);
+  --color-orange-line: rgb(253 186 116 / 0.38);
+  --color-rose: #fda4af;
+  --color-rose-fill: rgb(209 120 102 / 0.15);
+  --color-rose-line: rgb(209 120 102 / 0.48);
+  --color-violet: #c4b5fd;
+  --color-violet-fill: rgb(163 140 243 / 0.13);
+  --color-violet-line: rgb(163 140 243 / 0.42);
+
+  /* Type */
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-display: var(--font-geist), var(--font-inter), -apple-system, sans-serif;
+  --font-wordmark: var(--font-instrument), var(--font-geist), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --text-micro: 11px;
+  --text-micro--line-height: 16px;
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-label: 13px;
+  --text-label--line-height: 20px;
+  --text-body-sm: 13.5px;
+  --text-body-sm--line-height: 20px;
+  --text-body: 14px;
+  --text-body--line-height: 21px;
+  --text-body-lg: 16px;
+  --text-body-lg--line-height: 24px;
+  --text-lead: 1.15rem;
+  --text-lead--line-height: 1.6;
+  --text-heading: 20px;
+  --text-heading--line-height: 1.3;
+  --text-title: 26px;
+  --text-title--line-height: 1.3;
+  /* Eden's sign-in heading and its oversized borderless email field. */
+  --text-title-lg: 28px;
+  --text-title-lg--line-height: 1.2;
+  --text-field-xl: 30px;
+  --text-field-xl--line-height: 1.25;
+  /* Marketing type, measured from Eden's site. */
+  --text-fine: 0.72rem;
+  --text-fine--line-height: 1.4;
+  --text-pill: 0.92rem;
+  --text-pill--line-height: 1.25;
+  --text-footnote: 0.7rem;
+  --text-footnote--line-height: 1.4;
+  --text-footer: 0.85rem;
+  --text-footer--line-height: 1.4;
+  --text-eyebrow: 0.82rem;
+  --text-eyebrow--line-height: 1.3;
+  --text-checklist: clamp(0.94rem, 1.45vw, 1.12rem);
+  --text-checklist--line-height: 1.375;
+  --text-checklist-sm: 0.84rem;
+  --text-checklist-sm--line-height: 1.375;
+  --text-checklist-xs: 0.76rem;
+  --text-checklist-xs--line-height: 1.375;
+  --text-feature: clamp(1.05rem, 1.5vw, 1.25rem);
+  --text-feature--line-height: 1.375;
+  --text-summary: clamp(1.4rem, 2.2vw, 1.875rem);
+  --text-summary--line-height: 1.33;
+  --text-display-sm: clamp(1.6rem, 3vw, 2.3rem);
+  --text-display-sm--line-height: 1.08;
+  --text-display: clamp(2.1rem, 4vw, 3.1rem);
+  --text-display--line-height: 1.05;
+  --text-display-lg: clamp(2.1rem, 3.5vw, 3.3rem);
+  --text-display-lg--line-height: 1.05;
+  --text-display-cta: clamp(2.2rem, 4.4vw, 3.4rem);
+  --text-display-cta--line-height: 1.05;
+
+  --tracking-tightest: -0.045em;
+  --tracking-display: -0.035em;
+  --tracking-title: -0.04em;
+  --tracking-snug: -0.015em;
+  --tracking-wordmark: -0.005em;
+  --tracking-eyebrow: -0.01em;
+  --tracking-heading: -0.03em;
+  --tracking-field: -0.02em;
+  --tracking-wide: 0.025em;
+
+  /* Editor side panels and the space each takes with its 12px margins (editor/panel-sizes.ts). */
+  --spacing-panel-library: 288px;
+  --spacing-panel-right: 316px;
+  --spacing-panel-code: 360px;
+  --spacing-panel-code-xl: 440px;
+  --spacing-clear-library: 312px;
+  --spacing-clear-right: 340px;
+  --spacing-clear-code: 384px;
+  --spacing-clear-code-xl: 464px;
+  /* A collapsed panel's "show" pill, with its margins. */
+  --spacing-clear-pill: 72px;
+  /* The zoom pill at the bottom left (zoom, fit, motion) and one gap after it. */
+  --spacing-clear-zoom: 190px;
+
+  /* Marketing content widths (Eden: 1120px sections, 1320px hero). */
+  --container-content: 1120px;
+  --container-hero: 1320px;
+
+  /* Radius */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 20px;
+  --radius-3xl: 24px;
+  --radius-squircle: 32%;
+  /* Eden's product-shot frame: 1px hairline around a 12px inner radius. */
+  --radius-frame: 13px;
+
+  /* Elevation */
+  --shadow-pill:
+    inset 0 1px 0 rgb(255 255 255 / 0.18), 0 1px 1.5px rgb(0 0 0 / 0.16),
+    0 3px 6px -1px rgb(0 0 0 / 0.22), 0 8px 14px -4px rgb(0 0 0 / 0.18);
+  --shadow-pill-hover:
+    inset 0 1px 0 rgb(255 255 255 / 0.22), 0 1px 2px rgb(0 0 0 / 0.18),
+    0 5px 10px -1px rgb(0 0 0 / 0.26), 0 12px 22px -4px rgb(0 0 0 / 0.22);
+  --shadow-panel: 0 6px 24px rgb(0 0 0 / 0.18);
+  --shadow-floating: 0 12px 30px -10px rgb(0 0 0 / 0.8), 0 0 0 1px rgb(255 255 255 / 0.06);
+  --shadow-popover: 0 14px 36px rgb(0 0 0 / 0.5);
+  --shadow-hairline: 0 0 0 1px rgb(250 250 250 / 0.08);
+  --shadow-logo:
+    inset 0 0 0 1px rgb(255 255 255 / 0.14), inset 0 1px 0 rgb(255 255 255 / 0.12),
+    0 1px 1px rgb(0 0 0 / 0.22);
+  --shadow-chip-active: inset 0 1px 0 rgb(255 255 255 / 0.05);
+  --shadow-product: 0 55px 150px -50px rgb(0 0 0 / 0.95), 0 18px 55px -25px rgb(92 151 118 / 0.16);
+
+  /* Motion */
+  --ease-reveal: cubic-bezier(0.22, 0.68, 0.35, 1);
+  --ease-thumb: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --animate-reveal: reveal 0.7s var(--ease-reveal) both;
+  --animate-fade-in: fade-in 0.2s ease-out both;
+  --animate-pop-in: pop-in 0.18s var(--ease-thumb) both;
+
+  @keyframes reveal {
+    from {
+      opacity: 0;
+      transform: translateY(24px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes pop-in {
+    from {
+      opacity: 0;
+      transform: translateY(4px) scale(0.98);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+}

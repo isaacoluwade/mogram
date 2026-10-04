@@ -1,0 +1,129 @@
+# Checkout — a three-tier web app on Azure.
+# Open it in Mogram to see traffic flow, then try the scenes.
+mogram: 1
+name: Checkout
+theme: midnight
+
+containers:
+  east_us:
+    type: region
+    label: East US
+  vnet:
+    type: vnet
+    label: checkout-vnet
+    in: east_us
+  web_subnet:
+    type: subnet
+    label: web-subnet
+    in: vnet
+  data_subnet:
+    type: subnet
+    label: data-subnet
+    in: vnet
+  west_us:
+    type: region
+    label: West US
+
+components:
+  shopper:
+    type: generic/users
+    label: Shoppers
+    card: Customers browsing and checking out on web and mobile.
+  front_door:
+    type: azure/front-door-and-cdn-profiles
+    label: Front Door
+    card: docs/front-door.md
+  app_gateway:
+    type: azure/application-gateways
+    label: App Gateway
+    in: vnet
+  web_vm:
+    type: azure/virtual-machine
+    label: Web VM
+    in: web_subnet
+    card: docs/web-vm.md
+  web_vm_2:
+    type: azure/virtual-machine
+    label: Web VM 2
+    in: web_subnet
+  cache:
+    type: azure/cache-redis
+    label: Session cache
+    in: data_subnet
+  db_primary:
+    type: azure/sql-database
+    label: Orders DB
+    in: data_subnet
+    card:
+      title: Orders database
+      body: |
+        The primary **Azure SQL** database. Writes go here; reads fail over to the
+        [replica](#db_replica) during an outage.
+  db_replica:
+    type: azure/sql-database
+    label: Orders replica
+    in: west_us
+    card: Geo-replica in West US. Takes over reads when the primary region is down.
+  storage:
+    type: azure/storage-accounts
+    label: Product images
+    in: east_us
+
+groups:
+  web_tier:
+    label: Scale set
+    members: [web_vm, web_vm_2]
+
+connections:
+  shopper_to_door: { from: shopper, to: front_door, flow: traffic }
+  door_to_gateway: { from: front_door, to: app_gateway, flow: traffic, label: HTTPS }
+  gateway_to_web: { from: app_gateway, to: web_vm, flow: traffic }
+  gateway_to_web_2: { from: app_gateway, to: web_vm_2, flow: traffic }
+  web_to_cache: { from: web_vm, to: cache, flow: traffic }
+  web_to_primary: { from: web_vm, to: db_primary, flow: traffic, label: SQL }
+  web_to_replica: { from: web_vm_2, to: db_replica, backup_for: web_to_primary }
+  door_to_storage: { from: front_door, to: storage, flow: slow }
+
+scenes:
+  traffic_spike:
+    web_vm: overloaded
+    web_vm_2: scaling
+    shopper_to_door: { flow: traffic }
+  region_outage:
+    db_primary: down
+    web_to_primary: blocked
+    db_replica: active
+
+tours:
+  request_flow:
+    title: How a request flows
+    start: shopper
+    steps:
+      shopper:
+        next: front_door
+      front_door:
+        next: web_vm
+      web_vm:
+        next: db_primary
+      db_primary:
+        choices:
+          Normal write: cache
+          Region outage:
+            next: db_replica
+            scene: region_outage
+
+layout:
+  shopper: [0, 18]
+  front_door: [18, 18]
+  east_us: [36, 0]
+  vnet: [3, 6]
+  app_gateway: [3, 12]
+  web_subnet: [20, 5]
+  web_vm: [3, 7]
+  web_vm_2: [3, 25]
+  data_subnet: [44, 5]
+  cache: [3, 7]
+  db_primary: [3, 25]
+  storage: [3, 56]
+  west_us: [118, 24]
+  db_replica: [3, 7]

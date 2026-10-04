@@ -1,0 +1,123 @@
+# A photo-sharing API on AWS. Play the scenes, or take the tour.
+mogram: 1
+name: Serverless API on AWS
+description: CloudFront, API Gateway and Lambda, with DynamoDB, S3 and an SQS-driven worker.
+theme: midnight
+
+containers:
+  aws_cloud:
+    type: box
+    label: AWS Cloud
+    icon: aws/aws-cloud
+  us_east_1:
+    type: region
+    label: us-east-1
+    icon: aws/region
+    in: aws_cloud
+
+components:
+  users:
+    type: generic/users
+    label: Users
+  cdn:
+    type: aws/cloudfront
+    label: CloudFront
+    in: aws_cloud
+    card: Serves the web app and forwards /api requests to API Gateway.
+  auth:
+    type: aws/cognito
+    label: Cognito
+    in: us_east_1
+    card: Signs users in. API Gateway checks every request's token against the user pool.
+  api:
+    type: aws/api-gateway
+    label: API Gateway
+    in: us_east_1
+  upload:
+    type: aws/lambda
+    label: Upload API
+    in: us_east_1
+    card: docs/upload.md
+  photos:
+    type: aws/s3
+    label: Photos
+    in: us_east_1
+  table:
+    type: aws/dynamodb
+    label: Photo index
+    in: us_east_1
+  queue:
+    type: aws/sqs
+    label: Resize queue
+    in: us_east_1
+    motion: pulse
+  resizer:
+    type: aws/lambda
+    label: Resizer
+    in: us_east_1
+    card: Makes thumbnails. Reserved concurrency of 50 keeps it from swamping DynamoDB.
+  logs:
+    type: aws/cloudwatch
+    label: CloudWatch
+    in: us_east_1
+
+connections:
+  users_to_cdn: { from: users, to: cdn, flow: traffic, label: HTTPS }
+  cdn_to_api: { from: cdn, to: api, flow: traffic }
+  api_to_auth: { from: api, to: auth, label: verify token }
+  api_to_upload: { from: api, to: upload, flow: traffic }
+  upload_to_photos: { from: upload, to: photos, flow: traffic, label: put }
+  upload_to_table: { from: upload, to: table, flow: traffic }
+  photos_to_queue: { from: photos, to: queue, flow: slow, label: events }
+  queue_to_resizer: { from: queue, to: resizer, flow: slow }
+  resizer_to_table: { from: resizer, to: table }
+  upload_to_logs: { from: upload, to: logs }
+
+scenes:
+  viral_post:
+    cdn: active
+    upload: { state: overloaded, motion: shake }
+    queue: { state: active, motion: glow }
+    resizer: scaling
+  throttled:
+    table: degraded
+    resizer_to_table: { flow: slow }
+    upload_to_table: { flow: slow }
+
+tours:
+  how_an_upload_flows:
+    title: How a photo upload flows
+    start: users
+    steps:
+      users:
+        next: cdn
+      cdn:
+        next: api
+      api:
+        next: upload
+      upload:
+        next: photos
+      photos:
+        next: queue
+      queue:
+        next: resizer
+      resizer:
+        choices:
+          Normal day: table
+          Viral post:
+            next: upload
+            scene: viral_post
+
+layout:
+  users: [0, 26]
+  aws_cloud: [16, 0]
+  cdn: [3, 26]
+  us_east_1: [20, 6]
+  auth: [4, 6]
+  api: [4, 24]
+  upload: [22, 24]
+  photos: [40, 6]
+  table: [40, 24]
+  queue: [58, 6]
+  resizer: [58, 24]
+  logs: [22, 42]

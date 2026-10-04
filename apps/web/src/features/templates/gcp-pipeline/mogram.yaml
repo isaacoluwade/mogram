@@ -1,0 +1,76 @@
+# Device events streamed into BigQuery on Google Cloud. Play the scenes.
+mogram: 1
+name: Event pipeline on Google Cloud
+description: Cloud Run ingests device events into Pub/Sub; Dataflow enriches them into BigQuery.
+theme: midnight
+
+containers:
+  europe_west1:
+    type: region
+    label: europe-west1
+
+components:
+  devices:
+    type: generic/iot
+    label: Devices
+    card: About 40,000 sensors, each posting a reading every 10 seconds.
+  analysts:
+    type: generic/users
+    label: Analysts
+  ingest:
+    type: gcp/cloud-run
+    label: Ingest API
+    in: europe_west1
+    card: Validates readings and publishes them. Scales from 2 to 40 instances on request load.
+  events:
+    type: gcp/pub-sub
+    label: Events topic
+    in: europe_west1
+    motion: pulse
+  enrich:
+    type: gcp/dataflow
+    label: Enrich
+    in: europe_west1
+    card: docs/enrich.md
+  archive:
+    type: gcp/cloud-storage
+    label: Raw archive
+    in: europe_west1
+  warehouse:
+    type: gcp/bigquery
+    label: Warehouse
+    in: europe_west1
+  dashboards:
+    type: gcp/looker
+    label: Dashboards
+    in: europe_west1
+
+connections:
+  devices_to_ingest: { from: devices, to: ingest, flow: traffic, label: HTTPS }
+  ingest_to_events: { from: ingest, to: events, flow: traffic }
+  events_to_enrich: { from: events, to: enrich, flow: traffic }
+  events_to_archive: { from: events, to: archive, flow: slow, label: raw }
+  enrich_to_warehouse: { from: enrich, to: warehouse, flow: traffic }
+  warehouse_to_dashboards: { from: warehouse, to: dashboards }
+  analysts_to_dashboards: { from: analysts, to: dashboards }
+
+scenes:
+  launch_day:
+    ingest: scaling
+    events: { state: active, motion: glow }
+    enrich: overloaded
+  pipeline_stalled:
+    enrich: down
+    events_to_enrich: { flow: blocked }
+    events: degraded
+
+layout:
+  devices: [0, 6]
+  analysts: [0, 30]
+  europe_west1: [16, 0]
+  ingest: [4, 6]
+  events: [22, 6]
+  enrich: [40, 6]
+  archive: [22, 24]
+  warehouse: [40, 24]
+  dashboards: [4, 24]
