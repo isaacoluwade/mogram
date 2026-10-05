@@ -1,50 +1,64 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import type { Box } from "@mogram/core/layout";
-import { GRID } from "@mogram/core/layout";
-import { viaOrigin } from "@mogram/core/routing";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { TILE, type Box, type Point } from "@mogram/core/layout";
+import { isLocked } from "@mogram/core/edit";
+import { BOX_ANCHORS } from "@mogram/core/presets";
+import { anchorPoint, endpointBox } from "@mogram/core/routing";
 import { toWorld } from "@/features/canvas/camera";
 import { DiagramSvg } from "@/features/canvas/svg/diagram-svg";
 import { LevelTransition } from "@/features/canvas/level-transition";
 import { StubsOverlay } from "@/features/canvas/svg/stubs";
 import { onReducedMotionChange, prefersReducedMotion } from "@/lib/use-reduced-motion";
-import { addComponentAt, zoomToFit } from "../actions";
+import { insertFromLibrary, zoomToFit } from "../actions";
 import { LIBRARY_DRAG_TYPE, decodeLibraryDrag } from "../dnd";
 import { useEditor, useEditorClock, useEditorShallow, useEditorStore } from "../editor-context";
 import { nestedStubs } from "../levels";
 import { useEditorScene } from "../use-editor-scene";
+import type { ConnectionEditInfo, LooseEnd } from "./connection-handles";
 import { CanvasContextMenu } from "./context-menu";
 import { EditorOverlay } from "./overlays";
 import { LabelEditor } from "./label-editor";
 import { QuickBar } from "./quick-bar";
+import type { Guide } from "./guides";
+import { splitTarget } from "./split";
 import { useCanvasGestures } from "./use-canvas-gestures";
+import { usePreference } from "@/lib/preferences";
+import { shownFiles } from "../store/editor-store";
+import { VersionChangesOverlay } from "../history/changes-overlay";
+import { AssistantOverlay } from "../assistant/assistant-overlay";
+
+const NO_GUIDES: readonly Guide[] = [];
 
 /** The editable canvas: diagram + editor overlays + every pointer interaction (ED-1). */
 export function EditorCanvas() {
   const store = useEditorStore();
   const clock = useEditorClock();
   const host = useRef<HTMLDivElement | null>(null);
-  const { diagram, layout, routes, scene, theme } = useEditorScene();
+  const { diagram, layout, routes, scene, theme, capacity } = useEditorScene();
   const view = useEditorShallow((s) => ({
     camera: s.camera,
     viewport: s.viewport,
     selection: s.selection,
     hovered: s.hovered,
     tool: s.tool,
-    showGrid: s.showGrid,
     marquee: s.marquee,
     connect: s.connect,
     drag: s.drag,
-    bend: s.bend,
+    resize: s.resize,
+    pathEdit: s.pathEdit,
     motionPaused: s.motionPaused,
     editingLabel: s.editingLabel,
     levelZoom: s.levelZoom,
+    viewing: s.viewing !== null,
+    comparing: s.viewing?.compare != null,
   }));
+  const showGrid = usePreference("showGrid");
+  const gridStyle = usePreference("gridStyle");
   const fitted = useRef(false);
   const gestures = useCanvasGestures(store, host);
   const { files, levelPath } = useEditorShallow((s) => ({
-    files: s.files,
+    files: shownFiles(s),
     levelPath: s.levelPath,
   }));
 
@@ -69,6 +83,15 @@ export function EditorCanvas() {
     return () => observer.disconnect();
   }, [store]);
 
+  // Undo or redo that changed the nested level asks for the new level to be framed.
+  useEffect(
+    () =>
+      store.subscribe((state, previous) => {
+        if (state.fitRequest !== previous.fitRequest) zoomToFit(store);
+      }),
+    [store],
+  );
+
   // The motion toggle pauses the shared clock (PR-9); it starts paused for reduced motion.
   useEffect(() => {
     if (view.motionPaused) clock.pause();
@@ -92,22 +115,52 @@ export function EditorCanvas() {
     [layout],
   );
   const single = view.selection.length === 1 ? view.selection[0] : undefined;
-  const waypoints = useMemo(() => {
-    if (single === undefined || !connectionNames.has(single)) return null;
+  // The selected connection's handles, and the preview while one of its ends is dragged.
+  const connectionEdit = useMemo<ConnectionEditInfo | null>(() => {
+    if (single === undefined || view.viewing) return null;
     const connection = diagram.connections.get(single);
-    if (connection === undefined || connection.route !== "orthogonal") return null;
-    if (view.bend?.connection === single) return { connection: single, points: view.bend.via };
-    const stored = diagram.layout.get(single)?.via ?? [];
-    const origin = viaOrigin(layout, connection);
+    const route = routes.get(single);
+    if (connection === undefined || route === undefined) return null;
+    const entry = diagram.layout.get(single);
     return {
-      connection: single,
-      points: stored.map((p) => ({ x: origin.x + p.x * GRID, y: origin.y + p.y * GRID })),
+      name: single,
+      route,
+      style: connection.route,
+      automatic: view.pathEdit?.via === undefined && (entry?.via == null || entry.via.length === 0),
+      fromFixed: entry?.fromAnchor != null,
+      toFixed: entry?.toAnchor != null,
     };
-  }, [single, connectionNames, diagram, layout, view.bend]);
+  }, [single, diagram, routes, view.pathEdit, view.viewing]);
+  const loose = useMemo<LooseEnd | null>(() => {
+    const edit = view.pathEdit;
+    if (edit?.loose === undefined) return null;
+    const route = routes.get(edit.connection);
+    const from = edit.loose.end === "from" ? route?.through.at(-1) : route?.through[0];
+    if (from === undefined) return null;
+    const target = edit.loose.target === null ? null : endpointBox(layout, edit.loose.target);
+    return {
+      from,
+      pointer: edit.loose.pointer,
+      target,
+      anchors: target === null ? [] : BOX_ANCHORS.map((anchor) => anchorPoint(target, anchor)),
+      anchor:
+        target === null || edit.loose.anchor === null
+          ? null
+          : anchorPoint(target, edit.loose.anchor),
+    };
+  }, [view.pathEdit, routes, layout]);
 
   const hoveredTile =
-    view.tool === "select" && view.hovered !== null && view.drag === null && view.connect === null
-      ? (layout.tiles.get(view.hovered) ?? null)
+    view.tool === "select" &&
+    !view.viewing &&
+    view.hovered !== null &&
+    view.drag === null &&
+    view.connect === null
+      ? (layout.tiles.get(view.hovered) ??
+        // Shapes connect from their whole outline.
+        (diagram.components.get(view.hovered)?.shape != null
+          ? (layout.elements.get(view.hovered)?.box ?? null)
+          : null))
       : null;
   const connectFrom =
     view.connect === null
@@ -123,13 +176,23 @@ export function EditorCanvas() {
         null);
   const dropTarget =
     view.drag?.target == null ? null : (layout.elements.get(view.drag.target)?.box ?? null);
+  const [librarySplit, setLibrarySplit] = useState<string | null>(null);
+  const locked = useMemo(
+    () => new Set(view.selection.filter((name) => isLocked(diagram, name))),
+    [view.selection, diagram],
+  );
+  const splitName = view.drag?.split ?? librarySplit;
+  const splitRoute = splitName === null ? null : (routes.get(splitName) ?? null);
   // Stable between renders, so the memoised overlay skips frames where only the camera pans.
+  // An earlier version on show has no handles: it can't be changed.
   const resizable = useCallback(
     (name: string) =>
-      diagram.containers.has(name) ||
-      diagram.decorations.get(name)?.variant === "zone" ||
-      diagram.decorations.get(name)?.variant === "note",
-    [diagram],
+      !view.viewing &&
+      (diagram.containers.has(name) ||
+        diagram.components.get(name)?.shape != null ||
+        diagram.decorations.get(name)?.variant === "zone" ||
+        diagram.decorations.get(name)?.variant === "note"),
+    [diagram, view.viewing],
   );
   const connect = useMemo(
     () =>
@@ -143,27 +206,75 @@ export function EditorCanvas() {
     [view.connect, connectFrom, connectTarget],
   );
 
+  const worldAt = (event: { clientX: number; clientY: number }, node: Element): Point => {
+    const rect = node.getBoundingClientRect();
+    return toWorld(store.getState().camera, {
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+    });
+  };
+  /** The connection a library icon dropped here would go into: under the new tile's middle. */
+  const librarySplitAt = (
+    event: { clientX: number; clientY: number },
+    node: Element,
+  ): string | null => {
+    const centre = worldAt(event, node);
+    const size = TILE.size;
+    const tile = { x: centre.x - size / 2, y: centre.y - size / 2, w: size, h: size };
+    return splitTarget(diagram, layout, routes, null, tile, centre);
+  };
+
+  const adjustable = (name: string) => {
+    const component = diagram.components.get(name);
+    return view.viewing || component?.shape == null || component.look === null
+      ? null
+      : { shape: component.shape, params: component.look };
+  };
+
   const overlay = (
-    <EditorOverlay
-      layout={layout}
-      routes={routes}
-      theme={theme}
-      zoom={view.camera.zoom}
-      selection={view.selection}
-      hovered={view.drag === null ? view.hovered : null}
-      groups={layout.groups}
-      connectionNames={connectionNames}
-      resizable={resizable}
-      marquee={view.marquee}
-      marqueeKind={
-        view.tool === "container" ? "container" : view.tool === "zone" ? "zone" : "select"
-      }
-      connect={connect}
-      dropTarget={dropTarget}
-      waypoints={waypoints}
-      showConnectHandles={hoveredTile}
-      unpinned={unpinned}
-    />
+    <>
+      {view.comparing ? (
+        <VersionChangesOverlay
+          diagram={diagram}
+          layout={layout}
+          routes={routes}
+          theme={theme}
+          zoom={view.camera.zoom}
+        />
+      ) : null}
+      <AssistantOverlay layout={layout} routes={routes} theme={theme} zoom={view.camera.zoom} />
+      <EditorOverlay
+        layout={layout}
+        routes={routes}
+        theme={theme}
+        zoom={view.camera.zoom}
+        selection={view.selection}
+        hovered={view.drag === null ? view.hovered : null}
+        groups={layout.groups}
+        connectionNames={connectionNames}
+        resizable={resizable}
+        marquee={view.marquee}
+        marqueeKind={
+          view.tool === "container" ? "container" : view.tool === "zone" ? "zone" : "select"
+        }
+        connect={connect}
+        dropTarget={dropTarget}
+        splitTarget={splitRoute}
+        connectionEdit={connectionEdit}
+        loose={loose}
+        showConnectHandles={hoveredTile}
+        unpinned={unpinned}
+        locked={locked}
+        adjustable={adjustable}
+        guides={view.drag?.guides ?? NO_GUIDES}
+        sizeMatches={
+          view.resize?.matches === undefined
+            ? null
+            : { name: view.resize.name, w: view.resize.matches.w, h: view.resize.matches.h }
+        }
+        hint={view.drag?.hint ?? null}
+      />
+    </>
   );
 
   const cursor =
@@ -194,28 +305,40 @@ export function EditorCanvas() {
           if (event.dataTransfer.types.includes(LIBRARY_DRAG_TYPE)) {
             event.preventDefault();
             event.dataTransfer.dropEffect = "copy";
+            // A new component dropped on a connection goes into it (ED-29); Alt or Shift won't.
+            const next =
+              event.altKey || event.shiftKey ? null : librarySplitAt(event, event.currentTarget);
+            if (next !== librarySplit) setLibrarySplit(next);
           }
         }}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node | null))
+            setLibrarySplit(null);
+        }}
         onDrop={(event) => {
+          setLibrarySplit(null);
           const drag = decodeLibraryDrag(event.dataTransfer.getData(LIBRARY_DRAG_TYPE));
           if (drag === null) return;
           event.preventDefault();
-          const rect = event.currentTarget.getBoundingClientRect();
-          const world = toWorld(store.getState().camera, {
-            x: event.clientX - rect.left,
-            y: event.clientY - rect.top,
+          // Alt drops it on the canvas itself: not into a container, not into a connection.
+          const split =
+            event.altKey || event.shiftKey ? null : librarySplitAt(event, event.currentTarget);
+          insertFromLibrary(store, drag.type, drag.label, worldAt(event, event.currentTarget), {
+            split,
+            nest: !event.altKey,
           });
-          addComponentAt(store, drag.type, drag.label, world);
         }}
       >
         <DiagramSvg
           scene={scene}
+          capacity={capacity}
           time={{ kind: "live", clock }}
           mode="edit"
           fontFamily="var(--font-sans)"
           camera={view.camera}
           size={view.viewport}
-          showGrid={view.showGrid}
+          showGrid={showGrid}
+          gridStyle={gridStyle}
           overlay={overlay}
           underlay={
             nested !== null && nested.stubs.length > 0 ? (
@@ -244,7 +367,7 @@ export function EditorCanvas() {
           />
         ) : null}
         <LabelEditor layout={layout} scene={scene} theme={theme} />
-        <QuickBar layout={layout} routes={routes} theme={theme} />
+        {view.viewing ? null : <QuickBar layout={layout} routes={routes} theme={theme} />}
       </div>
     </CanvasContextMenu>
   );

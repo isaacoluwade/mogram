@@ -1,6 +1,7 @@
 import "server-only";
 import { randomBytes } from "node:crypto";
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
+import { conceptInfo } from "@mogram/core/concepts";
 import { setSetting } from "@mogram/core/edit";
 import { parseDiagram } from "@mogram/core/format";
 import type {
@@ -10,7 +11,13 @@ import type {
   SharedDiagram,
   Visibility,
 } from "@/lib/api/contracts";
-import { getDb } from "../db/client";
+import {
+  continuesSession,
+  versionChanges,
+  versionsToPrune,
+  type VersionSource,
+} from "@/lib/history/rules";
+import { getDb, type Database } from "../db/client";
 import { diagram, revision, user, type StoredFiles } from "../db/schema";
 import { isThumbnailDataUrl, sanitizeProjectFiles } from "./sanitize";
 
@@ -20,12 +27,28 @@ import { isThumbnailDataUrl, sanitizeProjectFiles } from "./sanitize";
  */
 
 /**
- * Saves by the same author within this window update one revision instead of adding many. The
- * first version (as created, duplicated or imported) is never merged into, so it can always be
- * restored.
+ * Saves join the version being edited while the same person keeps working (see
+ * `lib/history/rules`); the first version (as created, duplicated or imported) is never merged
+ * into, so it can always be restored.
  */
-const REVISION_COALESCE_MS = 5 * 60 * 1000;
 const FIRST_VERSION = 1;
+
+type Tx = Parameters<Parameters<Database["transaction"]>[0]>[0];
+
+/** Cleans up old versions by the retention rules (named ones always stay). */
+async function pruneRevisions(tx: Tx, diagramId: string, now: Date): Promise<void> {
+  const rows = await tx
+    .select({ id: revision.id, createdAt: revision.createdAt, name: revision.name })
+    .from(revision)
+    .where(eq(revision.diagramId, diagramId));
+  const doomed = versionsToPrune(rows, now);
+  if (doomed.length > 0) await tx.delete(revision).where(inArray(revision.id, doomed));
+}
+
+const sameFiles = (a: StoredFiles, b: StoredFiles): boolean => {
+  const keys = Object.keys(a).sort();
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
+};
 
 export type ServiceResult<T> =
   | { readonly ok: true; readonly value: T }
@@ -53,7 +76,16 @@ function toSummary(row: DiagramRow): DiagramSummary {
     createdAt: row.createdAt.toISOString(),
     visibility: row.visibility,
     thumbnail: row.thumbnail,
+    concept: conceptOf(row.files),
   };
+}
+
+/** Whether the diagram is a concept (D-83), read from its files as they're listed. */
+function conceptOf(files: StoredFiles): DiagramSummary["concept"] {
+  const info = conceptInfo(files);
+  if (info === null) return null;
+  const { summary, topic, platform, tags, kind } = info;
+  return { summary, topic, platform, tags, kind };
 }
 
 function toDetail(row: DiagramRow): DiagramDetail {
@@ -109,7 +141,13 @@ export async function getDiagram(ownerId: string, id: string): Promise<DiagramDe
 
 export async function createDiagram(
   ownerId: string,
-  input: { name: string; files: StoredFiles; thumbnail?: string | null | undefined },
+  input: {
+    name: string;
+    files: StoredFiles;
+    thumbnail?: string | null | undefined;
+    /** "import" when a draft or file is brought in; "create" otherwise. */
+    source?: VersionSource | undefined;
+  },
 ): Promise<ServiceResult<DiagramDetail>> {
   const cleaned = sanitizeProjectFiles(input.files);
   if ("error" in cleaned) return { ok: false, code: "invalid", message: cleaned.error };
@@ -131,6 +169,8 @@ export async function createDiagram(
       authorId: ownerId,
       files: inserted.files,
       version: inserted.version,
+      source: input.source ?? "create",
+      changes: versionChanges(undefined, inserted.files),
     });
     return inserted;
   });
@@ -149,6 +189,14 @@ export async function saveDiagram(
     baseVersion: number;
     name?: string | undefined;
     thumbnail?: string | null | undefined;
+    /** Make this save its own version: an assistant turn, or one given a name. */
+    checkpoint?:
+      | {
+          readonly source: "ai" | "named";
+          readonly label?: string | undefined;
+          readonly name?: string | undefined;
+        }
+      | undefined;
   },
 ): Promise<ServiceResult<{ version: number; updatedAt: string }>> {
   const cleaned = sanitizeProjectFiles(input.files);
@@ -185,21 +233,26 @@ export async function saveDiagram(
       .returning();
     if (updated === undefined) throw new Error("Update returned no row");
 
-    const [latest] = await tx
+    const [latest, previous] = await tx
       .select()
       .from(revision)
       .where(eq(revision.diagramId, id))
       .orderBy(desc(revision.createdAt))
-      .limit(1);
-    if (
+      .limit(2);
+    const joins =
+      input.checkpoint === undefined &&
       latest !== undefined &&
       latest.version !== FIRST_VERSION &&
-      latest.authorId === ownerId &&
-      now.getTime() - latest.createdAt.getTime() < REVISION_COALESCE_MS
-    ) {
+      continuesSession({ ...latest, source: latest.source as VersionSource }, ownerId, now);
+    if (joins && latest !== undefined) {
       await tx
         .update(revision)
-        .set({ files: cleaned.files, version: updated.version, updatedAt: now })
+        .set({
+          files: cleaned.files,
+          version: updated.version,
+          updatedAt: now,
+          changes: versionChanges(previous?.files, cleaned.files),
+        })
         .where(eq(revision.id, latest.id));
     } else {
       await tx.insert(revision).values({
@@ -207,7 +260,14 @@ export async function saveDiagram(
         authorId: ownerId,
         files: cleaned.files,
         version: updated.version,
+        source: input.checkpoint?.source ?? "save",
+        label: input.checkpoint?.label?.slice(0, 500) ?? null,
+        name: input.checkpoint?.name?.slice(0, 120) ?? null,
+        changes: versionChanges(latest?.files, cleaned.files),
+        createdAt: now,
+        updatedAt: now,
       });
+      await pruneRevisions(tx, id, now);
     }
     return ok({ version: updated.version, updatedAt: updated.updatedAt.toISOString() });
   });
@@ -259,9 +319,13 @@ export async function updateDiagram(
       .where(eq(diagram.id, id))
       .returning();
     if (row === undefined) return notFound<DiagramSummary>();
-    await tx
-      .insert(revision)
-      .values({ diagramId: id, authorId: ownerId, files: row.files, version: row.version });
+    await tx.insert(revision).values({
+      diagramId: id,
+      authorId: ownerId,
+      files: row.files,
+      version: row.version,
+      changes: versionChanges(current.files, row.files),
+    });
     return ok(toSummary(row));
   });
 }
@@ -276,19 +340,28 @@ export async function deleteDiagram(ownerId: string, id: string): Promise<boolea
   return rows.length > 0;
 }
 
+/** A copy of the diagram as it is now, or as it was at `revisionId`. */
 export async function duplicateDiagram(
   ownerId: string,
   id: string,
+  revisionId?: string | undefined,
 ): Promise<ServiceResult<DiagramDetail>> {
   const row = await ownedRow(ownerId, id);
   if (row === null) return notFound();
+  const source =
+    revisionId === undefined ? row.files : await getRevisionFiles(ownerId, id, revisionId);
+  if (source === null) return notFound();
   const name = `${row.name} copy`.slice(0, 120);
-  const { diagram: parsed } = parseDiagram(row.files, "");
+  const { diagram: parsed } = parseDiagram(source, "");
   const files =
     parsed.files.length === 0
-      ? row.files
-      : setSetting(row.files, parsed, { key: "name", value: name }).files;
-  return createDiagram(ownerId, { name, files, thumbnail: row.thumbnail });
+      ? source
+      : setSetting(source, parsed, { key: "name", value: name }).files;
+  return createDiagram(ownerId, {
+    name,
+    files,
+    thumbnail: revisionId === undefined ? row.thumbnail : null,
+  });
 }
 
 export async function updateShareSettings(
@@ -348,20 +421,89 @@ export async function listRevisions(
       version: revision.version,
       createdAt: revision.createdAt,
       updatedAt: revision.updatedAt,
-      author: user.email,
+      authorName: user.name,
+      authorEmail: user.email,
+      name: revision.name,
+      source: revision.source,
+      label: revision.label,
+      changes: revision.changes,
+      restoredFromAt: revision.restoredFromAt,
     })
     .from(revision)
     .leftJoin(user, eq(user.id, revision.authorId))
     .where(eq(revision.diagramId, id))
     .orderBy(desc(revision.createdAt))
-    .limit(200);
+    .limit(500);
   return rows.map((row) => ({
     id: row.id,
     version: row.version,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
-    author: row.author,
+    // Accounts made by email alone have an empty name.
+    author: row.authorName?.trim() || row.authorEmail,
+    name: row.name,
+    source: row.source as VersionSource,
+    label: row.label,
+    changes: row.changes,
+    restoredFromAt: row.restoredFromAt?.toISOString() ?? null,
   }));
+}
+
+/** Names a version (or clears its name); named versions are never cleaned up. */
+export async function renameRevision(
+  ownerId: string,
+  id: string,
+  revisionId: string,
+  name: string | null,
+): Promise<boolean> {
+  if ((await ownedRow(ownerId, id)) === null || !isUuid(revisionId)) return false;
+  const db = await getDb();
+  const rows = await db
+    .update(revision)
+    .set({ name: name === null || name.trim() === "" ? null : name.trim().slice(0, 120) })
+    .where(and(eq(revision.id, revisionId), eq(revision.diagramId, id)))
+    .returning({ id: revision.id });
+  return rows.length > 0;
+}
+
+/**
+ * Names the diagram as it is now: the latest version gets the name if it already holds these
+ * files, otherwise a new named version is made.
+ */
+export async function checkpointDiagram(
+  ownerId: string,
+  id: string,
+  name: string,
+): Promise<boolean> {
+  const current = await ownedRow(ownerId, id);
+  if (current === null) return false;
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    const [latest] = await tx
+      .select()
+      .from(revision)
+      .where(eq(revision.diagramId, id))
+      .orderBy(desc(revision.createdAt))
+      .limit(1);
+    const clean = name.trim().slice(0, 120);
+    if (latest !== undefined && sameFiles(latest.files, current.files)) {
+      await tx.update(revision).set({ name: clean }).where(eq(revision.id, latest.id));
+      return;
+    }
+    const now = new Date();
+    await tx.insert(revision).values({
+      diagramId: id,
+      authorId: ownerId,
+      files: current.files,
+      version: current.version,
+      source: "named",
+      name: clean,
+      changes: versionChanges(latest?.files, current.files),
+      createdAt: now,
+      updatedAt: now,
+    });
+  });
+  return true;
 }
 
 export async function getRevisionFiles(
@@ -400,11 +542,75 @@ export async function restoreRevision(
       .where(and(eq(diagram.id, id), eq(diagram.ownerId, ownerId)))
       .returning();
     if (row === undefined) return null;
-    await tx
-      .insert(revision)
-      .values({ diagramId: id, authorId: ownerId, files, version: row.version });
+    const [source] = await tx
+      .select({ createdAt: revision.createdAt })
+      .from(revision)
+      .where(eq(revision.id, revisionId))
+      .limit(1);
+    await tx.insert(revision).values({
+      diagramId: id,
+      authorId: ownerId,
+      files,
+      version: row.version,
+      source: "restore",
+      restoredFromAt: source?.createdAt ?? null,
+      changes: versionChanges(current.files, files),
+      createdAt: now,
+      updatedAt: now,
+    });
+    await pruneRevisions(tx, id, now);
     return row;
   });
   if (updated === null) return notFound();
   return ok({ version: updated.version, updatedAt: updated.updatedAt.toISOString() });
+}
+
+/**
+ * A draft's earlier versions, uploaded with it (oldest first): kept as they were made, older
+ * than the version the upload created, and cleaned up by the usual rules.
+ */
+export async function importRevisions(
+  ownerId: string,
+  id: string,
+  versions: readonly {
+    readonly files: StoredFiles;
+    readonly createdAt: string;
+    readonly name: string | null;
+    readonly source: VersionSource;
+    readonly label: string | null;
+    readonly restoredFromAt: string | null;
+  }[],
+): Promise<ServiceResult<{ imported: number }>> {
+  const current = await ownedRow(ownerId, id);
+  if (current === null) return notFound();
+  const now = new Date();
+  const rows: (typeof revision.$inferInsert)[] = [];
+  let previous: StoredFiles | undefined;
+  for (const version of versions) {
+    const cleaned = sanitizeProjectFiles(version.files);
+    if ("error" in cleaned) return { ok: false, code: "invalid", message: cleaned.error };
+    const createdAt = new Date(version.createdAt);
+    // Only the past: an upload can't put versions after the ones made since.
+    if (createdAt.getTime() > now.getTime()) continue;
+    rows.push({
+      diagramId: id,
+      authorId: ownerId,
+      files: cleaned.files,
+      version: 0,
+      createdAt,
+      updatedAt: createdAt,
+      name: version.name,
+      source: version.source,
+      label: version.label,
+      restoredFromAt: version.restoredFromAt === null ? null : new Date(version.restoredFromAt),
+      changes: versionChanges(previous, cleaned.files),
+    });
+    previous = cleaned.files;
+  }
+  const db = await getDb();
+  await db.transaction(async (tx) => {
+    if (rows.length > 0) await tx.insert(revision).values(rows);
+    await pruneRevisions(tx, id, now);
+  });
+  return ok({ imported: rows.length });
 }

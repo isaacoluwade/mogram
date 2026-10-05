@@ -1,4 +1,6 @@
+import type { ConceptPlatform, ConceptTopic } from "@mogram/core/presets";
 import { z } from "zod";
+import type { VersionChanges, VersionSource } from "@/lib/history/rules";
 import { MAX_FILE_BYTES } from "@mogram/core/format";
 
 /**
@@ -63,6 +65,24 @@ export const createDiagramBody = z.strictObject({
   name: diagramName,
   files: projectFiles,
   thumbnail: z.string().max(LIMITS.thumbnailBytes).nullable().optional(),
+  /** "import" when a draft (or a file) is brought in with its own history. */
+  source: z.enum(["create", "import"]).optional(),
+});
+
+/** A draft's earlier versions, uploaded with it (oldest first, in batches). */
+export const importVersionsBody = z.strictObject({
+  versions: z
+    .array(
+      z.strictObject({
+        files: projectFiles,
+        createdAt: z.iso.datetime(),
+        name: z.string().max(120).nullable(),
+        source: z.enum(["create", "save", "restore", "ai", "named", "import"]),
+        label: z.string().max(500).nullable(),
+        restoredFromAt: z.iso.datetime().nullable(),
+      }),
+    )
+    .max(100),
 });
 
 export const saveDiagramBody = z.strictObject({
@@ -70,7 +90,21 @@ export const saveDiagramBody = z.strictObject({
   baseVersion: z.number().int().positive(),
   name: diagramName.optional(),
   thumbnail: z.string().max(LIMITS.thumbnailBytes).nullable().optional(),
+  /** Make this save its own version (an assistant turn, or a named one). */
+  checkpoint: z
+    .strictObject({
+      source: z.enum(["ai", "named"]),
+      label: z.string().max(500).optional(),
+      name: z.string().max(120).optional(),
+    })
+    .optional(),
 });
+
+export const versionNameBody = z.strictObject({ name: z.string().max(120).nullable() });
+
+export const checkpointBody = z.strictObject({ name: z.string().trim().min(1).max(120) });
+
+export const duplicateBody = z.strictObject({ revisionId: z.uuid().optional() });
 
 /** Metadata changes: a rename (also written into the YAML, so it's a new version) or a new thumbnail. */
 export const updateDiagramBody = z
@@ -88,6 +122,15 @@ export const shareSettingsBody = z.strictObject({
 
 export type Visibility = "private" | "link";
 
+/** What a concept's diagram says about itself, for the library's lists (D-85). */
+export interface ConceptSummary {
+  readonly summary: string | null;
+  readonly topic: ConceptTopic | null;
+  readonly platform: ConceptPlatform;
+  readonly tags: readonly string[];
+  readonly kind: "pattern" | "explainer";
+}
+
 export interface DiagramSummary {
   readonly id: string;
   readonly name: string;
@@ -95,6 +138,8 @@ export interface DiagramSummary {
   readonly createdAt: string;
   readonly visibility: Visibility;
   readonly thumbnail: string | null;
+  /** Set when the diagram is a concept (D-83, D-85), so the library can offer it. */
+  readonly concept: ConceptSummary | null;
 }
 
 export interface DiagramDetail extends DiagramSummary {
@@ -109,7 +154,14 @@ export interface RevisionSummary {
   readonly version: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Who made it: their name, else their email. */
   readonly author: string | null;
+  readonly name: string | null;
+  readonly source: VersionSource;
+  /** For an assistant turn: the prompt. */
+  readonly label: string | null;
+  readonly changes: VersionChanges | null;
+  readonly restoredFromAt: string | null;
 }
 
 export interface SharedDiagram {

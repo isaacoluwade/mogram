@@ -24,13 +24,17 @@ const SECTION_ORDER = [
   "mogram",
   "name",
   "description",
+  "concept",
   "theme",
   "background",
   "grid",
   "libraries",
   "ports",
+  "data",
+  "styles",
   "containers",
   "components",
+  "shapes",
   "groups",
   "connections",
   "scenes",
@@ -226,3 +230,24 @@ export function renameKey(map: YAMLMap, from: string, to: string): boolean {
 }
 
 export { isMap, isScalar, isSeq };
+
+const SETTING_ORDER = [
+  "mogram",
+  "name",
+  "description",
+  "concept",
+  "theme",
+  "background",
+  "grid",
+  "data",
+];
+
+/** A new setting goes at the top of the file with the others, after the format version. */
+export function insertSetting(root: YAMLMap, key: string, value: Node): void {
+  const index = root.items.findIndex(
+    (item) => isScalar(item.key) && !SETTING_ORDER.includes(String(item.key.value)),
+  );
+  const first = root.items[0];
+  if (index === 0 && first !== undefined && isScalar(first.key)) first.key.spaceBefore = true;
+  root.items.splice(index === -1 ? root.items.length : index, 0, new Pair(new Scalar(key), value));
+}

@@ -16,7 +16,11 @@
     "./timeline": "./src/timeline/index.ts",
     "./tours": "./src/tours/index.ts",
     "./nested": "./src/nested/index.ts",
-    "./edit": "./src/edit/index.ts"
+    "./edit": "./src/edit/index.ts",
+    "./diff": "./src/diff/index.ts",
+    "./lint": "./src/lint/index.ts",
+    "./capacity": "./src/capacity/index.ts",
+    "./concepts": "./src/concepts/index.ts"
   },
   "scripts": {
     "lint": "eslint .",

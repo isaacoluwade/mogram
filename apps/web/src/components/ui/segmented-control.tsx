@@ -22,7 +22,8 @@ export function SegmentedControl<T extends string>({
   size = "md",
   className,
 }: {
-  value: T;
+  /** Null shows nothing pressed (a mixed selection); the first option takes keyboard focus. */
+  value: T | null;
   onChange: (value: T) => void;
   options: readonly SegmentOption<T>[];
   label: string;
@@ -33,8 +34,8 @@ export function SegmentedControl<T extends string>({
   const [thumb, setThumb] = useState<{ left: number; width: number } | null>(null);
 
   useLayoutEffect(() => {
-    const node = refs.current.get(value);
-    if (node !== undefined) setThumb({ left: node.offsetLeft, width: node.offsetWidth });
+    const node = value === null ? undefined : refs.current.get(value);
+    setThumb(node === undefined ? null : { left: node.offsetLeft, width: node.offsetWidth });
   }, [value, options]);
 
   const move = (direction: 1 | -1) => {
@@ -71,8 +72,9 @@ export function SegmentedControl<T extends string>({
           style={{ left: thumb.left, width: thumb.width }}
         />
       ) : null}
-      {options.map((option) => {
+      {options.map((option, index) => {
         const selected = option.value === value;
+        const focusable = selected || (value === null && index === 0);
         return (
           <button
             key={option.value}
@@ -84,7 +86,7 @@ export function SegmentedControl<T extends string>({
             role="radio"
             aria-checked={selected}
             aria-label={option.ariaLabel}
-            tabIndex={selected ? 0 : -1}
+            tabIndex={focusable ? 0 : -1}
             onClick={() => onChange(option.value)}
             className={cn(
               "relative z-10 inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-full font-medium transition-colors duration-200 [&_svg]:size-3.5",

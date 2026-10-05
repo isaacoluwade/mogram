@@ -1,7 +1,15 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
-import { Download, FileImage, FileType2, Film, Image as ImageIcon, Images } from "lucide-react";
+import {
+  Download,
+  FileImage,
+  FileText,
+  FileType2,
+  Film,
+  Image as ImageIcon,
+  Images,
+} from "lucide-react";
 import { computeLayout } from "@mogram/core/layout";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,6 +54,7 @@ const FORMATS: readonly FormatInfo[] = [
     icon: <FileType2 />,
     animated: false,
   },
+  { id: "pdf", label: "PDF", description: "Print or share", icon: <FileText />, animated: false },
   {
     id: "gif",
     label: "GIF",
@@ -260,7 +269,7 @@ function ExportDialogBody() {
             />
           </Row>
 
-          {options.format !== "svg" ? (
+          {options.format !== "svg" && options.format !== "pdf" ? (
             <Row label="Scale">
               <SegmentedControl
                 label="Scale"
@@ -272,6 +281,17 @@ function ExportDialogBody() {
                   { value: "2", label: "2×" },
                   { value: "3", label: "3×" },
                 ]}
+              />
+            </Row>
+          ) : null}
+
+          {options.format === "png" || options.format === "svg" ? (
+            <Row label="Editable copy">
+              <Switch
+                checked={options.embed !== false}
+                onCheckedChange={(embed) => set({ embed })}
+                aria-label="Include an editable copy of the diagram"
+                title="Open the image in Mogram later to get the diagram back"
               />
             </Row>
           ) : null}

@@ -35,10 +35,11 @@ const YamlEditor = dynamic(
  */
 export function CodePanel({ onClose }: { onClose: () => void }) {
   const store = useEditorStore();
-  const { files, folder, codeFile } = useEditorShallow((s) => ({
+  const { files, folder, codeFile, codeReveal } = useEditorShallow((s) => ({
     files: s.files,
     folder: s.folder,
     codeFile: s.codeFile,
+    codeReveal: s.codeReveal,
   }));
   const parsed = parseCached(files, folder);
   const paths = useMemo(() => {
@@ -176,6 +177,7 @@ export function CodePanel({ onClose }: { onClose: () => void }) {
               onChange={onChange}
               diagnostics={diagnostics}
               language={active.endsWith(".md") ? "markdown" : "yaml"}
+              reveal={codeReveal?.file === active ? codeReveal : null}
             />
           </TabsContent>
         )}

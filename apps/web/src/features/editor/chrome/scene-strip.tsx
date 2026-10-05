@@ -33,7 +33,7 @@ import { useFontsVersion } from "@/features/canvas/text";
 import { DiagramSvg } from "@/features/canvas/svg/diagram-svg";
 import type { CanvasTheme } from "@/features/canvas/theme";
 import { useEditor, useEditorClock, useEditorShallow, useEditorStore } from "../editor-context";
-import { storyDiagram } from "../store/editor-store";
+import { shownFiles, storyDiagram } from "../store/editor-store";
 import { resolveLevel } from "../use-editor-scene";
 
 const THUMB = { width: 112, height: 64 } as const;
@@ -129,7 +129,7 @@ export function SceneStrip({ layout, routes, theme }: SceneStripProps) {
   const store = useEditorStore();
   const clock = useEditorClock();
   const { files, folder, scene, playing, levelPath } = useEditorShallow((s) => ({
-    files: s.files,
+    files: shownFiles(s),
     folder: s.folder,
     scene: s.scene,
     playing: s.playing,

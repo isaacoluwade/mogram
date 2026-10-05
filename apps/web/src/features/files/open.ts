@@ -1,5 +1,6 @@
 "use client";
 
+import { filesFromPng, filesFromSvg } from "@/features/export/embed";
 import DOMPurify from "dompurify";
 import { strFromU8, unzipSync } from "fflate";
 import type { ProjectFiles } from "@mogram/core/model";
@@ -82,6 +83,19 @@ async function addEntry(
  * Returns project files with paths relative to the diagram folder.
  */
 export async function readProject(input: readonly File[]): Promise<ProjectFiles> {
+  // A PNG or SVG exported with "Editable copy" carries the whole diagram (07 §18 P0-6).
+  const only = input.length === 1 ? input[0] : undefined;
+  if (only !== undefined && /\.(png|svg)$/i.test(only.name)) {
+    const bytes = new Uint8Array(await only.arrayBuffer());
+    const files = /\.png$/i.test(only.name)
+      ? filesFromPng(bytes)
+      : filesFromSvg(new TextDecoder().decode(bytes));
+    if (files === null)
+      throw new OpenError(
+        `${only.name} doesn't hold a Mogram diagram. Export with "Editable copy" on to open an image here.`,
+      );
+    return files;
+  }
   const raw: { path: string; bytes: Uint8Array }[] = [];
   for (const file of input) {
     const bytes = new Uint8Array(await file.arrayBuffer());

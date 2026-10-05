@@ -75,6 +75,20 @@ export function searchIcons(
     const tier = matchTier(icon, words);
     if (tier !== null) matches.push({ icon, tier, rank: rankOf(icon) });
   }
+  // Nothing has every word: fall back to icons matching some of them, most words first
+  // (draw.io's AND → OR), so "postgres cache" still offers both.
+  if (matches.length === 0 && words.length > 1) {
+    for (const icon of indexFor(icons)) {
+      if (options.library !== undefined && icon.entry.library !== options.library) continue;
+      const hits = words.filter((word) => matchTier(icon, [word]) !== null).length;
+      if (hits > 0)
+        matches.push({
+          icon,
+          tier: (Tier.Subsequence + words.length - hits) as Tier,
+          rank: rankOf(icon),
+        });
+    }
+  }
   matches.sort(
     (a, b) =>
       a.tier - b.tier ||

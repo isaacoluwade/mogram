@@ -1,4 +1,4 @@
-import { linear, radial, type Paint } from "./paint";
+import { linear, radial, samePaint, type Paint } from "./paint";
 
 /**
  * Colour presets for the colour picker (ED-24). The default rows are a short, balanced set; the
@@ -188,4 +188,15 @@ export function namedColors(): readonly NamedColor[] {
     all.push(entry);
   }
   return all;
+}
+
+/** The palette's name for a paint ("Brown", "Sunset"), or null when it isn't one of its own. */
+export function paintName(paint: Paint): string | null {
+  if (paint.kind === "solid") {
+    const color = paint.color.toLowerCase();
+    return namedColors().find((entry) => entry.color.toLowerCase() === color)?.name ?? null;
+  }
+  for (const group of GRADIENT_GROUPS)
+    for (const entry of group.gradients) if (samePaint(entry.paint, paint)) return entry.name;
+  return null;
 }

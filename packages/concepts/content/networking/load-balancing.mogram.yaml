@@ -1,0 +1,31 @@
+mogram: 1
+name: Load balancing
+description: One front door, many servers, each request to one of them.
+concept:
+  summary: A load balancer sends each request to one server behind it, evenly or by weight, so a bigger server can take a bigger share. When a server fails, the others take its share.
+  topic: networking
+  tags: [load balancer, weights, health]
+  roles:
+    lb: What spreads the traffic
+    a: { label: A server behind it, optional: true }
+    b: { label: Another server behind it, optional: true }
+    c: { label: A third server, optional: true }
+components:
+  users: { type: generic/users, label: Users }
+  lb: { type: generic/load-balancer, label: Load balancer }
+  a: { type: generic/server, label: Big server, capacity: 2x }
+  b: { type: generic/server, label: Server B, capacity: 1x }
+  c: { type: generic/server, label: Server C, capacity: 1x }
+connections:
+  users_to_lb: { from: users, to: lb, traffic: 2x }
+  lb_to_a: { from: lb, to: a }
+  lb_to_b: { from: lb, to: b }
+  lb_to_c: { from: lb, to: c }
+scenes:
+  weighted:
+    lb_to_a: { share: 50% }
+    lb_to_b: { share: 25% }
+    lb_to_c: { share: 25% }
+  server_down:
+    b: down
+    lb_to_b: blocked

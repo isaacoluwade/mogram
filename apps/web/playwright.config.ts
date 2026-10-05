@@ -29,6 +29,8 @@ export default defineConfig({
           url: "http://localhost:3100",
           reuseExistingServer: true,
           timeout: 180_000,
+          // The assistant journeys use the scripted provider: no model, no key, no cost.
+          env: { AI_PROVIDER: "scripted", AI_ALLOW_ANONYMOUS: "1" },
         },
       }
     : {}),

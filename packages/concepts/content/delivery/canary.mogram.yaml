@@ -1,0 +1,28 @@
+mogram: 1
+name: Canary release
+description: Send a little traffic to the new version first.
+concept:
+  summary: Release a new version to a small share of traffic. If it holds up, give it more; if it doesn't, take its share away before most people notice.
+  topic: delivery
+  tags: [release, deployment, rollout, rollback]
+  roles:
+    lb: What splits the traffic
+    stable: The version in use
+    canary: The new version
+components:
+  users: { type: generic/users, label: Users }
+  lb: { type: generic/load-balancer, label: Load balancer }
+  stable: { type: generic/service, label: Version 1, capacity: 1x }
+  canary: { type: generic/service, label: Version 2, capacity: 1x }
+connections:
+  users_to_lb: { from: users, to: lb }
+  lb_to_stable: { from: lb, to: stable }
+  lb_to_canary: { from: lb, to: canary, share: 5% }
+scenes:
+  widen:
+    lb_to_canary: { share: 30% }
+  roll_back:
+    canary: degraded
+    lb_to_canary: { share: 0%, flow: blocked }
+  roll_out:
+    lb_to_canary: { share: 100% }

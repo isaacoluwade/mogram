@@ -1,4 +1,6 @@
 import type {
+  Concept,
+  ConceptRole,
   Diagnostic,
   Diagram,
   DiagramSettings,
@@ -24,6 +26,7 @@ import {
   type Ref,
 } from "./read";
 import { didYouMean } from "./suggest";
+import { readStyles } from "./styles";
 import { parseYamlFile } from "./yaml-read";
 
 export interface ParseResult {
@@ -61,19 +64,33 @@ export function parseDiagram(files: ProjectFiles, folder = ""): ParseResult {
     return { diagram: emptyDiagram(folder), diagnostics: sink.items, brokenFiles: [] };
   }
 
-  const contributions: FileContribution[] = [];
   const brokenFiles: string[] = [];
-  for (const path of set.files) {
+  const parsedFiles = set.files.map((path) => {
     const parsed = parseYamlFile(path, files[path] ?? "", sink);
     if (parsed.broken) brokenFiles.push(path);
-    contributions.push(readFile(parsed, folder, sink));
-  }
+    return parsed;
+  });
+  // Named styles first, so an element in any file can take a style from any other.
+  const styles = readStyles(parsedFiles, sink);
+  const contributions: FileContribution[] = parsedFiles.map((parsed) =>
+    readFile(parsed, folder, sink, styles),
+  );
 
   const merged = new Merger(sink);
   for (const contribution of contributions)
     merged.add(contribution, contribution.file === set.settingsFile);
   const diagram = merged.build({
     folder,
+    styles: new Map(
+      [...styles.values()].map((style) => [
+        style.name,
+        {
+          name: style.name,
+          source: { file: style.at.file, line: style.at.line },
+          keys: [...style.entries.keys()],
+        },
+      ]),
+    ),
     mode: set.mode,
     files: set.files,
     settingsFile: set.settingsFile,
@@ -102,17 +119,20 @@ function emptyDiagram(folder: string): Diagram {
     settings: {
       name: "Untitled diagram",
       description: null,
+      concept: null,
       theme: "midnight",
       background: null,
       grid: null,
       libraries: null,
       ports: new Map(),
+      data: new Map(),
     },
     components: new Map(),
     containers: new Map(),
     groups: new Map(),
     connections: new Map(),
     decorations: new Map(),
+    styles: new Map(),
     layout: new Map(),
     scenes: [],
     tours: [],
@@ -121,6 +141,7 @@ function emptyDiagram(folder: string): Diagram {
 
 interface BuildInfo {
   readonly folder: string;
+  readonly styles: Diagram["styles"];
   readonly mode: Diagram["mode"];
   readonly files: readonly string[];
   readonly settingsFile: string;
@@ -212,6 +233,41 @@ class Merger {
     return false;
   }
 
+  /**
+   * Internal links point at something that exists (draw.io's "Page not found"): an element of
+   * this diagram, or a scene or tour when this diagram has any (nested diagrams use the top
+   * diagram's). Wrong ones are warnings: the element still draws.
+   */
+  private validateLinks(scenes: ReadonlySet<string>, tours: ReadonlySet<string>): void {
+    const all = [
+      ...this.components.values(),
+      ...this.containers.values(),
+      ...this.groups.values(),
+      ...this.connections.values(),
+      ...this.decorations.values(),
+    ];
+    for (const raw of all) {
+      const link = raw.model.link;
+      if (link === null) continue;
+      const at = raw.at;
+      if (link.kind === "element" && !this.owners.has(link.element))
+        this.sink.warning(
+          at,
+          `"${raw.model.name}" links to "#${link.element}", but there is no element by that name.`,
+        );
+      if (link.kind === "scene" && scenes.size > 0 && !scenes.has(link.scene))
+        this.sink.warning(
+          at,
+          `"${raw.model.name}" links to scene "${link.scene}", which this diagram doesn't have.`,
+        );
+      if (link.kind === "tour" && tours.size > 0 && !tours.has(link.tour))
+        this.sink.warning(
+          at,
+          `"${raw.model.name}" links to tour "${link.tour}", which this diagram doesn't have.`,
+        );
+    }
+  }
+
   build(info: BuildInfo): Diagram {
     this.resolveParents();
     this.validateGroups();
@@ -219,15 +275,21 @@ class Merger {
     this.validateLayout();
     const scenes = this.validateScenes();
     const tours = this.validateTours(new Set(scenes.map((scene) => scene.name)));
+    this.validateLinks(
+      new Set(scenes.map((scene) => scene.name)),
+      new Set(tours.map((tour) => tour.name)),
+    );
 
     const settings: DiagramSettings = {
       name: this.settings?.name ?? info.defaultName,
       description: this.settings?.description ?? null,
+      concept: this.validateConcept(),
       theme: this.settings?.theme ?? "midnight",
       background: this.settings?.background ?? null,
       grid: this.settings?.grid ?? null,
       libraries: this.settings?.libraries ?? null,
       ports: this.resolvePorts(),
+      data: this.settings?.data ?? new Map(),
     };
 
     const layout = new Map<string, LayoutEntry>();
@@ -237,6 +299,10 @@ class Merger {
         size: entry.size,
         z: entry.z,
         via: entry.via,
+        fromAnchor: entry.fromAnchor,
+        toAnchor: entry.toAnchor,
+        label: entry.label,
+        locked: entry.locked,
         source: entry.source,
       });
     }
@@ -253,6 +319,7 @@ class Merger {
       groups: mapValues(this.groups, (raw) => raw.model),
       connections: mapValues(this.connections, (raw) => raw.model),
       decorations: mapValues(this.decorations, (raw) => raw.model),
+      styles: info.styles,
       layout,
       scenes,
       tours,
@@ -396,13 +463,52 @@ class Merger {
           entry.at_,
           `Connections only take "via" points in the layout; the position for "${name}" is ignored.`,
         );
-      } else if (kind === "component" && entry.size !== null) {
+      } else if (
+        kind !== "connection" &&
+        (entry.fromAnchor !== null || entry.toAnchor !== null || entry.label !== null)
+      ) {
         this.sink.warning(
           entry.at_,
-          `Components have a fixed size, so the size for "${name}" is ignored.`,
+          `Only connections take anchors and a label place in the layout; they are ignored for "${name}".`,
+        );
+      } else if (
+        kind === "component" &&
+        entry.size !== null &&
+        this.components.get(name)?.model.shape == null
+      ) {
+        this.sink.warning(
+          entry.at_,
+          `Icon components have a fixed size, so the size for "${name}" is ignored. Shapes can be resized.`,
         );
       }
     }
+  }
+
+  /** A concept's roles name its components and containers (D-83). */
+  private validateConcept(): Concept | null {
+    const raw = this.settings?.concept ?? null;
+    if (raw === null) return null;
+    const roles: ConceptRole[] = [];
+    for (const role of raw.roles) {
+      const kind = this.owners.get(role.element.value)?.kind;
+      if (kind === "component" || kind === "container") {
+        roles.push({ element: role.element.value, label: role.label, optional: role.optional });
+        continue;
+      }
+      this.sink.error(
+        role.element.at,
+        kind === undefined
+          ? `The concept's role "${role.element.value}" should name an element in this diagram.${didYouMean(role.element.value, [...this.components.keys(), ...this.containers.keys()])}`
+          : `The concept's role "${role.element.value}" is a ${kind}; roles are played by components and containers.`,
+      );
+    }
+    return {
+      summary: raw.summary,
+      topic: raw.topic,
+      platform: raw.platform,
+      tags: raw.tags,
+      roles,
+    };
   }
 
   private validateScenes(): Scene[] {
@@ -411,7 +517,8 @@ class Merger {
       const entries: SceneEntry[] = [];
       raw.model.entries.forEach((entry, index) => {
         const at = raw.entryPositions[index] ?? raw.at;
-        if (this.validateSceneEntry(raw.model.name, entry, at)) entries.push(entry);
+        if (this.validateSceneEntry(raw.model.name, entry, at))
+          entries.push(this.validateSceneCapacity(raw.model.name, entry, at));
       });
       scenes.push({ ...raw.model, entries });
     }
@@ -465,6 +572,59 @@ class Merger {
       return false;
     }
     return true;
+  }
+
+  /** Capacity in a scene line, kept only where it means something (D-82). */
+  private validateSceneCapacity(scene: string, entry: SceneEntry, at: Position): SceneEntry {
+    const capacity = entry.capacity;
+    if (capacity === undefined || entry.target.includes(".")) return entry;
+    const kind = this.owners.get(entry.target)?.kind;
+    const component = this.components.get(entry.target)?.model;
+    const dropped = new Set<keyof typeof capacity>();
+    const drop = (key: keyof typeof capacity, message: string) => {
+      this.sink.warning(at, `In scene "${scene}", ${message}`);
+      dropped.add(key);
+    };
+    const kept = capacity;
+    if (kind !== "connection") {
+      if (kept.traffic !== undefined)
+        drop("traffic", `traffic is set on connections, not on "${entry.target}".`);
+      if (kept.share !== undefined)
+        drop("share", `a share is set on connections, not on "${entry.target}".`);
+    }
+    if (kind !== "component" && kept.hit !== undefined)
+      drop("hit", `a hit rate is set on components, not on "${entry.target}".`);
+    if (kept.copies !== undefined && component?.scale?.kind !== "out")
+      drop(
+        "copies",
+        `"${entry.target}" doesn't scale out (\`scale: { min, max }\`), so its copies are ignored.`,
+      );
+    if (kept.size !== undefined) {
+      const sizes =
+        component?.scale?.kind === "up" ? component.scale.sizes.map((s) => s.name) : null;
+      if (sizes === null)
+        drop(
+          "size",
+          `"${entry.target}" doesn't scale up (\`scale: { sizes }\`), so its size is ignored.`,
+        );
+      else if (!sizes.includes(kept.size))
+        drop(
+          "size",
+          `"${entry.target}" has no size "${kept.size}".${didYouMean(kept.size, sizes)} Its sizes: ${sizes.join(", ")}.`,
+        );
+    }
+    const left = Object.fromEntries(
+      Object.entries(capacity).filter(([key]) => !dropped.has(key as keyof typeof capacity)),
+    ) as typeof capacity;
+    return Object.keys(left).length === 0
+      ? {
+          target: entry.target,
+          state: entry.state,
+          flow: entry.flow,
+          motion: entry.motion,
+          source: entry.source,
+        }
+      : { ...entry, capacity: left };
   }
 
   private validateTours(sceneNames: ReadonlySet<string>): Tour[] {

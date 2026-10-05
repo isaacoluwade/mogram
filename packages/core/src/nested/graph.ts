@@ -191,6 +191,8 @@ export interface InstanceInput {
   readonly scene: readonly SceneEntry[];
   readonly viewer: readonly SceneEntry[];
   readonly ownerDown: boolean;
+  /** The traffic slider: everything entering each level, times this (D-82). */
+  readonly traffic?: number;
 }
 
 /**
@@ -208,13 +210,20 @@ export function resolveInstance(
     scene: input.scene,
     viewer: input.viewer,
     ownerDown: input.ownerDown,
+    ...(input.traffic !== undefined ? { traffic: input.traffic } : {}),
     nestedWorst: (component, entries): StatePreset | null => {
       const opens = diagram.components.get(component)?.opens ?? null;
       if (opens === null || depth >= 16 || !loader.has(opens)) return null;
       return worstState(
         resolveInstance(
           loader,
-          { folder: opens, scene: entries.scene, viewer: entries.viewer, ownerDown: false },
+          {
+            folder: opens,
+            scene: entries.scene,
+            viewer: entries.viewer,
+            ownerDown: false,
+            ...(input.traffic !== undefined ? { traffic: input.traffic } : {}),
+          },
           depth + 1,
         ),
       );

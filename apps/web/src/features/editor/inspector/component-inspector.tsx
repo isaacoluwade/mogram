@@ -8,20 +8,23 @@ import { PropertyRow } from "@/components/ui/property-row";
 import { SegmentedControl } from "@/components/ui/segmented-control";
 import { setMotion, setState } from "../actions";
 import { openNested } from "../levels";
-import { ArrangeRow } from "./arrange";
+import { NamedStyleSection } from "./named-style";
+import { AllProperties } from "./all-properties";
 import { CardEditor } from "./card-editor";
+import { ComponentTrafficSection, ScalingSection, StateNote } from "./capacity-section";
+import { ShapePicker, ShapeStyle } from "./shape-style";
 import {
-  Advanced,
   ColorField,
   CommitInput,
   FieldRow,
+  FieldStack,
   InspectorSection,
   PresetGrid,
   StatePicker,
 } from "./fields";
 import {
   NameAndFile,
-  PositionRow,
+  StyleClipboard,
   effectiveState,
   opensRelative,
   sceneLabel,
@@ -29,18 +32,95 @@ import {
   useEdit,
   useSceneView,
 } from "./shared";
+import type { InspectorTab } from "./tabs";
 
-/** A component: label, state in the current scene, motion, card, nesting, look and placement. */
+/**
+ * A component. Element: label, state in the current scene, motion, card, nesting, details.
+ * Style: colour, motion settings, all properties. Arrange is shared (arrange.tsx).
+ */
 export function ComponentInspector({
   diagram,
   component,
+  tab,
 }: {
   diagram: Diagram;
   component: Component;
+  tab: InspectorTab;
 }) {
   const { set, store } = useEdit();
   const view = useSceneView();
   const motion = sceneValue(view, component.name)?.motion ?? component.motion;
+  if (tab === "style" && component.shape !== null) {
+    return (
+      <>
+        <NamedStyleSection diagram={diagram} names={[component.name]} />
+        <ShapeStyle component={component} />
+        <InspectorSection id="state-colour" title="State colour" defaultOpen={false}>
+          <ColorField
+            label="State colour"
+            value={component.color}
+            onChange={(color, live) =>
+              set(component.name, { color }, "Change colour", { coalesce: live })
+            }
+          />
+        </InspectorSection>
+        <StyleClipboard />
+        <AllProperties diagram={diagram} name={component.name} source={component.source} />
+      </>
+    );
+  }
+  if (tab === "style") {
+    return (
+      <>
+        <NamedStyleSection diagram={diagram} names={[component.name]} />
+        <InspectorSection id="colour" title="Colour">
+          <ColorField
+            label="State colour"
+            value={component.color}
+            onChange={(color, live) =>
+              set(component.name, { color }, "Change colour", { coalesce: live })
+            }
+          />
+          <p className="mt-2 text-caption text-fg-muted">
+            Replaces the colour the state gives the tile. Reset goes back to the state’s.
+          </p>
+        </InspectorSection>
+        <InspectorSection id="motion-settings" title="Motion settings">
+          <FieldStack>
+            <FieldRow label="Intensity">
+              <SegmentedControl
+                label="Motion intensity"
+                size="sm"
+                value={component.intensity}
+                onChange={(intensity) => set(component.name, { intensity })}
+                options={[
+                  { value: "low", label: "Low" },
+                  { value: "normal", label: "Normal" },
+                  { value: "high", label: "High" },
+                ]}
+              />
+            </FieldRow>
+            <FieldRow label="Speed">
+              <SegmentedControl
+                label="Motion speed"
+                size="sm"
+                value={component.speed}
+                onChange={(speed) => set(component.name, { speed })}
+                options={[
+                  { value: "slow", label: "Slow" },
+                  { value: "normal", label: "Normal" },
+                  { value: "fast", label: "Fast" },
+                ]}
+              />
+            </FieldRow>
+          </FieldStack>
+        </InspectorSection>
+        <StyleClipboard />
+        <AllProperties diagram={diagram} name={component.name} source={component.source} />
+      </>
+    );
+  }
+  if (tab !== "element") return null;
   return (
     <>
       <InspectorSection title="Label">
@@ -50,14 +130,20 @@ export function ComponentInspector({
           onCommit={(label) => set(component.name, { label }, "Rename label")}
         />
       </InspectorSection>
-      <InspectorSection title={`State · ${sceneLabel(view)}`}>
+      {component.shape !== null ? (
+        <InspectorSection id="shape" title="Shape">
+          <ShapePicker component={component} />
+        </InspectorSection>
+      ) : null}
+      <InspectorSection id="state" title={`State · ${sceneLabel(view)}`}>
         <StatePicker
           label="State"
           value={effectiveState(view, component.name, component.state)}
           onChange={(state) => setState(store, [component.name], state)}
         />
+        <StateNote component={component} />
       </InspectorSection>
-      <InspectorSection title="Motion">
+      <InspectorSection id="motion" title="Motion">
         <PresetGrid
           options={MOTION_PRESETS}
           value={motion}
@@ -66,10 +152,12 @@ export function ComponentInspector({
           describe={(m) => MOTION_INFO[m]}
         />
       </InspectorSection>
-      <InspectorSection title="Card">
+      <ScalingSection component={component} />
+      <ComponentTrafficSection component={component} />
+      <InspectorSection id="card" title="Card">
         <CardEditor name={component.name} card={component.card} label={component.label} />
       </InspectorSection>
-      <InspectorSection title="Nested diagram">
+      <InspectorSection id="nested" title="Nested diagram">
         <div className="flex flex-col gap-2">
           <CommitInput
             label="Opens folder"
@@ -97,58 +185,14 @@ export function ComponentInspector({
           )}
         </div>
       </InspectorSection>
-      <InspectorSection title="Details">
+      <InspectorSection id="details" title="Details" defaultOpen={false}>
         <PropertyRow label="Type">
-          <span className="truncate font-mono text-caption">{component.type}</span>
-        </PropertyRow>
-        <PropertyRow label="Inside">
-          <span className="truncate text-caption">
-            {component.parent === null
-              ? "Canvas"
-              : (diagram.containers.get(component.parent)?.label ?? component.parent)}
+          <span className="truncate font-mono text-caption">
+            {component.shape !== null ? `shape: ${component.shape}` : component.type}
           </span>
         </PropertyRow>
-        <PositionRow name={component.name} />
-        <ArrangeRow />
         <NameAndFile diagram={diagram} name={component.name} file={component.source.file} />
       </InspectorSection>
-      <Advanced>
-        <FieldRow label="Colour">
-          <ColorField
-            label="State colour"
-            value={component.color}
-            onChange={(color, live) =>
-              set(component.name, { color }, "Change colour", { coalesce: live })
-            }
-          />
-        </FieldRow>
-        <FieldRow label="Intensity">
-          <SegmentedControl
-            label="Motion intensity"
-            size="sm"
-            value={component.intensity}
-            onChange={(intensity) => set(component.name, { intensity })}
-            options={[
-              { value: "low", label: "Low" },
-              { value: "normal", label: "Normal" },
-              { value: "high", label: "High" },
-            ]}
-          />
-        </FieldRow>
-        <FieldRow label="Speed">
-          <SegmentedControl
-            label="Motion speed"
-            size="sm"
-            value={component.speed}
-            onChange={(speed) => set(component.name, { speed })}
-            options={[
-              { value: "slow", label: "Slow" },
-              { value: "normal", label: "Normal" },
-              { value: "fast", label: "Fast" },
-            ]}
-          />
-        </FieldRow>
-      </Advanced>
     </>
   );
 }

@@ -107,3 +107,15 @@ export function wheelZoomFactor(deltaY: number, deltaMode: number): number {
  */
 export const PHONE_MIN_ZOOM = 0.55;
 export const PHONE_WIDTH = 768;
+
+/** Zoom stops for buttons and keys (06 §20 P1-14): 100% is always one of them. */
+export const ZOOM_STEPS = [
+  0.1, 0.15, 0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1, 1.25, 1.5, 2, 2.5, 3, 4,
+] as const;
+
+/** The next zoom stop above (`1`) or below (`-1`) `zoom`. */
+export function nextZoomStep(zoom: number, direction: 1 | -1): number {
+  const epsilon = 0.001;
+  if (direction > 0) return ZOOM_STEPS.find((step) => step > zoom + epsilon) ?? MAX_ZOOM;
+  return [...ZOOM_STEPS].reverse().find((step) => step < zoom - epsilon) ?? MIN_ZOOM;
+}

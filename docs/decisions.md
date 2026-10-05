@@ -502,3 +502,464 @@ text: a three-line local loader (`scripts/text-loader.cjs`) in `turbopack.rules`
 folder, and a matching Vite plugin for the unit tests. Turbopack's built-in `raw` module type was
 tried first; its import came back undefined. Prettier leaves the folders alone, so they stay
 exactly as written.
+
+### D-59 · Connections draw the way draw.io's do, written in plain words
+
+The research in `docs/research/drawio/02-connectors.md` set what a connection needs: arrowheads
+per end (19 of them, from plain open arrows to ER notation, filled and outline), their size, a
+line pattern, width, sharp or rounded corners and line jumps. They are separate keys on the
+connection (`arrows`, `arrow_size`, `line`, `width`, `corners`, `jumps`) rather than draw.io's
+style string, and each is written only when it differs from the default. `direction` keeps
+supplying the arrowheads when `arrows` isn't written, so older files draw as before. The line
+stops at a filled arrowhead's base instead of running through it, dashes scale with the width,
+and the traffic dots run beneath the arrowheads over any pattern. Reversing a connection swaps
+its ends, bends, fixed ends and label place, so the picture keeps its shape and the arrowheads
+turn with the flow (draw.io leaves the markers where they were; we decided against that).
+
+### D-60 · Every route takes bends, and bends that do nothing go away
+
+`via` used to work only for orthogonal routes. Now a straight line is a polyline through its
+bends, a curve passes through them (Catmull-Rom turned into Béziers), and an orthogonal line
+treats them as its corners, with each end leaving from the side that lines up with its nearest
+bend. Editing follows draw.io: handles on the ends, on every bend and faded "add" handles between
+them; orthogonal lines get a handle on each segment that slides it sideways; dragging a line that
+isn't selected edits it straight away. Bends snap to the grid; Shift keeps a drag to one axis,
+Alt keeps a bend that falls in line. A bend dragged back into line is removed, and a segment
+slid back to where the router would put it removes `via` altogether, so the file only holds
+bends that change the picture. Escape cancels any of these drags.
+
+### D-61 · Fixed ends and label places live in the layout
+
+Dragging an end onto one of an element's 16 connection points fixes it there (`from_anchor`,
+`to_anchor`: a name such as `left` or `[x, y]` fractions); onto the element's middle it floats
+again. Onto another element it reconnects; with Ctrl/Cmd it copies. The label can be dragged
+along and beside its line (`label: { at, offset }`). These are geometry, like `via`, so they sit
+in the connection's layout entry and the definition stays about meaning.
+
+### D-62 · Bends follow the elements they join
+
+draw.io leaves bends where they were when a shape moves unless the edge has `followTerminals`,
+and stale bends are the most common "my arrow looks broken" moment there. Here following is the
+default and there is no switch: moving, nudging, aligning, distributing, resizing or fitting a
+container rewrites the bends of the connections it touches in the same undo step, and the drag
+previews it. Straight and curved lines keep each bend's place along the line between the ends
+and its distance from it; orthogonal lines stay square, the first and last runs moving with their
+element and the runs between sharing the shift by how far along they are.
+
+### D-63 · Dropping a component on a connection puts it in between
+
+Drag one component (or drop one from the library) onto a connection and the line highlights; on
+release the connection ends at the component and a copy carries on to the original target, with
+the same flow and look but no label or card. The original keeps its name, label and any scene
+entries, since scenes refer to it by name. Bends before the component stay with the first part,
+those after go to the second, and any under it are dropped. Alt or Shift drops without splitting.
+
+### D-64 · One command registry behind keys, menus, the palette and the shortcuts list
+
+Keys, the right-click menu, the quick bar's More menu, the diagram menu and the shortcuts dialog
+were wired separately, which is how draw.io ended up with menu hints that don't match its keys
+(05-ui-shell-commands §4.5). Each command is now defined once in
+`features/editor/commands/registry.ts` with its label, keys, icon, when it applies and whether
+it's checked; every surface reads it from there, and a unit test fails if two commands claim the
+same keys. Context menus are built per selection when they open and hide what doesn't apply
+(dropdowns show it greyed out); separators never lead, trail or double up; "Delete (3)" says how
+many. A key the editor owns is kept from the browser even when nothing applies (⌘D never
+bookmarks the page), except copy, which stays native in text fields, and Tab, which moves focus
+when nothing is selected. ⌘R reverses the selected connection rather than reloading. A command
+palette (⌘K or /) searches every command that applies, the icons to add, the diagram's elements,
+nested diagrams and scenes, with recent commands first.
+
+### D-65 · Find, lock, paste in place and copied styles
+
+The commands draw.io users reach for most that Mogram lacked (05-ui-shell-commands §13.2):
+
+- **Find** (⌘F) is a small panel under the top bar, not a dialog, so the canvas stays usable. It
+  matches labels, YAML names, types and card text, steps through matches in reading order with
+  Enter and Shift+Enter, and selects each one, moving the view only when it's off screen.
+- **Lock** (⇧⌘L) writes `locked: true` beside the element's position in the layout: it's about
+  editing the picture, not about the architecture. A locked element can still be selected,
+  restyled and renamed, but dragging, nudging, aligning, resizing and deleting leave it alone,
+  and its selection shows a padlock. Unlocking removes the key again.
+- **Paste in place** (⇧⌘V) puts a copy exactly where the original was, as long as the
+  clipboard still holds what was copied in this tab.
+- **Copy style / paste style** (⌥⌘C, ⌥⌘V) copy how an element looks — colours, line and
+  arrowheads, motion, typography — never what it is or says. Keys the source leaves at their
+  default are removed from the targets, so they end up looking the same; between kinds only
+  shared keys travel.
+- **Copy as PNG / SVG** (⇧⌘C) puts the diagram, as it shows now, on the clipboard, using the
+  same renderer as Export.
+- **Resize with keys** (⌘ + arrows, Shift for 4 units) for containers, zones and notes, which
+  never shrink a container below what it holds; **Fit to contents** for containers; **Show in
+  YAML** opens the code panel with the element's line selected; **Select** connections,
+  connected elements, children, parent, siblings, source and target; Tab steps through
+  elements; F2 renames; ⇧⌘G ungroups.
+
+### D-66 · The inspector is organised by concern, in tabs
+
+The inspector was one long column per kind of element, its sections couldn't fold, and several
+selected elements showed made-up values ("healthy", "idle") instead of theirs. Following
+04-format-panel §16 it now has a header saying what's selected (kind, name and type, or a count
+with chips that narrow a mixed selection to one kind) and tabs that are always in the same
+order: **Element** (what it is and says: label, state, motion, flow, card, nesting, details),
+**Style** (how it looks: colour, line and arrowheads, typography, tone, copy and paste style, and
+an All properties grid of every key the element can take, editable as YAML) and **Arrange**
+(where it sits: X and Y in grid units, width and height, which container holds it, order, align
+and distribute, grouping and lock). With nothing selected the tabs are **Diagram** (problems,
+name, files) and **Canvas** (theme, background, grid). Each mode remembers its last tab, and each
+kind of element remembers which sections are open, in this browser only — never in the file.
+
+Several selected elements get the same tabs. Each control shows the value they share, or nothing
+pressed when they differ, and writes to every element it applies to; colour and line settings
+work across kinds. Number fields step with ↑ and ↓ (Shift for 10), saving each step and folding
+the steps into one undo; a typed value is its own step. The panel can be widened from its left
+edge (280–420 px), remembered per browser.
+
+### D-67 · Shapes are components drawn as outlines
+
+draw.io's biggest gap compared with Mogram was the other way round: Mogram had only icon tiles.
+Following 03-shapes-styles-library §5, there are now eleven shapes (rectangle, rounded, ellipse,
+circle, diamond, cylinder, queue, cloud, hexagon, document, person) written under their own
+`shapes:` section. In the model a shape is a component with a `shape` and a look, not a new kind:
+it connects, nests in containers, carries state and motion (its state ring follows the
+outline), takes a card or a nested diagram, and appears in scenes, tours, Find and the palette
+with nothing written twice. The YAML still reads as what it is (`orders_db: cylinder`), and an
+icon is never confused with an outline.
+
+Every shape's geometry comes from one registry in `@mogram/core/presets/shapes.ts`: the outline,
+detail strokes (a cylinder's lid) that cast no shadow, a sampled outline that connection ends stop
+at (so a line meets a diamond's edge, not its bounding box), and the box its label wraps inside.
+The look is a short typed vocabulary — `tone`, `fill`, `stroke`, `stroke_width`, `dash`,
+`corner`, `shadow`, `opacity` and the text keys — rather than draw.io's free-form style string,
+and every value has a theme-relative default, so an unstyled shape looks right on light and dark
+canvases. A `blue` tone joined the palette for them. Shapes resize like containers, sit at the
+top of the library (click to add one in the middle of the view with its label open for typing,
+or drag it, onto a connection to put it in between, or with Alt onto the bare canvas), and their
+Style tab edits the look.
+
+### D-68 · Drawing fast: guides, connected copies, quick add
+
+From 06-canvas-interactions §20, the canvas now does what makes draw.io quick to draw with:
+
+- **Smart guides.** While moving, the moving bounds line up with their neighbours' edges and
+  centres, or sit at an equal gap between two neighbours, and thin lines say so. Positions stay
+  whole grid cells, so a guide only ever pulls a move by one cell; Alt moves without them. A
+  small label under the element says where it will land, in grid units.
+- **Connected copies.** Hovering a component or shape shows four arrows. A click adds a copy
+  that way, 80 px off, connected from it, selected with its label open — or connects to what's
+  already there; a drag draws a connection as before; Alt-click opens the quick-add picker for
+  that spot. ⌥⇧ + arrow does the same from the keyboard.
+- **Quick add.** Double-clicking empty canvas (or Alt-clicking an arrow) opens the command
+  palette in "Add here" mode: a copy of the source, the shapes, and every icon by search; what's
+  chosen goes exactly there, connected when it came from an arrow.
+- **Copy by dragging.** Holding Ctrl/Cmd at the drop leaves the original and drops a copy.
+- **Smaller things:** the selection box takes only what it encloses (Alt: what it touches); the
+  container holding the selected element is outlined quietly; zoom buttons and keys step along a
+  ladder that always includes 100%; Escape keeps a typed label (Shift+Escape puts it back); a
+  minimap shows the whole diagram with the view outlined, and a press or drag on it moves the
+  view.
+
+New elements are written the way their neighbours are: `name: generic/service` or
+`name: cylinder` when that's all they say, one-line maps for short entries and the first entry
+of a section.
+
+### D-69 · The document travels: links, data, editable images, PDF, tidy up
+
+From 07-document-workflow §18:
+
+- **Undo goes back to where the change was made.** Each undo step remembers its nested level;
+  undoing a change made inside a nested diagram while looking at the top one goes back inside
+  first and frames it, as draw.io's page switches are part of its undo history.
+- **`link:` and `data:` on any element.** A link is a web page, a scene, a tour or `#another`
+  element; viewers follow it with a click, after the element's card or nested diagram. `data:`
+  holds named values (owner, cost centre, SLA) that the inspector edits as rows, the viewer's
+  card lists, and hovering shows. Links are restricted to web and mail addresses; the rest are
+  checked like draw.io's "page not found" and follow renames.
+- **Exports you can open again.** PNG and SVG exports carry the diagram's files by default (a
+  PNG text chunk, an SVG `<metadata>` element), so dropping the image on Open files gives the
+  diagram back; a switch in the export dialog leaves them out. PDF export writes a one-page PDF
+  the size of the diagram, holding a print-resolution image of it — written directly, with no
+  PDF library — and exported SVGs make web links real links.
+- **Tidy up** (⌘⌥T) re-runs Mogram's automatic placement on a container's contents or the whole
+  diagram — sources left, destinations right, by their traffic — clears the bends between them
+  and pins the result, as one undo step.
+- **One preferences store.** Folded inspector sections, last tabs, the inspector's width, open
+  library sections and recent icons and commands live in one versioned, typed object in the
+  browser, shared live between tabs and migrated from the separate keys used before. None of it
+  is ever written to a diagram.
+
+### D-70 · Finishing M5 and M6: size guides, Find everywhere, placeholders, named styles
+
+The leftovers of the draw.io study (08-gap-analysis):
+
+- **Size guides.** Resizing snaps the width or height to a sibling's within one grid cell, and
+  marks every element with that size (a bar above for width, beside for height), as draw.io's
+  resize guides do. Only the sides being dragged snap; Alt turns it off. A selected element's
+  handles are drawn above its hover ring, so they can always be grabbed.
+- **Touch and pen.** A press must travel 12 px before it becomes a drag (4 px with a mouse).
+- **Find looks everywhere.** Find searches the diagram and every nested diagram below it (a
+  folder opened by several components once, by its first way in); this level's matches come
+  first, and stepping to one in another level goes straight there and says which.
+- **Placeholders.** `%key%` in a label, text, note or connection label shows a value from the
+  element's `data:`, its containers', the diagram's new top-level `data:`, or the built-ins
+  (`name`, `type`, `diagram`, `date`), in that order — draw.io's lookup, without its opt-in
+  flag: an unknown token stays as written, so nothing written today changes. The diagram's data
+  has its own section under Diagram settings.
+- **Named styles.** `styles:` names looks that elements take with `style:`; their own keys win.
+  The keys a style may hold are exactly the look keys copy/paste style uses, now kept in one
+  list in the format code. Styles are read before any element so they work across files, and a
+  mistake inside one is reported once, at the style, however many elements use it. The editor
+  makes a style from an element, applies one to a selection, and pushes an element's own
+  changes into its style or drops them. Notes and text keep `style:` for their text style
+  rather than overloading it.
+
+### D-71 · Shape handles: one adjustable measure per shape, as a plain key
+
+draw.io's yellow handles (03-shapes-styles-library P1-2) adjust one style value per shape. Mogram
+does the same for the shapes that have a measure worth adjusting — `corner` (rectangle,
+rounded), `lid` (cylinder, queue), `slant` (hexagon) and `wave` (document) — each a plain px key
+beside `corner`, never a generic "size" whose meaning changes with the shape. The shape registry
+says, per shape, which key it has, its own value for a box, the most it can take, where the
+handle sits and what a handle position means, so the canvas handle, the inspector field, the
+outline and the connection ends all read one definition. A drag edits live as one undo step;
+Escape puts the value back, and dragging back to the shape's own value removes the key (FI-3).
+The keys are look keys: copy/paste style and named styles carry them.
+
+### D-72 · The quick bar is declared; big libraries draw as they scroll
+
+- **One table for the bar.** What the quick bar offers for each kind of selection — elements,
+  connections, text and notes, zones — is a list of control ids in one place, with dividers. A
+  control declares what it edits in the selection (a mixed selection's state control edits its
+  components and containers, its flow control its connections) and where it continues in the
+  inspector. The bar draws each with the same pieces and actions as the inspector, so nothing
+  exists only in the bar and undo labels match. The research's full version — one schema
+  rendering the inspector too — would rewrite every inspector for little gain to anyone using
+  it; the table gives the parts that show: a consistent bar and the deep link.
+- **More in inspector.** The bar's "…" menu ends with it: the inspector opens on the tab and
+  section of the bar's first control, unfolded and scrolled into view (draw.io has no such link).
+- **Library tiles a page at a time.** A folded section draws nothing; an open one draws 48
+  tiles, then the next 48 as its end comes within 240 px of view, like draw.io's virtual
+  thumbnails. Opening AWS (800 icons) or typing a search stays instant.
+
+### D-73 · Thirty canvas themes with real variety, and swatches drawn cleanly
+
+- **More themes, none removed.** Six of the ten themes were near-black, so the picker read as
+  shades of black. Twenty were added — Slate; Ocean, Teal, Plum, Wine, Olive; the Aurora,
+  Twilight, Sunset, Lagoon and Nebula gradients; Blueprint and Chalkboard; Sky, Mint, Blush,
+  Lilac, Butter, Dawn and Seafoam — each a whole theme: background, tinted tiles and borders,
+  lines and labels. A test holds every theme to readable labels (4.5:1) and muted text (3:1) on
+  every colour its background passes through, and to a grid that shows on all of them.
+- **Shown like the tones.** The Canvas tab shows ten themes, one or two from each family, as
+  tiles previewing a node, a line and a label in the theme's own colours; the theme in use is
+  always among them. "See all" opens every theme by family with names, in place, like the colour
+  picker's; picking there applies at once and stays, so several can be tried in a row.
+- **Swatches.** A swatch's outline is now an inset ring over its colour instead of a border its
+  gradient repeated under (the far end of a gradient showing in the rim read as a square inside
+  the circle). The colour picker pads inside its scrolling area, so the selected swatch's ring is
+  never cut off under the search field, and its sections share one spacing.
+
+### D-74 · The grid shows the snap grid exactly: dots or lines, on by default
+
+Everything snaps to 8px cells whether or not the grid is shown, and every position in a file is
+counted in those cells, so the grid is a measuring tool, not decoration.
+
+- **Every mark is a snap point, in two levels.** Single cells show from 75% zoom up (so a
+  diagram fitted to the window still shows every snap point), fading out by 60%. Below that only
+  the 10-cell marks remain, drawn like single cells, every 100 cells once 10 would come closer
+  than 16px; and the whole grid eases lighter from 50% down to 10%. A first version stepped
+  through 2 and 5 cells to keep marks 6–15px apart at every zoom, which made a zoomed-out view
+  as dense as a zoomed-in one around a diagram a fraction of the size. Before either, dots were
+  drawn every 16px at 100%, so half the snap points had none.
+- **A stronger mark every 10 cells,** not draw.io's 4, so they fall on the round numbers you
+  read and type: the Arrange tab's X and Y, the position hint while dragging, and `at:` in the
+  YAML (`at: [30, 6]` sits on the third major line). The grid is anchored at 0,0, and since
+  elements inside containers are placed in whole cells from their container's corner, every
+  element sits on it.
+- **Dots or lines.** Dots are the quiet default; lines (faint minor lines, stronger major ones,
+  like draw.io's) suit precise layout and the Blueprint and Chalkboard themes. Both use the
+  Canvas tab's colour and opacity; minor lines are drawn fainter than dots, because lines cover
+  far more of the canvas. Zoomed out, the 10-cell lines left on their own keep 70% of their
+  strength: any fainter and they all but vanish on a dark canvas on a standard-density screen.
+- **On by default, and personal.** With snapping always on, showing the grid is the honest
+  default (the PRD had it off; changed at the user's request). Whether it's shown and its style
+  are remembered in each person's browser and never written to the file; its colour stays in
+  the file because it belongs with the diagram's background. The cell size is fixed: changing
+  it would change what every number in every file means.
+- **The colour picker opens beside the inspector,** level with the button that opened it,
+  instead of beside the button and over the panel's own controls. A custom background is named
+  ("Brown · custom", or the gradient's name) so it's clear it replaces the theme.
+
+### D-75 · The library, reorganised; containers named for the diagram's cloud
+
+- **One column.** The title bar is as wide as the library below it, and the library's list is
+  padded inside its scrolling area so its first row never sits under the search field.
+- **Search, Recent, Basics, Icons.** Eight filter pills in two rows mixed a scope (All), clouds,
+  a platform (Kubernetes), icon sets every diagram needs (Generic, Tools) and uploads (Mine) —
+  and only filtered part of the panel. Now: search across everything (results grouped by
+  library, the one being browsed and those in use first, after any matching shapes and
+  containers); Recent (what was added lately, then what the diagram already uses); Basics, one
+  section switched between Shapes, Containers, Notes and Generic icons; and Icons, one library at
+  a time chosen from a menu (uploads are one of them, with the upload button), each category a
+  row with a glimpse of its icons that opens in place with a way back — the colour picker's and
+  theme gallery's "See all" pattern instead of a 25-row accordion.
+- **Containers by cloud.** The clouds name the same things differently (VNet, VPC and VPC
+  network are one thing; subscription, account and project nearly so) and some things exist on
+  one cloud only (resource groups on Azure; public and private subnets, security groups on
+  AWS). Their nesting differs too: AWS subnets are zonal, Google Cloud networks are global.
+  Containers are now cloud-neutral kinds — `network` replaces `vnet` and `vpc` (both still read)
+  and `cloud`, `account`, `public-subnet`, `private-subnet`, `security-group`, `scaling-group`
+  and `on-premises` are new — named and ordered for the diagram's cloud in the library and the
+  inspector, and given the cloud's official group icon when added. Colours stay Mogram's, one
+  per kind, so containers look alike across clouds and themes.
+
+### D-76 · Version history: sessions, versions people can read, and nothing lost
+
+- **One version per working session.** Saving every keystroke as a version would bury the ones
+  that matter, so a save joins the version being edited until five minutes pass without saving
+  or thirty minutes in all (`lib/history/rules.ts`, shared by the server and drafts). Named
+  versions, assistant turns, restores and the first version are never joined.
+- **Versions say what changed, by name.** Every element, scene and tour has a name, so Mogram
+  can say "Added Payments API · removed 1 · moved 2" instead of "line 42 changed"
+  (`@mogram/core/diff`), worked out once when the version is saved.
+- **Looking is read-only, restoring is a new version.** Choosing a version shows it on the
+  canvas, read-only, with what changed in it (or since it) drawn over it: added in green,
+  changed in amber, removed as red dashed ghosts. Restore puts it on top as a new version, so
+  the version it replaced is still there; Bring back takes only selected elements or scenes
+  (`restoreElements`), with the children and connections that went with them.
+- **Drafts too.** A draft keeps the same history in this browser (IndexedDB) and takes it along
+  when it's saved to an account.
+- **Kept for good when named.** Everything from the last day, then one an hour for a month and
+  one a day after that; named versions always.
+
+### D-77 · Architecture review: what parses but an architect wouldn't draw
+
+`@mogram/core/lint` reviews a diagram for what's valid YAML but probably not meant: a subnet
+outside any network, containers nested the wrong way round for the diagram's cloud, an AWS
+subnet outside an Availability Zone when the diagram has zones, icons from two clouds,
+components nothing connects to, empty containers. The rules are deliberately cautious (only for
+a known cloud where orders differ; inventories without connections aren't flagged; resource
+groups and boxes nest any way), every finding says why and what usually fixes it, and the
+templates are tested to pass. Findings show as Suggestions in the diagram's inspector and go
+back to the assistant after each of its changes.
+
+### D-78 · The assistant doesn't depend on one model vendor
+
+Mogram talks to models through one small interface (`server/ai/providers`): Claude through
+Anthropic's Messages API, any OpenAI-compatible API (DeepSeek, OpenAI and the many that copy
+it), and a scripted provider that runs the whole loop from scripts for tests and demos. The
+server chooses from its environment; nothing in the browser knows which. Each turn picks a
+fast model for small edits and questions and a strong one for building, planning and reviewing
+(Auto), or the person chooses. Model quality is measured, not assumed: `pnpm eval:ai` runs
+realistic requests against any provider and checks the results (parses, passes review, right
+icons, nested and connected properly).
+
+The briefing — how to work with the person, the whole file format, an example diagram — is the
+same for every turn, so providers cache it (marked for Claude's prompt caching; automatic for
+DeepSeek and OpenAI), and each turn only adds the diagram and the request.
+
+### D-79 · Tools are core edits; the server runs the model, the browser replays the changes
+
+The model changes diagrams only through tools that map onto the same core edits the canvas
+uses (`lib/ai/tools.ts`): add a YAML snippet (`insertYaml`, names kept as written), update,
+remove, rename, move into a container, arrange, scenes, settings, a whole file, plus
+`ask_user` and `propose_plan`, which end the turn. Every change is checked before it counts: a
+change that would add a parse error, or an icon Mogram doesn't have (with the closest real ones
+named), is refused with the reason, and the review's new findings go back with each success.
+Removing more than eight elements needs the person's agreement first.
+
+The model runs on the server (keys never reach the browser) and each accepted change streams to
+the browser, which applies the same deterministic `applyOp`, so the canvas changes as the model
+works; at the end the server's files are the truth if anything drifted.
+
+### D-80 · A turn is one undo step and one version, and the person's edits wait
+
+While the assistant works, the person can look, select and pan but not edit (their edits,
+undo and redo say why and wait), so nothing is lost when the turn's changes land. The person's
+own changes are saved as their own version first; the whole turn is then one undo step (Undo on
+its card, or ⌘Z) and one version named by the request, with ✨ in the history. What it touches
+glows violet on the canvas, and Follow selects it as it goes.
+
+### D-81 · What the assistant sees, keeps and costs
+
+A turn sends the diagram's files, what's selected and the request to the model provider through
+Mogram's server; earlier turns go as text only. The server records tokens and how each turn
+ended, never the prompt or the diagram; the conversation is kept in the person's browser.
+Signing in is required unless the server allows otherwise, with a per-minute burst limit and a
+daily allowance per person.
+
+### D-82 · Capacity is a model, not an animation
+
+Scaling is shown from what the diagram says, never scripted per picture: how elements scale
+(`scale`: copies between a least and a most, or sizes), what one copy handles (`capacity`), and
+what they do with traffic (`routing`, `hit`, `queue`), plus traffic on connections. A pure engine
+(`@mogram/core/capacity`) works out, for each moment, the traffic every part carries and the
+copies or size each needs to stay near its target, as part of state resolution: past its limits
+something is overloaded because of its load. Anything that changes the moment — a scene, the
+traffic slider, an edit — changes the plan, and a deterministic timeline turns plans into motion
+(copies start one after another and are removed after a cool-down; a machine grows smoothly into a
+new size — at first a resize restarted it and paused its traffic, removed on 2026-10-05 at the
+product owner's request), so the editor, viewers, thumbnails and exports all show the same thing.
+
+- **Traffic is relative.** 1× is normal; a connection's `traffic` multiplies what it would
+  otherwise carry, so a scene's `users_to_lb: 5x` is a spike that flows on through everything
+  after it, and one written for one diagram means the same in another.
+- **Room is reserved.** A scale set keeps room for its most copies and a machine for its largest
+  size, so the layout never jumps while it scales; the frame grows and shrinks inside a faint
+  outline of that room, which shows how far it can go.
+- **The drawing explains the kind of scaling.** Out: more copies of the same icon in a frame,
+  traffic fanning out to each, a load bar per copy. Up: the tile opens into a machine whose
+  cores, memory and disks grow and shrink smoothly, up to a ceiling.
+
+### D-83 · Concepts are diagrams with roles, and applying one is generic
+
+A concept (horizontal scaling, caching, failover…) is an ordinary diagram with a `concept:`
+section: a summary and the roles its elements play. Nothing knows any particular concept:
+applying one copies what its role elements do with traffic onto the elements picked for them
+(never over what they already have), joins them the way the concept joins its roles, and brings
+its scenes along, aimed at the picked elements — more traffic where people enter the concept
+becomes more traffic where it enters the person's diagram on its way there. So the nine built-in
+concepts and any a person writes (a draft or account diagram with a `concept:` section, made
+from the Diagram inspector or from a selection) work the same way, in the library, the editor and
+the assistant (`apply_concept`, `set_scaling`).
+
+### D-84 · Traffic belongs on the arrow, and can rise and fall on its own
+
+Using capacity (D-82) showed that scaling was hard to set up and "how much traffic" lived in five
+places: a connection's flow, its dot speed and density, its traffic level, scene lines and a
+floating traffic slider. Now an arrow's Traffic says it all — whether it flows, how much
+(steady, or **waves** and **bursts** that rise and fall on their own) and its share of a split —
+and the dots follow it; speed and density are only how the dots look (Style). A pattern is a
+step function of the clock, so the plan changes at known moments and the capacity timeline
+follows them lazily from the time asked about: the editor, the viewer, thumbnails and exports
+agree, a tab left in the background catches up, and an animated export lasts whole cycles and
+loops. The traffic slider is gone. Scenes stay for moments (an outage, a rollback, Black Friday
+held at 5×), where a scene's level holds an arrow steady; showing scaling needs none. Built-in
+concepts use patterns for load and scenes for moments.
+
+### D-85 · Concepts are filed by topic and platform, in a library of their own
+
+Concepts sat in the building-blocks library as a flat list: fine for nine, not for the hundreds
+planned (networking, Azure, AWS, Git…). Agreed with the product owner on 2026-10-05:
+
+- **Filed, not just listed.** Every concept has a **topic** (scaling, reliability, networking,
+  security, data, messaging, containers, delivery, git, architecture) and a **platform** (any,
+  Azure, AWS, Google Cloud, Kubernetes), plus free **tags** for search. The lists are fixed in
+  `@mogram/core/presets`, so a typo is a warning naming the closest one rather than a new shelf.
+- **Two kinds.** A concept with roles is a **pattern**, applied to your own elements; one
+  without is an **explainer**, inserted or opened as it is. Nothing else differs, so an
+  explainer becomes a pattern by naming parts.
+- **A package of their own.** `@mogram/concepts` holds one `.mogram.yaml` per concept under
+  `content/<topic>/`. A generated catalog (id, title, summary, topic, platform, tags, kind,
+  parts) lists, filters and searches them without loading any; the diagrams load a topic at a
+  time, when one is opened or a preview scrolls into view. A test refuses a concept that doesn't
+  read cleanly, tell its story or sit under its topic, and a catalog that's out of date.
+- **Their own tab and a gallery.** The left panel is Library (building blocks only), Concepts
+  and the assistant. The Concepts tab searches and lists yours and the recently used ones above
+  topics with counts; Browse all opens a gallery with topics down the side and a preview of
+  each. Filters appear only when they'd change something: a platform filter once some concepts
+  are a platform's own (listing only those platforms, opening on the diagram's cloud, its own
+  first; general concepts always show), and Apply / Explain once there are both kinds.
+- **The assistant searches, it isn't told.** `find_concepts` searches the catalog, and
+  `apply_concept` takes an id; the server sends the concept's file with the change, so the
+  browser replays it without the whole library in the editor's bundle.
+
+Adding concepts, and scenes that show, hide or move elements (for Git), come later.

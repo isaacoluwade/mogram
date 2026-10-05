@@ -7,14 +7,21 @@ import { intersects, type Box, type Point } from "../layout/geometry";
  */
 export interface RoutedPath {
   readonly kind: "polyline" | "curve";
-  /** Vertices (polyline) or the four Bézier control points (curve). */
+  /** Vertices (polyline) or Bézier control points, 3n + 1 for n cubic pieces (curve). */
   readonly points: readonly Point[];
+  /**
+   * The points the drawn line passes through: a polyline's vertices, or a curve's ends and
+   * waypoints. Editing handles sit on these (ED-29).
+   */
+  readonly through: readonly Point[];
   readonly d: string;
   readonly samples: readonly Point[];
   readonly length: number;
+  /** Corner radius a polyline was drawn with (0 = sharp corners). */
+  readonly radius: number;
 }
 
-const CORNER_RADIUS = 10;
+export const CORNER_RADIUS = 10;
 
 export function polylineLength(points: readonly Point[]): number {
   let total = 0;
@@ -136,28 +143,96 @@ export function cubicPoint(p0: Point, p1: Point, p2: Point, p3: Point, t: number
   };
 }
 
-export function polylinePath(points: readonly Point[]): RoutedPath {
+export function polylinePath(points: readonly Point[], radius = CORNER_RADIUS): RoutedPath {
   const vertices = simplify(points);
-  const samples = samplePolyline(vertices);
+  const samples = samplePolyline(vertices, radius);
   return {
     kind: "polyline",
     points: vertices,
-    d: roundedPolyline(vertices),
+    through: vertices,
+    d: roundedPolyline(vertices, radius),
     samples,
     length: polylineLength(samples),
+    radius,
+  };
+}
+
+/** A chain of cubic Béziers: `controls` holds 3n + 1 points for n pieces. */
+export function bezierPath(controls: readonly Point[]): RoutedPath {
+  const first = controls[0] ?? { x: 0, y: 0 };
+  const samples: Point[] = [first];
+  const through: Point[] = [first];
+  let d = `M${round(first.x)} ${round(first.y)}`;
+  const pieces = Math.floor((controls.length - 1) / 3);
+  const steps = Math.max(12, Math.round(48 / Math.max(1, pieces)));
+  for (let piece = 0; piece < pieces; piece++) {
+    const [p0, p1, p2, p3] = controls.slice(piece * 3, piece * 3 + 4);
+    if (p0 === undefined || p1 === undefined || p2 === undefined || p3 === undefined) break;
+    d += ` C${round(p1.x)} ${round(p1.y)} ${round(p2.x)} ${round(p2.y)} ${round(p3.x)} ${round(p3.y)}`;
+    for (let i = 1; i <= steps; i++) samples.push(cubicPoint(p0, p1, p2, p3, i / steps));
+    through.push(p3);
+  }
+  return {
+    kind: "curve",
+    points: controls,
+    through,
+    d,
+    samples,
+    length: polylineLength(samples),
+    radius: 0,
   };
 }
 
 export function curvePath(p0: Point, p1: Point, p2: Point, p3: Point): RoutedPath {
-  const samples: Point[] = [];
-  for (let i = 0; i <= 48; i++) samples.push(cubicPoint(p0, p1, p2, p3, i / 48));
-  return {
-    kind: "curve",
-    points: [p0, p1, p2, p3],
-    d: `M${round(p0.x)} ${round(p0.y)} C${round(p1.x)} ${round(p1.y)} ${round(p2.x)} ${round(p2.y)} ${round(p3.x)} ${round(p3.y)}`,
-    samples,
-    length: polylineLength(samples),
-  };
+  return bezierPath([p0, p1, p2, p3]);
+}
+
+/**
+ * A smooth curve passing through every point (Catmull-Rom as Béziers), leaving the first point
+ * along `startTangent` and arriving at the last along `endTangent` when given (unit vectors).
+ * The line goes through each waypoint, so its handle sits on the curve the user sees.
+ */
+export function curveThrough(
+  points: readonly Point[],
+  startTangent?: Point,
+  endTangent?: Point,
+): RoutedPath {
+  const n = points.length;
+  if (n < 2) return bezierPath(points.length === 1 ? [points[0] as Point] : []);
+  const tangents: Point[] = points.map((point, i) => {
+    const prev = points[i - 1];
+    const next = points[i + 1];
+    if (prev !== undefined && next !== undefined) {
+      return { x: (next.x - prev.x) / 2, y: (next.y - prev.y) / 2 };
+    }
+    const chord = (a: Point, b: Point) => Math.hypot(b.x - a.x, b.y - a.y);
+    if (prev === undefined && next !== undefined) {
+      const reach = Math.max(40, chord(point, next));
+      return startTangent !== undefined
+        ? { x: startTangent.x * reach, y: startTangent.y * reach }
+        : { x: next.x - point.x, y: next.y - point.y };
+    }
+    if (prev !== undefined) {
+      const reach = Math.max(40, chord(prev, point));
+      return endTangent !== undefined
+        ? { x: -endTangent.x * reach, y: -endTangent.y * reach }
+        : { x: point.x - prev.x, y: point.y - prev.y };
+    }
+    return { x: 0, y: 0 };
+  });
+  const controls: Point[] = [points[0] as Point];
+  for (let i = 0; i < n - 1; i++) {
+    const a = points[i] as Point;
+    const b = points[i + 1] as Point;
+    const ta = tangents[i] as Point;
+    const tb = tangents[i + 1] as Point;
+    controls.push(
+      { x: a.x + ta.x / 3, y: a.y + ta.y / 3 },
+      { x: b.x - tb.x / 3, y: b.y - tb.y / 3 },
+      b,
+    );
+  }
+  return bezierPath(controls);
 }
 
 export interface PathPosition {
@@ -197,13 +272,68 @@ export function reversePath(path: RoutedPath): RoutedPath {
   const samples = [...path.samples].reverse();
   const points = [...path.points].reverse();
   return path.kind === "curve"
-    ? curvePath(
-        points[0] ?? { x: 0, y: 0 },
-        points[1] ?? { x: 0, y: 0 },
-        points[2] ?? { x: 0, y: 0 },
-        points[3] ?? { x: 0, y: 0 },
-      )
-    : { kind: "polyline", points, d: roundedPolyline(points), samples, length: path.length };
+    ? bezierPath(points)
+    : {
+        kind: "polyline",
+        points,
+        through: points,
+        d: roundedPolyline(points, path.radius),
+        samples,
+        length: path.length,
+        radius: path.radius,
+      };
+}
+
+/** Where a fraction `at` (0…1) along the path is, moved `offset` px to the left of travel. */
+export function pointAlong(path: RoutedPath, at: number, offset = 0): PathPosition {
+  const position = pointAtLength(path.samples, path.length * Math.min(1, Math.max(0, at)));
+  if (offset === 0) return position;
+  const { point, angle } = position;
+  // Left of travel, in screen coordinates (y grows downwards).
+  return {
+    point: { x: point.x + Math.sin(angle) * offset, y: point.y - Math.cos(angle) * offset },
+    angle,
+  };
+}
+
+/**
+ * The inverse of `pointAlong`: the fraction along the path nearest `target`, and how far it is
+ * to the left of travel (negative = right). Used when a label is dragged.
+ */
+export function nearestAlong(
+  path: RoutedPath,
+  target: Point,
+): { readonly at: number; readonly offset: number; readonly distance: number } {
+  const samples = path.samples;
+  let best = { at: 0.5, offset: 0, distance: Infinity };
+  let travelled = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const a = samples[i - 1];
+    const b = samples[i];
+    if (a === undefined || b === undefined) continue;
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const length = Math.hypot(dx, dy);
+    if (length === 0) continue;
+    const t = Math.max(
+      0,
+      Math.min(1, ((target.x - a.x) * dx + (target.y - a.y) * dy) / length ** 2),
+    );
+    const px = a.x + dx * t;
+    const py = a.y + dy * t;
+    const distance = Math.hypot(target.x - px, target.y - py);
+    if (distance < best.distance) {
+      // Cross product sign: positive when the target is left of travel (y down).
+      const side = dx * (target.y - a.y) - dy * (target.x - a.x) < 0 ? 1 : -1;
+      best = {
+        at: path.length === 0 ? 0.5 : (travelled + length * t) / path.length,
+        offset: side * distance,
+        distance,
+      };
+    }
+    travelled += length;
+  }
+  return best;
 }
 
 /** Fractions of the path tried for a label, middle first, then working outwards. */
@@ -225,4 +355,102 @@ export function labelPosition(
     if (!obstacles.some((box) => intersects(pill, box))) return point;
   }
   return midpointOf(path).point;
+}
+
+/** Splits a cubic at `t`: the two halves' control points. */
+function splitCubic(
+  p0: Point,
+  p1: Point,
+  p2: Point,
+  p3: Point,
+  t: number,
+): readonly [readonly Point[], readonly Point[]] {
+  const lerp = (a: Point, b: Point): Point => ({
+    x: a.x + (b.x - a.x) * t,
+    y: a.y + (b.y - a.y) * t,
+  });
+  const a = lerp(p0, p1);
+  const b = lerp(p1, p2);
+  const c = lerp(p2, p3);
+  const d = lerp(a, b);
+  const e = lerp(b, c);
+  const f = lerp(d, e);
+  return [
+    [p0, a, d, f],
+    [f, e, c, p3],
+  ];
+}
+
+/** The cubic parameter `distance` px from the start (or, `fromEnd`, from the end) of a piece. */
+function cubicParamAt(p: readonly Point[], distance: number, fromEnd: boolean): number {
+  const [p0, p1, p2, p3] = p as [Point, Point, Point, Point];
+  let travelled = 0;
+  let previous = cubicPoint(p0, p1, p2, p3, fromEnd ? 1 : 0);
+  const steps = 64;
+  for (let i = 1; i <= steps; i++) {
+    const t = fromEnd ? 1 - i / steps : i / steps;
+    const point = cubicPoint(p0, p1, p2, p3, t);
+    travelled += Math.hypot(point.x - previous.x, point.y - previous.y);
+    if (travelled >= distance) return t;
+    previous = point;
+  }
+  return fromEnd ? 0 : 1;
+}
+
+/** A polyline's vertices with its first and last segments shortened by `start` and `end`. */
+export function trimPolyline(points: readonly Point[], start: number, end: number): Point[] {
+  const trimmed = [...points];
+  const move = (index: number, toward: number, by: number) => {
+    const a = trimmed[index];
+    const b = trimmed[toward];
+    if (a === undefined || b === undefined || by <= 0) return;
+    const length = Math.hypot(b.x - a.x, b.y - a.y);
+    const step = Math.min(by, Math.max(0, length - 1));
+    if (length === 0) return;
+    trimmed[index] = {
+      x: a.x + ((b.x - a.x) / length) * step,
+      y: a.y + ((b.y - a.y) / length) * step,
+    };
+  };
+  move(0, 1, start);
+  move(trimmed.length - 1, trimmed.length - 2, end);
+  return trimmed;
+}
+
+/**
+ * The path shortened by `start` px at its start and `end` px at its end, so a line stops at the
+ * base of a filled arrowhead instead of poking through it (draw.io pulls the line back the
+ * same way). Only the drawn shape changes; `samples` keep the full length.
+ */
+export function trimPath(path: RoutedPath, start: number, end: number): string {
+  if (start <= 0 && end <= 0) return path.d;
+  if (path.kind === "polyline")
+    return roundedPolyline(trimPolyline(path.points, start, end), path.radius);
+  const controls = [...path.points];
+  const pieces = Math.floor((controls.length - 1) / 3);
+  if (pieces === 0) return path.d;
+  if (start > 0) {
+    const first = controls.slice(0, 4);
+    const [, rest] = splitCubic(
+      first[0] as Point,
+      first[1] as Point,
+      first[2] as Point,
+      first[3] as Point,
+      cubicParamAt(first, start, false),
+    );
+    controls.splice(0, 4, ...rest);
+  }
+  if (end > 0) {
+    const at = controls.length - 4;
+    const last = controls.slice(at);
+    const [kept] = splitCubic(
+      last[0] as Point,
+      last[1] as Point,
+      last[2] as Point,
+      last[3] as Point,
+      cubicParamAt(last, end, true),
+    );
+    controls.splice(at, 4, ...kept);
+  }
+  return bezierPath(controls).d;
 }

@@ -21,35 +21,56 @@ import {
   textInk,
   type RichDecoration,
 } from "../text-look-controls";
-import { ArrangeRow } from "./arrange";
+import { AllProperties } from "./all-properties";
 import { CommitInput, FieldRow, InspectorSection } from "./fields";
-import { useEdit } from "./shared";
+import { StyleClipboard, useEdit } from "./shared";
+import type { InspectorTab } from "./tabs";
 
-/** Text, sticky notes, labels and highlight zones: words, look and order. */
-export function DecorationInspector({ decoration }: { decoration: Decoration }) {
+/**
+ * Text, sticky notes, labels and highlight zones. Element: the words. Style: typography, text
+ * style or tone. Arrange is shared (arrange.tsx).
+ */
+export function DecorationInspector({
+  decoration,
+  tab,
+}: {
+  decoration: Decoration;
+  tab: InspectorTab;
+}) {
   const { set } = useEdit();
+  const diagram = useEditor((s) => s.parsed().diagram);
   const rich = isRich(decoration);
+  if (tab === "arrange") return null;
+  if (tab === "element") {
+    return (
+      <>
+        <InspectorSection title="Text">
+          <CommitInput
+            label="Text"
+            value={decoration.text}
+            multiline={rich}
+            onCommit={(label) => set(decoration.name, { label }, "Edit text")}
+          />
+          {rich ? (
+            <p className="mt-1.5 text-micro text-fg-muted">
+              **bold**, *italic*, and lines starting “- ” or “1. ” make lists.
+            </p>
+          ) : null}
+        </InspectorSection>
+        <InspectorSection id="about" title="About" defaultOpen={false}>
+          <p className="text-caption text-fg-muted">
+            Decorations carry no architectural meaning, so they live with the layout, not the
+            architecture.
+          </p>
+        </InspectorSection>
+      </>
+    );
+  }
   return (
     <>
-      <InspectorSection title="Text">
-        <CommitInput
-          label="Text"
-          value={decoration.text}
-          multiline={rich}
-          onCommit={(label) => set(decoration.name, { label }, "Edit text")}
-        />
-        {rich ? (
-          <p className="mt-1.5 text-micro text-fg-muted">
-            **bold**, *italic*, and lines starting “- ” or “1. ” make lists.
-          </p>
-        ) : null}
-        <div className="mt-2">
-          <ArrangeRow />
-        </div>
-      </InspectorSection>
       {rich ? <TypographySection decoration={decoration} /> : null}
       {decoration.variant === "note" ? null : decoration.variant === "text" ? (
-        <InspectorSection title="Style">
+        <InspectorSection id="text-style" title="Text style">
           <SegmentedControl
             label="Text style"
             size="sm"
@@ -64,7 +85,7 @@ export function DecorationInspector({ decoration }: { decoration: Decoration }) 
           />
         </InspectorSection>
       ) : (
-        <InspectorSection title="Tone">
+        <InspectorSection id="tone" title="Tone">
           <div className="flex flex-wrap gap-1.5">
             {(["neutral", "green", "amber", "orange", "rose", "violet"] as const).map((tone) => (
               <button
@@ -83,12 +104,8 @@ export function DecorationInspector({ decoration }: { decoration: Decoration }) 
           </div>
         </InspectorSection>
       )}
-      <InspectorSection title="About">
-        <p className="text-caption text-fg-muted">
-          Decorations carry no architectural meaning, so they live with the layout, not the
-          architecture.
-        </p>
-      </InspectorSection>
+      <StyleClipboard />
+      <AllProperties diagram={diagram} name={decoration.name} source={decoration.source} />
     </>
   );
 }
@@ -98,7 +115,7 @@ function TypographySection({ decoration }: { decoration: RichDecoration }) {
   const settings = useEditor((s) => s.parsed().diagram.settings);
   const themeText = useMemo(() => resolveTheme(settings).text, [settings]);
   return (
-    <InspectorSection title={decoration.variant === "note" ? "Note" : "Typography"}>
+    <InspectorSection id="typography" title={decoration.variant === "note" ? "Note" : "Typography"}>
       <div className="flex flex-col gap-1.5">
         {decoration.variant === "note" ? (
           <FieldRow label="Colour">

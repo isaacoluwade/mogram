@@ -32,7 +32,7 @@ export interface RouteRequest {
 }
 
 const MARGIN = 12;
-const STUB = 14;
+export const STUB = 14;
 const BEND_COST = 36;
 const MAX_NODES = 60_000;
 const DIRS: readonly Side[] = ["top", "right", "bottom", "left"];
@@ -324,14 +324,27 @@ export function elbow(source: Box, target: Box): Point[] {
  * the side facing its nearest waypoint; corners keep the previous direction where possible so
  * the path has as few bends as the waypoints allow.
  */
-export function routeThrough(source: Box, target: Box, via: readonly Point[]): Point[] {
+export function routeThrough(
+  source: Box,
+  target: Box,
+  via: readonly Point[],
+  ports: { readonly sourcePort?: FixedPort; readonly targetPort?: FixedPort } = {},
+): Point[] {
   const firstVia = via[0];
   const lastVia = via[via.length - 1];
   if (firstVia === undefined || lastVia === undefined) return elbow(source, target);
-  const startSide = sideToward(source, firstVia);
-  const endSide = sideToward(target, lastVia);
-  const start = sidePoint(source, startSide);
-  const end = sidePoint(target, endSide);
+  // A fixed port wins; otherwise leave from the side facing the waypoint, level with it when
+  // the side spans it, so a waypoint in line with an element gives a straight line, no jog.
+  const startSide = ports.sourcePort?.side ?? sideToward(source, firstVia);
+  const endSide = ports.targetPort?.side ?? sideToward(target, lastVia);
+  const start =
+    ports.sourcePort !== undefined
+      ? sidePointAt(source, ports.sourcePort.side, ports.sourcePort.offset)
+      : alignedSidePoint(source, startSide, firstVia);
+  const end =
+    ports.targetPort !== undefined
+      ? sidePointAt(target, ports.targetPort.side, ports.targetPort.offset)
+      : alignedSidePoint(target, endSide, lastVia);
   const startStub = offset(start, startSide, STUB);
   const endStub = offset(end, endSide, STUB);
 
@@ -355,6 +368,19 @@ export function routeThrough(source: Box, target: Box, via: readonly Point[]): P
   return simplify(points);
 }
 
+/** The point on `side` level with `toward` when the side spans it, else the side's midpoint. */
+export function alignedSidePoint(box: Box, side: Side, toward: Point): Point {
+  const inset = 4;
+  if (side === "left" || side === "right") {
+    const y =
+      toward.y >= box.y + inset && toward.y <= box.y + box.h - inset ? toward.y : box.y + box.h / 2;
+    return { x: side === "left" ? box.x : box.x + box.w, y };
+  }
+  const x =
+    toward.x >= box.x + inset && toward.x <= box.x + box.w - inset ? toward.x : box.x + box.w / 2;
+  return { x, y: side === "top" ? box.y : box.y + box.h };
+}
+
 function isHorizontal(side: Side): boolean {
   return side === "left" || side === "right";
 }
@@ -364,7 +390,7 @@ function offset(point: Point, side: Side, distance: number): Point {
   return { x: point.x + out.x * distance, y: point.y + out.y * distance };
 }
 
-function sideToward(box: Box, point: Point): Side {
+export function sideToward(box: Box, point: Point): Side {
   const cx = box.x + box.w / 2;
   const cy = box.y + box.h / 2;
   const dx = (point.x - cx) / Math.max(1, box.w);

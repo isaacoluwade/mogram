@@ -2,6 +2,8 @@
 
 import { ChevronDown } from "lucide-react";
 import {
+  createContext,
+  use,
   useEffect,
   useId,
   useMemo,
@@ -23,49 +25,115 @@ import { cn } from "@/lib/cn";
 import { NEUTRAL_SWATCH } from "@/styles/colors";
 import { ColorPicker } from "@/components/ui/color/color-picker";
 import { Swatch } from "@/components/ui/color/swatch";
+import { preference, setPreference, usePreference } from "@/lib/preferences";
 import { useEditor, useEditorStore } from "../editor-context";
 import { documentColors } from "./document-colors";
 
 /** Shared inspector building blocks, all composed from the design-system primitives. */
 
+/** Which kind of element the open sections belong to, so each kind remembers its own. */
+export const SectionScope = createContext("diagram");
+
+/** A section's open state, remembered per kind and section id in this browser (04 §16.7). */
+export function usePersistedOpen(
+  id: string,
+  defaultOpen: boolean,
+): [boolean, (open: boolean) => void] {
+  const scope = use(SectionScope);
+  const key = `${scope}:${id}`;
+  const sections = usePreference("inspectorSections");
+  return [
+    sections[key] ?? defaultOpen,
+    (next: boolean) =>
+      setPreference("inspectorSections", { ...preference("inspectorSections"), [key]: next }),
+  ];
+}
+
+/**
+ * A titled block of the inspector. With an `id` it folds, and remembers whether it was open per
+ * kind of element (`defaultOpen` the first time); without one it's always open.
+ */
 export function InspectorSection({
   title,
   children,
   aside,
+  id,
+  defaultOpen = true,
 }: {
   title: string;
   children: ReactNode;
   aside?: ReactNode;
+  id?: string;
+  defaultOpen?: boolean;
 }) {
+  if (id === undefined) {
+    return (
+      <section className="border-b border-border-subtle px-3.5 py-3 last:border-b-0">
+        <div className="mb-2 flex h-5 items-center gap-2">
+          <h3 className="min-w-0 flex-1 truncate font-sans text-caption font-medium text-fg-faint">
+            {title}
+          </h3>
+          {aside}
+        </div>
+        {children}
+      </section>
+    );
+  }
   return (
-    <section className="border-b border-border-subtle px-3.5 py-3 last:border-b-0">
-      <div className="mb-2 flex h-5 items-center gap-2">
-        <h3 className="min-w-0 flex-1 truncate font-sans text-caption font-medium text-fg-faint">
-          {title}
-        </h3>
+    <FoldingSection id={id} title={title} aside={aside} defaultOpen={defaultOpen}>
+      {children}
+    </FoldingSection>
+  );
+}
+
+function FoldingSection({
+  id,
+  title,
+  aside,
+  defaultOpen,
+  children,
+}: {
+  id: string;
+  title: string;
+  aside?: ReactNode;
+  defaultOpen: boolean;
+  children: ReactNode;
+}) {
+  const [open, setOpen] = usePersistedOpen(id, defaultOpen);
+  const body = useId();
+  return (
+    <section data-section={id} className="border-b border-border-subtle last:border-b-0">
+      <div className="flex h-10 items-center gap-2 px-3.5">
+        <button
+          type="button"
+          aria-expanded={open}
+          aria-controls={body}
+          onClick={() => setOpen(!open)}
+          className="flex h-full min-w-0 flex-1 items-center gap-1.5 text-left font-sans text-caption font-medium text-fg-faint transition-colors hover:text-fg-soft"
+        >
+          <ChevronDown
+            aria-hidden
+            className={cn("size-3.5 shrink-0 transition-transform", !open && "-rotate-90")}
+          />
+          <span className="truncate">{title}</span>
+        </button>
         {aside}
       </div>
-      {children}
+      {open ? (
+        <div id={body} className="px-3.5 pb-3.5">
+          {children}
+        </div>
+      ) : null}
     </section>
   );
 }
 
-/** Advanced options stay hidden until asked for (ED-21, PR-8). */
+/** Advanced options stay hidden until asked for (ED-21, PR-8), remembered like any section. */
 export function Advanced({ children }: { children: ReactNode }) {
-  const [open, setOpen] = useState(false);
   return (
-    <section className="border-b border-border-subtle last:border-b-0">
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(!open)}
-        className="flex h-10 w-full items-center gap-2 px-3.5 text-left text-caption font-medium text-fg-faint transition-colors hover:text-fg-soft"
-      >
-        <span className="flex-1">Advanced</span>
-        <ChevronDown className={cn("size-3.5 transition-transform", open && "rotate-180")} />
-      </button>
-      {open ? <FieldStack className="px-3.5 pb-3.5">{children}</FieldStack> : null}
-    </section>
+    <InspectorSection id="advanced" title="Advanced" defaultOpen={false}>
+      <FieldStack>{children}</FieldStack>
+    </InspectorSection>
   );
 }
 
@@ -228,7 +296,8 @@ export function StatePicker({
   onChange,
   label,
 }: {
-  value: StatePreset;
+  /** Null when the selection's states differ: nothing is pressed. */
+  value: StatePreset | null;
   onChange: (state: StatePreset) => void;
   label: string;
 }) {
@@ -276,7 +345,8 @@ export function PresetGrid<T extends string>({
   dot,
 }: {
   options: readonly T[];
-  value: T;
+  /** Null when the selection's values differ: nothing is pressed. */
+  value: T | null;
   onChange: (value: T) => void;
   label: string;
   describe: (value: T) => { label: string; description: string };
@@ -356,10 +426,13 @@ export function ColorField({
   value,
   onChange,
   label,
+  mixed = false,
 }: {
   value: string | null;
   onChange: (value: string | null, live: boolean) => void;
   label: string;
+  /** The selected elements have different colours: the field shows "Mixed" until one is set. */
+  mixed?: boolean;
 }) {
   const diagram = useEditor((s) => s.parsed().diagram);
   const colors = useMemo(() => documentColors(diagram), [diagram]);
@@ -375,16 +448,16 @@ export function ColorField({
         }
       >
         <Swatch
-          name={`${label} colour: ${value ?? "preset"}`}
+          name={`${label} colour: ${mixed ? "mixed" : (value ?? "preset")}`}
           paint={{ kind: "solid", color: value ?? NEUTRAL_SWATCH }}
           size="md"
-          className="rounded-md"
+          className={cn("rounded-md", mixed && "opacity-40")}
         />
       </ColorPicker>
       <CommitInput
         label={label}
-        value={value ?? ""}
-        placeholder="Preset colour"
+        value={mixed ? "" : (value ?? "")}
+        placeholder={mixed ? "Mixed" : "Preset colour"}
         mono
         live={false}
         onCommit={(next) => {
@@ -396,7 +469,7 @@ export function ColorField({
           }
         }}
       />
-      {value !== null ? (
+      {value !== null || mixed ? (
         <button
           type="button"
           onClick={() => onChange(null, false)}
@@ -406,5 +479,86 @@ export function ColorField({
         </button>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A number field (grid units, copies, percentages): Enter or leaving it saves; ↑/↓ step by
+ * `step` and Shift by ten steps, each step saved at once and folded into one undo step (04 §16.5).
+ * Empty with "Mixed" when the selection's values differ. With `onClear`, emptying the field
+ * takes the value away (back to automatic) and `placeholder` says what that means.
+ */
+export function NumberField({
+  label,
+  value,
+  onCommit,
+  min,
+  max,
+  suffix,
+  step = 1,
+  decimal = false,
+  placeholder = "Mixed",
+  onClear,
+}: {
+  label: string;
+  value: number | null;
+  onCommit: (value: number, step: boolean) => void;
+  min?: number;
+  max?: number;
+  suffix?: string;
+  step?: number;
+  /** Takes decimals (2.5) rather than whole numbers. */
+  decimal?: boolean;
+  placeholder?: string;
+  onClear?: () => void;
+}) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const clamp = (n: number) => Math.min(max ?? Infinity, Math.max(min ?? -Infinity, n));
+  const round = (n: number) => (decimal ? Math.round(n * 100) / 100 : Math.round(n));
+  const commit = (text: string) => {
+    setDraft(null);
+    if (text.trim() === "" && onClear !== undefined) {
+      if (value !== null) onClear();
+      return;
+    }
+    // "3x", "70%" and "2,5" read as what they say.
+    const cleaned = text
+      .trim()
+      .replace(/[x×%]$/i, "")
+      .replace(",", ".");
+    const n = decimal ? Number.parseFloat(cleaned) : Number.parseInt(cleaned, 10);
+    if (Number.isFinite(n) && round(clamp(n)) !== value) onCommit(round(clamp(n)), false);
+  };
+  return (
+    <label className="flex h-8 min-w-0 flex-1 items-center gap-1 rounded-md bg-fill-field px-2 focus-within:ring-1 focus-within:ring-border-emphasis">
+      <span className="shrink-0 text-micro font-medium text-fg-faint">{label}</span>
+      <input
+        aria-label={label}
+        inputMode={decimal ? "decimal" : "numeric"}
+        value={draft ?? (value === null ? "" : String(value))}
+        placeholder={value === null ? placeholder : undefined}
+        onChange={(event: ChangeEvent<HTMLInputElement>) => setDraft(event.target.value)}
+        onBlur={(event) => {
+          if (draft !== null) commit(event.target.value);
+        }}
+        onKeyDown={(event: KeyboardEvent<HTMLInputElement>) => {
+          if (event.key === "Enter") {
+            commit(event.currentTarget.value);
+            event.currentTarget.blur();
+          } else if (event.key === "Escape") {
+            setDraft(null);
+            event.currentTarget.blur();
+          } else if ((event.key === "ArrowUp" || event.key === "ArrowDown") && value !== null) {
+            event.preventDefault();
+            const by = (event.shiftKey ? 10 : 1) * step * (event.key === "ArrowUp" ? 1 : -1);
+            const next = round(clamp(value + by));
+            setDraft(null);
+            if (next !== value) onCommit(next, true);
+          }
+        }}
+        className="h-full min-w-0 flex-1 bg-transparent text-right font-mono text-caption tabular-nums text-fg outline-none placeholder:text-fg-ghost"
+      />
+      {suffix !== undefined ? <span className="text-micro text-fg-faint">{suffix}</span> : null}
+    </label>
   );
 }

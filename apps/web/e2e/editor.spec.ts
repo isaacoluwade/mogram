@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { element, openDraft, shot, watchErrors, yaml } from "./support";
+import { element, openDraft, shot, watchErrors, yaml, inspectorTab } from "./support";
 
 const mod = process.platform === "darwin" ? "Meta" : "Control";
 
@@ -33,7 +33,7 @@ test.describe("editor (ED-1 … ED-23)", () => {
 
   test("adds an icon from the library, then undo and redo", async ({ page }) => {
     await openDraft(page, "web-app");
-    await page.getByLabel("Search icons").fill("key vault");
+    await page.getByLabel("Search shapes and icons").fill("key vault");
     await page
       .getByRole("button", { name: /^Add Key Vaults?$/ })
       .first()
@@ -72,6 +72,7 @@ test.describe("editor (ED-1 … ED-23)", () => {
   test("changes the canvas background theme", async ({ page }) => {
     await openDraft(page, "web-app");
     await page.getByTestId("editor-canvas").click({ position: { x: 700, y: 140 } });
+    await inspectorTab(page, "Canvas");
     await page.getByRole("radiogroup", { name: "Canvas theme" }).getByLabel("Paper").click();
     await expect.poll(async () => (await yaml(page)).includes("theme: paper")).toBe(true);
     await page.keyboard.press("Escape");
@@ -91,7 +92,7 @@ test.describe("editor (ED-1 … ED-23)", () => {
 
   test("keeps the draft after a reload (autosave to this browser)", async ({ page }) => {
     await openDraft(page, "web-app");
-    await page.getByLabel("Search icons").fill("redis");
+    await page.getByLabel("Search shapes and icons").fill("redis");
     await page
       .getByRole("button", { name: /^Add .*Redis/ })
       .first()

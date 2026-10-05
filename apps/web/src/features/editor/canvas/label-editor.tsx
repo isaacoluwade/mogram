@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { updateElement } from "@mogram/core/edit";
 import { LABEL, type LayoutResult } from "@mogram/core/layout";
+import { SHAPE_INFO, shapeGeometry } from "@mogram/core/presets";
+import { capacityLabelAt } from "@/features/canvas/capacity-frames";
 import { toScreen } from "@/features/canvas/camera";
 import type { SceneModel } from "@/features/canvas/scene";
 import type { CanvasTheme } from "@/features/canvas/theme";
@@ -60,9 +62,34 @@ export function LabelEditor({
   let left = camera.x + 40;
   let top = camera.y + 40;
   let width = 180;
-  if (element !== undefined) {
+  const shape = name === null ? null : (diagram.components.get(name)?.shape ?? null);
+  if (element !== undefined && shape !== null) {
+    // Inside the shape's own label box (under it, for a person).
     const box = element.box;
-    if (element.kind === "component") {
+    const label = shapeGeometry(
+      shape,
+      box.w,
+      box.h,
+      diagram.components.get(element.name)?.look ?? {},
+    ).label;
+    width = Math.max(120, label.w * camera.zoom);
+    const point = toScreen(camera, {
+      x: box.x + label.x + label.w / 2,
+      y: box.y + label.y + (SHAPE_INFO[shape].labelBelow === true ? 0 : label.h / 2),
+    });
+    left = point.x - width / 2;
+    top = point.y - (SHAPE_INFO[shape].labelBelow === true ? 0 : 16);
+  } else if (element !== undefined) {
+    const box = element.box;
+    const scaled = scene.components.find((c) => c.name === element.name);
+    const under = scaled === undefined ? null : capacityLabelAt(scaled, scene.settled);
+    if (under !== null) {
+      // Under a scale set's frame or a machine's panel.
+      const point = toScreen(camera, under);
+      width = Math.max(140, LABEL.maxWidth * camera.zoom);
+      left = under.align === "start" ? point.x - 6 : point.x - width / 2;
+      top = point.y - 16;
+    } else if (element.kind === "component") {
       const point = toScreen(camera, { x: box.x + box.w / 2, y: box.y + LABEL.top });
       width = Math.max(140, LABEL.maxWidth * camera.zoom);
       left = point.x - width / 2;
@@ -121,7 +148,12 @@ function LabelInput({
       onKeyDown={(event) => {
         event.stopPropagation();
         if (event.key === "Enter") onCommit(value);
-        if (event.key === "Escape") onCancel();
+        // Escape keeps what was typed (draw.io, Figma: losing words is worse than keeping
+        // them); Shift, Ctrl or Cmd with Escape puts the label back (06 §20 P1-11).
+        if (event.key === "Escape") {
+          if (event.shiftKey || event.metaKey || event.ctrlKey) onCancel();
+          else onCommit(value);
+        }
       }}
       className="absolute z-20 h-7 rounded-md border border-border-emphasis bg-card px-2 text-center text-label font-medium text-fg shadow-popover outline-none"
       style={style}

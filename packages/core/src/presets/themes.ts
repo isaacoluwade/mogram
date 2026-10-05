@@ -209,7 +209,234 @@ const PRESETS: Readonly<Record<CanvasThemeName, ThemeWithoutGrid>> = {
     background: linear(180, "#ffffff", "#e8e8e8"),
     ...LIGHT,
   },
+
+  // Dark, with colour: each tints its tiles and their borders to match.
+  slate: {
+    label: "Slate",
+    mode: "dark",
+    base: "#18202b",
+    background: linear(180, "#222c3a", "#18202b", "#121821"),
+    ...DARK,
+    tile: "#232d3b",
+    tileBorder: "rgba(148,163,184,0.20)",
+  },
+  ocean: {
+    label: "Ocean",
+    mode: "dark",
+    base: "#0a1d36",
+    background: linear(160, "#0f3460", "#0a1d36", "#06121f"),
+    ...DARK,
+    tile: "#0f2a4a",
+    tileBorder: "rgba(96,165,250,0.22)",
+  },
+  teal: {
+    label: "Teal",
+    mode: "dark",
+    base: "#0a2a2b",
+    background: linear(160, "#0f4545", "#0a2a2b", "#061a1b"),
+    ...DARK,
+    tile: "#0f3536",
+    tileBorder: "rgba(94,234,212,0.20)",
+  },
+  plum: {
+    label: "Plum",
+    mode: "dark",
+    base: "#260f30",
+    background: linear(160, "#44195a", "#260f30", "#170a1d"),
+    ...DARK,
+    tile: "#311540",
+    tileBorder: "rgba(216,180,254,0.20)",
+  },
+  wine: {
+    label: "Wine",
+    mode: "dark",
+    base: "#2e0a17",
+    background: linear(160, "#571229", "#2e0a17", "#1a060d"),
+    ...DARK,
+    tile: "#3a0f1f",
+    tileBorder: "rgba(251,113,133,0.20)",
+  },
+  olive: {
+    label: "Olive",
+    mode: "dark",
+    base: "#1c210d",
+    background: linear(160, "#333b17", "#1c210d", "#121508"),
+    ...DARK,
+    tile: "#262d12",
+    tileBorder: "rgba(190,242,100,0.18)",
+  },
+
+  // Vivid gradients: real colour across the canvas, with white labels that read on every part.
+  aurora: {
+    label: "Aurora",
+    mode: "dark",
+    base: "#132447",
+    background: linear(135, "#0f766e", "#132447", "#4c1d95"),
+    ...DARK,
+    tile: "#14213d",
+    tileBorder: "rgba(153,246,228,0.22)",
+    textMuted: "#ccfbf1",
+    line: "rgba(255,255,255,0.40)",
+  },
+  twilight: {
+    label: "Twilight",
+    mode: "dark",
+    base: "#2e1a63",
+    background: linear(160, "#312e81", "#5b21b6", "#9d174d"),
+    ...DARK,
+    tile: "#241a52",
+    tileBorder: "rgba(233,213,255,0.22)",
+    textMuted: "#e9d5ff",
+    line: "rgba(255,255,255,0.40)",
+  },
+  sunset: {
+    label: "Sunset",
+    mode: "dark",
+    base: "#7f1d3a",
+    background: linear(135, "#b4380d", "#9f1239", "#4c1d95"),
+    ...DARK,
+    tile: "#3b0f24",
+    tileBorder: "rgba(254,215,170,0.24)",
+    textMuted: "#fed7aa",
+    line: "rgba(255,255,255,0.42)",
+  },
+  lagoon: {
+    label: "Lagoon",
+    mode: "dark",
+    base: "#0b4a63",
+    background: linear(160, "#0e7490", "#0b4a63", "#082f49"),
+    ...DARK,
+    tile: "#0a3a52",
+    tileBorder: "rgba(165,243,252,0.24)",
+    textMuted: "#cffafe",
+    line: "rgba(255,255,255,0.40)",
+  },
+  nebula: {
+    label: "Nebula",
+    mode: "dark",
+    base: "#140f2e",
+    background: radial({ x: 0.3, y: 0.15 }, ["#6d28d9", "#1e1b4b", "#0b0a1a"], { x: 1.3, y: 1.1 }),
+    ...DARK,
+    tile: "#1a1538",
+    textMuted: "#ddd6fe",
+    tileBorder: "rgba(196,181,253,0.22)",
+  },
+
+  // Drafting boards.
+  blueprint: {
+    label: "Blueprint",
+    mode: "dark",
+    base: "#1e3a8a",
+    background: linear(180, "#1e45a8", "#1e3a8a"),
+    ...DARK,
+    tile: "#1b3478",
+    tileBorder: "rgba(219,234,254,0.32)",
+    textMuted: "#cbd5e1",
+    line: "rgba(219,234,254,0.55)",
+  },
+  chalkboard: {
+    label: "Chalkboard",
+    mode: "dark",
+    base: "#26332c",
+    background: linear(180, "#2f3e36", "#26332c"),
+    ...DARK,
+    tile: "#33443b",
+    tileBorder: "rgba(240,253,244,0.16)",
+    text: "#f1f5f0",
+    textMuted: "#b8c4bc",
+    line: "rgba(240,253,244,0.40)",
+  },
+
+  // Light, with a hint of colour.
+  sky: {
+    label: "Sky",
+    mode: "light",
+    base: "#e6f0fe",
+    background: linear(180, "#eff6ff", "#dbeafe"),
+    ...LIGHT,
+    tileBorder: "rgba(37,99,235,0.16)",
+  },
+  mint: {
+    label: "Mint",
+    mode: "light",
+    base: "#e3f9ec",
+    background: linear(180, "#f0fdf4", "#d1fae5"),
+    ...LIGHT,
+    tileBorder: "rgba(5,150,105,0.16)",
+  },
+  blush: {
+    label: "Blush",
+    mode: "light",
+    base: "#fff0f2",
+    background: linear(180, "#fff5f6", "#ffe4e6"),
+    ...LIGHT,
+    tileBorder: "rgba(225,29,72,0.14)",
+  },
+  lilac: {
+    label: "Lilac",
+    mode: "light",
+    base: "#f4effe",
+    background: linear(180, "#faf5ff", "#ede9fe"),
+    ...LIGHT,
+    tileBorder: "rgba(124,58,237,0.14)",
+  },
+  butter: {
+    label: "Butter",
+    mode: "light",
+    base: "#fef8dc",
+    background: linear(180, "#fefce8", "#fef3c7"),
+    ...LIGHT,
+    tileBorder: "rgba(202,138,4,0.18)",
+  },
+  dawn: {
+    label: "Dawn",
+    mode: "light",
+    base: "#f3eafa",
+    background: linear(135, "#fdf2f8", "#ede9fe", "#e0e7ff"),
+    ...LIGHT,
+    tileBorder: "rgba(99,102,241,0.16)",
+  },
+  seafoam: {
+    label: "Seafoam",
+    mode: "light",
+    base: "#e0f7f4",
+    background: linear(135, "#ecfdf5", "#ccfbf1", "#e0f2fe"),
+    ...LIGHT,
+    tileBorder: "rgba(13,148,136,0.16)",
+  },
 };
+
+/**
+ * The themes by family, as the inspector's "See all" shows them (each theme in exactly one), and
+ * the few shown before it: one or two from each family, so the first view has real variety.
+ */
+export const THEME_FAMILIES: readonly {
+  readonly name: string;
+  readonly themes: readonly CanvasThemeName[];
+}[] = [
+  { name: "Dark", themes: ["midnight", "graphite", "spotlight", "slate"] },
+  {
+    name: "Deep colours",
+    themes: ["ocean", "forest", "teal", "dusk", "plum", "wine", "ember", "olive"],
+  },
+  { name: "Vivid gradients", themes: ["aurora", "twilight", "sunset", "lagoon", "nebula"] },
+  { name: "Drafting", themes: ["blueprint", "chalkboard"] },
+  { name: "Light", themes: ["paper", "snow", "mist", "sand"] },
+  { name: "Pastel", themes: ["sky", "mint", "blush", "lilac", "butter", "dawn", "seafoam"] },
+];
+
+export const FEATURED_THEMES: readonly CanvasThemeName[] = [
+  "midnight",
+  "ocean",
+  "forest",
+  "wine",
+  "aurora",
+  "blueprint",
+  "twilight",
+  "paper",
+  "sky",
+  "sand",
+];
 
 export const CANVAS_THEME_INFO: Readonly<Record<CanvasThemeName, CanvasThemeInfo>> =
   Object.fromEntries(

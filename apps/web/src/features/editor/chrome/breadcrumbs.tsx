@@ -7,7 +7,7 @@ import { Kbd } from "@/components/ui/kbd";
 import { Panel, ToolbarDivider } from "@/components/ui/panel";
 import { useEditorShallow, useEditorStore } from "../editor-context";
 import { exitNested } from "../levels";
-import { levelsAlong } from "../store/editor-store";
+import { levelsAlong, shownFiles } from "../store/editor-store";
 
 /**
  * Where you are in nested diagrams (NE-8): a clear way back to the level you came from (also
@@ -16,7 +16,7 @@ import { levelsAlong } from "../store/editor-store";
 export function Breadcrumbs() {
   const store = useEditorStore();
   const { files, levelPath } = useEditorShallow((s) => ({
-    files: s.files,
+    files: shownFiles(s),
     levelPath: s.levelPath,
   }));
   if (levelPath.length === 0) return null;

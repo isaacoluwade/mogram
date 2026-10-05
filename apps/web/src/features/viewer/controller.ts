@@ -1,3 +1,4 @@
+import type { ElementLink } from "@mogram/core/model";
 import type { Box } from "@mogram/core/layout";
 import type { Tour } from "@mogram/core/model";
 import type { FlowPreset, StatePreset } from "@mogram/core/presets";
@@ -241,6 +242,35 @@ export class ViewerController {
   inspect(name: string | null): void {
     this.state.setInspected(name);
     this.state.setFocus(name === null ? null : focusSet(this.geometry().diagram, name));
+  }
+
+  /**
+   * An element's own `link:` (07 §18 P0-3): a web page opens in a new tab; a scene is shown; a
+   * tour starts; another element's card opens (or it's highlighted when it has none).
+   */
+  async followElementLink(link: ElementLink): Promise<void> {
+    switch (link.kind) {
+      case "url":
+        window.open(link.url, "_blank", "noopener,noreferrer");
+        return;
+      case "scene":
+        this.setScene(link.scene);
+        return;
+      case "tour":
+        await this.startTour(link.tour);
+        return;
+      case "element": {
+        const diagram = this.geometry().diagram;
+        const card =
+          diagram.components.get(link.element)?.card ??
+          diagram.containers.get(link.element)?.card ??
+          diagram.connections.get(link.element)?.card ??
+          null;
+        if (card !== null) await this.openCard(link.element, { travelFrom: this.state.openCard });
+        else this.inspect(link.element);
+        return;
+      }
+    }
   }
 
   /** `[text](#name)` in a card (CA-4): relative to the card's level; dots go into nested levels. */

@@ -1,4 +1,4 @@
-import type { Connection, Diagram } from "../model/types";
+import type { Connection, Diagram, GridPoint } from "../model/types";
 import { ancestorsOf, type LayoutResult } from "../layout/compute";
 import { GRID, type Box, type Point } from "../layout/geometry";
 import {
@@ -8,17 +8,32 @@ import {
   routeOrthogonal,
   routeThrough,
   sidePoint,
+  sideToward,
   type FixedPort,
   type RouteRequest,
   type Side,
 } from "./orthogonal";
-import { curvePath, polylinePath, type RoutedPath } from "./path";
+import type { Anchor } from "../presets/connectors";
+import { anchorPoint, anchorPort, anchorSide, centreOf, clipToBox, outward } from "./anchors";
+import { CORNER_RADIUS, curvePath, curveThrough, polylinePath, type RoutedPath } from "./path";
+import { endsMoved, followVia, type Ends as EndBoxes } from "./follow";
+import { shapeGeometry, shapePerimeter } from "../presets/shapes";
 
 export interface RouteOptions {
   /** Connections to draw as quick elbows (e.g. while their ends are being dragged). */
   readonly quick?: ReadonlySet<string>;
+  /** Anchor overrides (e.g. while an end is being reconnected). */
+  readonly anchors?: ReadonlyMap<
+    string,
+    { readonly from?: Anchor | null; readonly to?: Anchor | null }
+  >;
   /** Waypoint overrides in absolute pixels (e.g. while a bend is being dragged). */
   readonly via?: ReadonlyMap<string, readonly Point[]>;
+  /**
+   * The layout before elements started moving: stored bends follow their ends from there
+   * (ED-29, `followVia`), so a drag previews what the drop will write.
+   */
+  readonly follow?: LayoutResult;
   /** Previously computed routes to reuse when nothing relevant changed. */
   readonly cache?: RouteCache;
 }
@@ -51,6 +66,28 @@ export function viaOrigin(layout: LayoutResult, connection: Connection): Point {
   return box === null || box === undefined ? { x: 0, y: 0 } : { x: box.x, y: box.y };
 }
 
+/**
+ * Stored bends (grid units) carried along from where the ends were in `before` to `now`, snapped
+ * to the grid as the drop will store them; null when neither end moved.
+ */
+export function followedVia(
+  before: LayoutResult,
+  connection: Connection,
+  stored: readonly GridPoint[],
+  now: EndBoxes,
+  origin: Point,
+): Point[] | null {
+  const source = endpointBox(before, connection.from.element);
+  const target = endpointBox(before, connection.to.element);
+  if (source === null || target === null || !endsMoved({ source, target }, now)) return null;
+  const from = viaOrigin(before, connection);
+  const absolute = stored.map((p) => ({ x: from.x + p.x * GRID, y: from.y + p.y * GRID }));
+  return followVia(connection.route, absolute, { source, target }, now).map((p) => ({
+    x: origin.x + Math.round((p.x - origin.x) / GRID) * GRID,
+    y: origin.y + Math.round((p.y - origin.y) / GRID) * GRID,
+  }));
+}
+
 /** Routes every connection whose ends are placed. */
 export function routeConnections(
   diagram: Diagram,
@@ -66,32 +103,60 @@ export function routeConnections(
     const source = endpointBox(layout, connection.from.element);
     const target = endpointBox(layout, connection.to.element);
     if (source === null || target === null) continue;
+    const entry = diagram.layout.get(connection.name);
+    const fromAnchor = options.anchors?.get(connection.name)?.from ?? entry?.fromAnchor ?? null;
+    const toAnchor = options.anchors?.get(connection.name)?.to ?? entry?.toAnchor ?? null;
+    const radius = connection.corners === "sharp" ? 0 : CORNER_RADIUS;
+
+    const viaOverride = options.via?.get(connection.name);
+    const stored = entry?.via;
+    let via: readonly Point[] = [];
+    if (viaOverride !== undefined) via = viaOverride;
+    else if (stored !== null && stored !== undefined && stored.length > 0) {
+      const origin = viaOrigin(layout, connection);
+      via = stored.map((p) => ({ x: origin.x + p.x * GRID, y: origin.y + p.y * GRID }));
+      const followed =
+        options.follow === undefined
+          ? null
+          : followedVia(options.follow, connection, stored, { source, target }, origin);
+      if (followed !== null) via = followed;
+    }
+    const ends = { source, target, fromAnchor, toAnchor, via };
 
     if (connection.route === "straight") {
-      routes.set(connection.name, polylinePath(straight(source, target)));
+      routes.set(connection.name, polylinePath(straightThrough(ends), radius));
       continue;
     }
     if (connection.route === "curved") {
-      routes.set(connection.name, curved(source, target));
+      routes.set(connection.name, curvedThrough(ends));
       continue;
     }
 
-    const viaOverride = options.via?.get(connection.name);
-    const stored = diagram.layout.get(connection.name)?.via;
-    if (
-      viaOverride !== undefined ||
-      (stored !== null && stored !== undefined && stored.length > 0)
-    ) {
-      const origin = viaOrigin(layout, connection);
-      const via =
-        viaOverride ??
-        (stored ?? []).map((p) => ({ x: origin.x + p.x * GRID, y: origin.y + p.y * GRID }));
-      routes.set(connection.name, polylinePath(routeThrough(source, target, via)));
+    const towardTarget =
+      via[0] ?? (toAnchor !== null ? anchorPoint(target, toAnchor) : centreOf(target));
+    const towardSource =
+      via[via.length - 1] ??
+      (fromAnchor !== null ? anchorPoint(source, fromAnchor) : centreOf(source));
+    const sourcePort =
+      fromAnchor === null ? undefined : anchorPort(source, fromAnchor, towardTarget);
+    const targetPort = toAnchor === null ? undefined : anchorPort(target, toAnchor, towardSource);
+
+    if (via.length > 0) {
+      routes.set(
+        connection.name,
+        polylinePath(
+          routeThrough(source, target, via, {
+            ...(sourcePort !== undefined ? { sourcePort } : {}),
+            ...(targetPort !== undefined ? { targetPort } : {}),
+          }),
+          radius,
+        ),
+      );
       continue;
     }
 
     if (options.quick?.has(connection.name) === true) {
-      routes.set(connection.name, polylinePath(elbow(source, target)));
+      routes.set(connection.name, polylinePath(elbow(source, target), radius));
       continue;
     }
 
@@ -109,25 +174,140 @@ export function routeConnections(
       layout.tiles.has(connection.from.element) || layout.tiles.has(connection.to.element)
         ? { bottom: 24 }
         : {};
-    const request: RouteRequest = { source, target, obstacles, sidePenalty };
-    auto.push({ connection, request });
-    routes.set(connection.name, routeCached(request, options.cache));
+    const request: RouteRequest = {
+      source,
+      target,
+      obstacles,
+      sidePenalty,
+      ...(sourcePort !== undefined ? { sourcePort } : {}),
+      ...(targetPort !== undefined ? { targetPort } : {}),
+    };
+    auto.push({
+      connection,
+      request,
+      radius,
+      fixedFrom: sourcePort !== undefined,
+      fixedTo: targetPort !== undefined,
+    });
+    routes.set(connection.name, routeCached(request, radius, options.cache));
   }
 
   spreadSharedSides(auto, routes, options.cache);
+  fitEndsToShapes(diagram, layout, routes);
   return routes;
+}
+
+/**
+ * Lines ending at a shape stop at its drawn outline (an ellipse, a diamond) rather than its
+ * bounding box (03-shapes-styles-library P1-3): each end slides along its last segment until it
+ * meets the outline, so orthogonal ends stay square.
+ */
+function fitEndsToShapes(
+  diagram: Diagram,
+  layout: LayoutResult,
+  routes: Map<string, RoutedPath>,
+): void {
+  const outlines = new Map<string, { box: Box; polygon: readonly Point[] } | null>();
+  const outlineOf = (name: string) => {
+    if (outlines.has(name)) return outlines.get(name) ?? null;
+    const component = diagram.components.get(name);
+    const box = layout.elements.get(name)?.box;
+    const shape = component?.shape ?? null;
+    const value =
+      shape === null || box === undefined || shape === "rectangle" || shape === "person"
+        ? null
+        : {
+            box,
+            polygon: shapeGeometry(shape, box.w, box.h, component?.look ?? {}).polygon,
+          };
+    outlines.set(name, value);
+    return value;
+  };
+  for (const connection of diagram.connections.values()) {
+    const path = routes.get(connection.name);
+    if (path === undefined || path.kind !== "polyline" || path.points.length < 2) continue;
+    const from = outlineOf(connection.from.element);
+    const to = outlineOf(connection.to.element);
+    if (from === null && to === null) continue;
+    const points = [...path.points];
+    const onto = (end: number, next: number, outline: { box: Box; polygon: readonly Point[] }) => {
+      const p = points[end] as Point;
+      const q = points[next] as Point;
+      const length = Math.hypot(p.x - q.x, p.y - q.y);
+      if (length === 0) return;
+      // Far enough past the end to cross the whole shape.
+      const reach = outline.box.w + outline.box.h;
+      const inside = {
+        x: p.x + ((p.x - q.x) / length) * reach,
+        y: p.y + ((p.y - q.y) / length) * reach,
+      };
+      points[end] = shapePerimeter(outline.polygon, outline.box, inside, q);
+    };
+    if (from !== null) onto(0, 1, from);
+    if (to !== null) onto(points.length - 1, points.length - 2, to);
+    routes.set(connection.name, polylinePath(points, path.radius));
+  }
+}
+
+interface Ends {
+  readonly source: Box;
+  readonly target: Box;
+  readonly fromAnchor: Anchor | null;
+  readonly toAnchor: Anchor | null;
+  /** Waypoints in absolute px. */
+  readonly via: readonly Point[];
+}
+
+/** A straight line, through waypoints when there are any; floating ends aim at the next point. */
+function straightThrough({ source, target, fromAnchor, toAnchor, via }: Ends): Point[] {
+  const startFixed = fromAnchor === null ? null : anchorPoint(source, fromAnchor);
+  const endFixed = toAnchor === null ? null : anchorPoint(target, toAnchor);
+  const towardFromStart = via[0] ?? endFixed ?? centreOf(target);
+  const towardFromEnd = via[via.length - 1] ?? startFixed ?? centreOf(source);
+  const start = startFixed ?? clipToBox(source, centreOf(source), towardFromStart);
+  const end = endFixed ?? clipToBox(target, centreOf(target), towardFromEnd);
+  return [start, ...via, end];
+}
+
+/** A smooth curve leaving and arriving square to the sides, through any waypoints. */
+function curvedThrough(ends: Ends): RoutedPath {
+  const { source, target, fromAnchor, toAnchor, via } = ends;
+  if (via.length === 0 && fromAnchor === null && toAnchor === null) return curved(source, target);
+  const startFixed = fromAnchor === null ? null : anchorPoint(source, fromAnchor);
+  const endFixed = toAnchor === null ? null : anchorPoint(target, toAnchor);
+  const towardFromStart = via[0] ?? endFixed ?? centreOf(target);
+  const towardFromEnd = via[via.length - 1] ?? startFixed ?? centreOf(source);
+  const startSide =
+    fromAnchor !== null
+      ? anchorSide(source, fromAnchor, towardFromStart)
+      : sideToward(source, towardFromStart);
+  const endSide =
+    toAnchor !== null
+      ? anchorSide(target, toAnchor, towardFromEnd)
+      : sideToward(target, towardFromEnd);
+  const start = startFixed ?? sidePoint(source, startSide);
+  const end = endFixed ?? sidePoint(target, endSide);
+  return curveThrough([start, ...via, end], outward(startSide), outward(endSide));
 }
 
 interface AutoRoute {
   readonly connection: Connection;
   readonly request: RouteRequest;
+  readonly radius: number;
+  /** Ends on a fixed anchor keep it; only floating ends share their side (ED-29). */
+  readonly fixedFrom: boolean;
+  readonly fixedTo: boolean;
 }
 
-function routeCached(request: RouteRequest, cache: RouteCache | undefined): RoutedPath {
-  const key = cacheKey(request);
+function routeCached(
+  request: RouteRequest,
+  radius: number,
+  cache: RouteCache | undefined,
+): RoutedPath {
+  const key = `${cacheKey(request)}|r${radius}`;
   const cached = cache?.get(key);
   if (cached !== undefined) return cached;
-  const path = polylinePath(routeOrthogonal(request));
+  const path = polylinePath(routeOrthogonal(request), radius);
   cache?.set(key, path);
   return path;
 }
@@ -206,6 +386,7 @@ function spreadSharedSides(
     sides.set(route.connection.name, { from, to });
     const add = (end: "from" | "to", side: Side | null) => {
       if (side === null) return;
+      if (end === "from" ? route.fixedFrom : route.fixedTo) return;
       const element = end === "from" ? route.connection.from.element : route.connection.to.element;
       const own = end === "from" ? route.request.source : route.request.target;
       const other = end === "from" ? route.request.target : route.request.source;
@@ -255,9 +436,13 @@ function spreadSharedSides(
     // Keep the unshared end on the side it already uses, so the route keeps its shape.
     const current = sides.get(route.connection.name);
     const sourcePort =
-      fixed.sourcePort ?? (current?.from != null ? { side: current.from, offset: 0 } : undefined);
+      fixed.sourcePort ??
+      route.request.sourcePort ??
+      (current?.from != null ? { side: current.from, offset: 0 } : undefined);
     const targetPort =
-      fixed.targetPort ?? (current?.to != null ? { side: current.to, offset: 0 } : undefined);
+      fixed.targetPort ??
+      route.request.targetPort ??
+      (current?.to != null ? { side: current.to, offset: 0 } : undefined);
     routes.set(
       route.connection.name,
       routeCached(
@@ -266,6 +451,7 @@ function spreadSharedSides(
           ...(sourcePort !== undefined ? { sourcePort } : {}),
           ...(targetPort !== undefined ? { targetPort } : {}),
         },
+        route.radius,
         cache,
       ),
     );
@@ -278,23 +464,6 @@ function cacheKey(request: RouteRequest): string {
     p === undefined ? "" : `${p.side}${p.offset}`;
   const penalty = request.sidePenalty?.bottom ?? 0;
   return `${box(request.source)}|${box(request.target)}|${port(request.sourcePort)}|${port(request.targetPort)}|${penalty}|${request.obstacles.map(box).join(";")}`;
-}
-
-/** Centre-to-centre line clipped to both boxes. */
-function straight(source: Box, target: Box): Point[] {
-  const a = { x: source.x + source.w / 2, y: source.y + source.h / 2 };
-  const b = { x: target.x + target.w / 2, y: target.y + target.h / 2 };
-  return [clipToBox(source, a, b), clipToBox(target, b, a)];
-}
-
-function clipToBox(box: Box, inside: Point, toward: Point): Point {
-  const dx = toward.x - inside.x;
-  const dy = toward.y - inside.y;
-  if (dx === 0 && dy === 0) return inside;
-  const tx = dx === 0 ? Infinity : box.w / 2 / Math.abs(dx);
-  const ty = dy === 0 ? Infinity : box.h / 2 / Math.abs(dy);
-  const t = Math.min(tx, ty);
-  return { x: inside.x + dx * t, y: inside.y + dy * t };
 }
 
 function curved(source: Box, target: Box): RoutedPath {

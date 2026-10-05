@@ -12,7 +12,7 @@ import { StubsOverlay } from "@/features/canvas/svg/stubs";
 import { resolveTheme, type CanvasTheme } from "@/features/canvas/theme";
 import { prefersReducedMotion } from "@/lib/use-reduced-motion";
 import { fitArea, fitCamera, layoutOf, zoomToFit } from "./actions";
-import { levelsAlong, parseCached, type EditorStore } from "./store/editor-store";
+import { levelsAlong, parseCached, shownFiles, type EditorStore } from "./store/editor-store";
 import { resolveLevel } from "./use-editor-scene";
 
 /**
@@ -95,7 +95,7 @@ export function openNested(store: EditorStore, name: string): boolean {
   const component = state.diagram().components.get(name);
   if (component?.opens == null) return false;
   const opens = component.opens;
-  if (parseCached(state.files, opens).diagram.files.length === 0) {
+  if (parseCached(shownFiles(state), opens).diagram.files.length === 0) {
     state.notify(
       `"${component.label}" opens ${component.opens}, but that folder has no diagram yet.`,
       "error",
@@ -106,7 +106,7 @@ export function openNested(store: EditorStore, name: string): boolean {
   const innerPath = [...outerPath, name];
   camerasOf(store).set(outerPath.join("/"), state.camera);
 
-  const inner = levelPicture(state.files, innerPath, state.scene, state.viewerEntries);
+  const inner = levelPicture(shownFiles(state), innerPath, state.scene, state.viewerEntries);
   const area = fitArea(inner.layout, true);
   const enter = () => {
     const s = store.getState();
@@ -121,7 +121,7 @@ export function openNested(store: EditorStore, name: string): boolean {
     enter();
     return true;
   }
-  const outer = levelPicture(state.files, outerPath, state.scene, state.viewerEntries);
+  const outer = levelPicture(shownFiles(state), outerPath, state.scene, state.viewerEntries);
   state.select([]);
   state.setEditingLabel(null);
   state.setLevelZoom({
@@ -160,8 +160,8 @@ export function exitNested(store: EditorStore, depth?: number): boolean {
     leave(back ?? null);
     return true;
   }
-  const outer = levelPicture(state.files, outerPath, state.scene, state.viewerEntries);
-  const inner = levelPicture(state.files, path, state.scene, state.viewerEntries);
+  const outer = levelPicture(shownFiles(state), outerPath, state.scene, state.viewerEntries);
+  const inner = levelPicture(shownFiles(state), path, state.scene, state.viewerEntries);
   const tile = outer.layout.tiles.get(component) ?? outer.layout.elements.get(component)?.box;
   const outerCamera = back ?? fitCamera(store, fitArea(outer.layout, outerPath.length > 0));
   if (tile === undefined) {
@@ -179,5 +179,25 @@ export function exitNested(store: EditorStore, depth?: number): boolean {
     component,
     finish: () => leave(outerCamera),
   });
+  return true;
+}
+
+/**
+ * Straight to the level at `path`, however far from this one (Find across nested diagrams): a
+ * jump that may cross several levels, so no zoom through tiles. Coming back out still returns to
+ * where the camera was here.
+ */
+export function jumpToLevel(store: EditorStore, path: readonly string[]): boolean {
+  const state = store.getState();
+  if (state.levelZoom !== null) return false;
+  const same =
+    path.length === state.levelPath.length && path.every((name, i) => name === state.levelPath[i]);
+  if (same) return true;
+  const levels = levelsAlong(shownFiles(state), path);
+  if (levels.length !== path.length + 1) return false;
+  camerasOf(store).set(state.levelPath.join("/"), state.camera);
+  state.setEditingLabel(null);
+  state.showLevel(path, levels.at(-1)?.folder ?? "");
+  store.getState().setCamera(fitCamera(store, fitArea(layoutOf(store), path.length > 0)));
   return true;
 }

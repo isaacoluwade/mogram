@@ -81,12 +81,16 @@ export function DialogContent({
   );
 }
 
-/** Actions stay pinned to the bottom of the dialog while its body scrolls (short screens). */
+/**
+ * Actions stay pinned to the bottom of the dialog while its body scrolls (short screens). Sticky
+ * offsets count from inside the body's padding, so `-bottom-6` cancels its `pb-6`: with
+ * `bottom-0` the footer rode 24px up over the space above it, leaving that space under it.
+ */
 export function DialogFooter({ className, ...props }: ComponentProps<"div">) {
   return (
     <div
       className={cn(
-        "sticky bottom-0 -mx-6 -mb-6 mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-border-muted bg-card px-6 py-4",
+        "sticky -bottom-6 -mx-6 -mb-6 mt-6 flex flex-wrap items-center justify-end gap-2 border-t border-border-muted bg-card px-6 py-4",
         className,
       )}
       {...props}

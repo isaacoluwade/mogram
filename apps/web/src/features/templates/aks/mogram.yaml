@@ -8,7 +8,7 @@ containers:
     type: region
     label: Canada Central
   platform_vnet:
-    type: vnet
+    type: network
     label: platform-vnet
     in: canada_central
 

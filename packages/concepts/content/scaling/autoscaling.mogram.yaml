@@ -1,0 +1,18 @@
+mogram: 1
+name: Autoscaling
+description: Copies follow the day, between a floor and a ceiling.
+concept:
+  summary: Set the fewest copies (for safety), the most (for cost) and a target load. Copies are added when they get busier than the target and removed when they're quiet, but never past those limits.
+  topic: scaling
+  tags: [scale out, autoscale, min, max, target]
+  roles:
+    api: What scales automatically
+containers:
+  api_set: { type: scaling-group, label: Autoscaling group }
+components:
+  users: { type: generic/users, label: Users }
+  gateway: { type: generic/gateway, label: Gateway }
+  api: { type: generic/api, label: API, in: api_set, scale: { min: 2, max: 6, target: 60% } }
+connections:
+  users_to_gateway: { from: users, to: gateway, traffic: { pattern: waves, low: 0.2x, every: 12s } }
+  gateway_to_api: { from: gateway, to: api_set }

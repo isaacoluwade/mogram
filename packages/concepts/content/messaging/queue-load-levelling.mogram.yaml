@@ -1,0 +1,19 @@
+mogram: 1
+name: Queue load levelling
+description: A queue takes the burst; workers drain it at their own pace.
+concept:
+  summary: Put a queue in front of the work. A burst waits in the queue instead of overwhelming the workers, who scale out and work through it as fast as they can.
+  topic: messaging
+  tags: [queue, workers, backlog, burst]
+  roles:
+    queue: What holds the work
+    workers: What works through it
+components:
+  orders: { type: generic/users, label: Orders }
+  queue: { type: generic/queue, label: Queue }
+  workers: { type: generic/worker, label: Workers, scale: { min: 1, max: 4 } }
+  db: { type: generic/database, label: Database }
+connections:
+  orders_to_queue: { from: orders, to: queue, traffic: bursts }
+  queue_to_workers: { from: queue, to: workers }
+  workers_to_db: { from: workers, to: db }

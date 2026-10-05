@@ -2,6 +2,7 @@
 
 import { createContext, use } from "react";
 import type { CanvasTheme } from "../theme";
+import type { CapacityRuntime } from "../capacity";
 
 export type RenderMode = "edit" | "view" | "export";
 
@@ -19,6 +20,8 @@ export interface RenderSettings {
   readonly interactive: boolean;
   /** Text or note being typed into on the canvas: its words are drawn by the text field instead. */
   readonly editingText: string | null;
+  /** Capacity over time (D-82), when the diagram models it. */
+  readonly capacity: CapacityRuntime | null;
 }
 
 /** Makes an element a keyboard stop in an interactive diagram; nothing anywhere else. */

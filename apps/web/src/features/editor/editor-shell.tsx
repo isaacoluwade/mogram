@@ -3,11 +3,13 @@
 import { useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import {
+  Lightbulb,
   MousePointerClick,
   PanelLeftOpen,
   PanelRightOpen,
   Shapes,
   SlidersHorizontal,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
 import { stepScene } from "@mogram/core/timeline";
@@ -21,32 +23,42 @@ import { useScrollFade } from "@/lib/use-scroll-fade";
 import { resolveTheme } from "@/features/canvas/theme";
 import { useLayout, useRoutes } from "@/features/canvas/use-diagram";
 import { LibraryPanel } from "./library/library-panel";
+import { ConceptsPanel } from "./concepts/concepts-panel";
+import { ConceptGallery } from "./concepts/concept-gallery";
 import { InspectorPanel } from "./inspector/inspector-panel";
 import { ShareDialog } from "./dialogs/share-dialog";
 import { ToursPanel } from "./tours/tours-panel";
 import { EditorCanvas, useIsEmptyDiagram } from "./canvas/editor-canvas";
 import { Breadcrumbs } from "./chrome/breadcrumbs";
+import { FindPanel } from "./chrome/find-panel";
 import { SceneStrip } from "./chrome/scene-strip";
 import { Toolbar } from "./chrome/toolbar";
 import { TopLeftBar, TopRightBar } from "./chrome/top-bar";
 import { ZoomControls } from "./chrome/zoom-controls";
+import { Minimap } from "./chrome/minimap";
 import { OpenDialog } from "./dialogs/open-dialog";
 import { ShortcutsDialog } from "./dialogs/shortcuts-dialog";
+import { CommandPalette } from "./dialogs/command-palette";
 import { useEditor, useEditorClock, useEditorShallow, useEditorStore } from "./editor-context";
 import { useKeepSelectionInView } from "./canvas/keep-in-view";
 import { CodePanel } from "./panels/code-panel";
+import { HistoryPanel } from "./history/history-panel";
+import { AssistantProvider, useAssistant, useConversation } from "./assistant/assistant-context";
+import { AssistantPanel } from "./assistant/assistant-panel";
+import { VersionBanner } from "./history/version-banner";
 import { useEditorHost, useOpenViewer } from "./persistence/host";
 import { deepLinkQuery } from "@/features/share/deep-link";
 import { useEditorShortcuts } from "./shortcuts";
+import { RightPanelGrip, useRightPanelWidth } from "./panel-resize";
+import { CommandHostProvider } from "./commands/context";
+import { shortcutLabel } from "./commands/keys";
+import type { CommandHost } from "./commands/types";
+import { downloadProject } from "@/features/files/download";
 import { storyDiagram } from "./store/editor-store";
 
 // Heavy and only needed once opened: loaded on demand, not with the editor.
 const ExportDialog = dynamic(
   () => import("./dialogs/export-dialog").then((module) => module.ExportDialog),
-  { ssr: false },
-);
-const HistoryDialog = dynamic(
-  () => import("./dialogs/history-dialog").then((module) => module.HistoryDialog),
   { ssr: false },
 );
 
@@ -58,25 +70,38 @@ const HistoryDialog = dynamic(
  * the panels become bottom sheets and only one is open at a time.
  */
 export function EditorShell() {
+  return (
+    <AssistantProvider>
+      <ShellBody />
+    </AssistantProvider>
+  );
+}
+
+function ShellBody() {
   const store = useEditorStore();
+  const assistant = useAssistant();
   useKeepSelectionInView(store);
   const clock = useEditorClock();
   const host = useEditorHost();
   const openViewer = useOpenViewer();
   const panels = useEditor((s) => s.panels);
+  const leftTab = useEditor((s) => s.leftTab);
   const dialog = useEditor((s) => s.dialog);
+  const showMinimap = useEditor((s) => s.showMinimap);
   const rightPanel = panels.code
     ? "code"
     : panels.tours
       ? "tours"
-      : panels.inspector
-        ? "inspector"
-        : null;
+      : panels.history
+        ? "history"
+        : panels.inspector
+          ? "inspector"
+          : null;
   const anySheet = panels.library || rightPanel !== null;
 
   useStoreMessages();
 
-  const actions = useMemo(
+  const commandHost = useMemo<CommandHost>(
     () => ({
       save: () => {
         void host.saveNow();
@@ -86,9 +111,15 @@ export function EditorShell() {
         const scenes = storyDiagram(state.files).scenes.map((s) => s.name);
         state.setScene(stepScene(scenes, state.scene, direction), clock.time());
       },
+      goToScene: (scene: string | null) => store.getState().setScene(scene, clock.time()),
       preview: () => {
         const { levelPath, scene } = store.getState();
         void openViewer(deepLinkQuery({ level: levelPath, scene }));
+      },
+      present: () => {
+        const { levelPath, scene } = store.getState();
+        const query = deepLinkQuery({ level: levelPath, scene });
+        void openViewer(`${query.length > 0 ? `${query}&` : "?"}present=1`);
       },
       togglePlay: () => {
         const state = store.getState();
@@ -98,161 +129,231 @@ export function EditorShell() {
         }
         state.setPlaying(!state.playing);
       },
+      download: () => {
+        const state = store.getState();
+        downloadProject(state.files, state.parsed().diagram.settings.name).catch(() =>
+          state.notify("Couldn't prepare the download. Try again.", "error"),
+        );
+      },
+      ...(host.kind === "local" && host.saveToCloud !== undefined
+        ? { saveToCloud: () => void host.saveToCloud?.() }
+        : {}),
+      history: () => store.getState().togglePanel("history", true),
+      assistant: () => {
+        const state = store.getState();
+        if (state.panels.library && state.leftTab === "assistant") {
+          state.togglePanel("library", false);
+          return;
+        }
+        state.showLeft("assistant");
+        assistant.conversation.getState().focus();
+      },
+      askAbout: () => {
+        store.getState().showLeft("assistant");
+        assistant.conversation.getState().focus();
+      },
     }),
-    [host, store, clock, openViewer],
+    [host, store, clock, openViewer, assistant],
   );
-  useEditorShortcuts(store, actions);
+  useEditorShortcuts(store, commandHost);
+
+  const rightWidth = useRightPanelWidth();
 
   const closeRight = () => {
     if (rightPanel !== null) store.getState().togglePanel(rightPanel, false);
   };
 
   return (
-    <div className="relative h-dvh w-full overflow-hidden bg-page" data-testid="editor">
-      <EditorCanvas />
+    <CommandHostProvider host={commandHost}>
+      <div
+        className="relative h-dvh w-full overflow-hidden bg-page"
+        data-testid="editor"
+        style={rightWidth.style}
+      >
+        <EditorCanvas />
 
-      <div className="pointer-events-none absolute inset-0 z-10">
-        {/* Top row */}
-        <div className="pointer-events-auto absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-col items-start gap-2 max-md:left-2 max-md:top-2">
-          <TopLeftBar />
-        </div>
-        <div className="pointer-events-auto absolute right-3 top-3 max-md:right-2 max-md:top-2">
-          <TopRightBar />
-        </div>
-        <div className="pointer-events-auto absolute left-1/2 top-3 -translate-x-1/2 max-lg:hidden">
-          <Toolbar />
-        </div>
-        <TourAuthoringBanner />
-
-        {/* Nested levels and alerts: centred under the top bars, in the space the panels leave. */}
-        <div
-          className={cn(
-            "pointer-events-none absolute top-16 flex flex-col items-center gap-2 max-md:inset-x-2 max-md:top-[60px]",
-            panels.library ? "md:left-clear-library" : "md:left-clear-pill",
-            rightPanel === null
-              ? "md:right-clear-pill"
-              : rightPanel === "code"
-                ? "md:right-clear-code xl:right-clear-code-xl"
-                : "md:right-clear-right",
-          )}
-        >
-          <div className="pointer-events-auto min-w-0 max-w-full">
-            <Breadcrumbs />
-          </div>
-          <YamlErrorBanner />
-          <ConflictBanner />
-        </div>
-
-        {/* Side panels (bottom sheets on phones) */}
-        {panels.library ? (
-          <aside className="pointer-events-auto absolute bottom-3 left-3 top-16 w-panel-library max-md:inset-x-2 max-md:bottom-2 max-md:top-auto max-md:h-[62dvh] max-md:w-auto">
-            <LibraryPanel onClose={() => store.getState().togglePanel("library", false)} />
-          </aside>
-        ) : (
-          <div className="pointer-events-auto absolute left-3 top-16 max-md:hidden">
-            <Panel shape="pill" className="p-1">
-              <IconButton
-                label="Show library"
-                shape="round"
-                tooltipSide="right"
-                onClick={() => store.getState().togglePanel("library", true)}
-              >
-                <PanelLeftOpen />
-              </IconButton>
-            </Panel>
-          </div>
-        )}
-        {rightPanel !== null ? (
-          <aside
+        <div className="pointer-events-none absolute inset-0 z-10">
+          {/* Top row */}
+          {/* As wide as the library below it, so the left column lines up (when it's open). */}
+          <div
             className={cn(
-              "pointer-events-auto absolute bottom-3 right-3 top-16 max-md:inset-x-2 max-md:bottom-2 max-md:top-auto max-md:h-[62dvh] max-md:w-auto",
-              rightPanel === "code" ? "w-panel-code xl:w-panel-code-xl" : "w-panel-right",
+              "pointer-events-auto absolute left-3 top-3 flex max-w-[calc(100%-1.5rem)] flex-col gap-2 max-md:left-2 max-md:top-2",
+              panels.library ? "items-stretch md:w-panel-library" : "items-start",
             )}
           >
-            {rightPanel === "code" ? (
-              <CodePanel onClose={closeRight} />
-            ) : rightPanel === "tours" ? (
-              <ToursPanel onClose={closeRight} />
-            ) : (
-              <InspectorPanel onClose={closeRight} />
+            <TopLeftBar />
+          </div>
+          <div className="pointer-events-auto absolute right-3 top-3 max-md:right-2 max-md:top-2">
+            <TopRightBar />
+          </div>
+          <div className="pointer-events-auto absolute left-1/2 top-3 -translate-x-1/2 max-lg:hidden">
+            <Toolbar />
+          </div>
+          <TourAuthoringBanner />
+
+          {/* Nested levels and alerts: centred under the top bars, in the space the panels leave. */}
+          <div
+            className={cn(
+              "pointer-events-none absolute top-16 flex flex-col items-center gap-2 max-md:inset-x-2 max-md:top-[60px]",
+              panels.library ? "md:left-clear-library" : "md:left-clear-pill",
+              rightPanel === null
+                ? "md:right-clear-pill"
+                : rightPanel === "code"
+                  ? "md:right-clear-code xl:right-clear-code-xl"
+                  : "md:right-clear-right",
             )}
-          </aside>
-        ) : (
-          <div className="pointer-events-auto absolute right-3 top-16 max-md:hidden">
-            <Panel shape="pill" className="p-1">
-              <IconButton
-                label="Show inspector"
-                shape="round"
-                tooltipSide="left"
-                onClick={() => store.getState().togglePanel("inspector", true)}
-              >
-                <PanelRightOpen />
-              </IconButton>
-            </Panel>
+          >
+            <div className="pointer-events-auto min-w-0 max-w-full">
+              <Breadcrumbs />
+            </div>
+            <VersionBanner />
+            <AssistantWorking showing={panels.library && leftTab === "assistant"} />
+            <FindPanel />
+            <YamlErrorBanner />
+            <ConflictBanner />
           </div>
-        )}
 
-        {/* Bottom: zoom, scenes and (below lg) tools, centred in the space the panels leave */}
-        {/* With the library open on tablets the zoom buttons give way to the tools (pinch still zooms). */}
-        <div
-          className={cn(
-            "pointer-events-auto absolute bottom-3 max-md:hidden",
-            panels.library ? "left-clear-library max-lg:hidden" : "left-3",
+          {/* Side panels (bottom sheets on phones) */}
+          {panels.library ? (
+            <aside className="pointer-events-auto absolute bottom-3 left-3 top-16 w-panel-library max-md:inset-x-2 max-md:bottom-2 max-md:top-auto max-md:h-[62dvh] max-md:w-auto">
+              {leftTab === "assistant" ? (
+                <AssistantPanel onClose={() => store.getState().togglePanel("library", false)} />
+              ) : leftTab === "concepts" ? (
+                <ConceptsPanel onClose={() => store.getState().togglePanel("library", false)} />
+              ) : (
+                <LibraryPanel onClose={() => store.getState().togglePanel("library", false)} />
+              )}
+            </aside>
+          ) : (
+            <div className="pointer-events-auto absolute left-3 top-16 max-md:hidden">
+              <Panel shape="pill" className="flex flex-col gap-1 p-1">
+                <IconButton
+                  label="Show library"
+                  shape="round"
+                  tooltipSide="right"
+                  onClick={() => store.getState().showLeft("library")}
+                >
+                  <PanelLeftOpen />
+                </IconButton>
+                <IconButton
+                  label="Concepts"
+                  shape="round"
+                  tooltipSide="right"
+                  onClick={() => store.getState().showLeft("concepts")}
+                >
+                  <Lightbulb />
+                </IconButton>
+                <IconButton
+                  label="Assistant"
+                  shortcut={shortcutLabel("mod+j")}
+                  shape="round"
+                  tooltipSide="right"
+                  onClick={() => commandHost.assistant?.()}
+                >
+                  <Sparkles className="text-violet" />
+                </IconButton>
+              </Panel>
+            </div>
           )}
-        >
-          <ZoomControls />
-        </div>
-        <div
-          className={cn(
-            "absolute bottom-3 flex flex-col items-center gap-2 max-md:inset-x-2 max-md:bottom-2",
-            // Clear of the zoom controls on the left and the open panel on the right.
-            panels.library
-              ? "md:left-clear-library lg:left-[calc(var(--spacing-clear-library)+var(--spacing-clear-zoom))]"
-              : "md:left-[calc(12px+var(--spacing-clear-zoom))]",
-            rightPanel === null
-              ? "md:right-clear-pill"
-              : rightPanel === "code"
-                ? "md:right-clear-code xl:right-clear-code-xl"
-                : "md:right-clear-right",
-            anySheet && "max-md:hidden",
+          {rightPanel !== null ? (
+            <aside
+              className={cn(
+                "pointer-events-auto absolute bottom-3 right-3 top-16 max-md:inset-x-2 max-md:bottom-2 max-md:top-auto max-md:h-[62dvh] max-md:w-auto",
+                rightPanel === "code" ? "w-panel-code xl:w-panel-code-xl" : "w-panel-right",
+              )}
+            >
+              {rightPanel !== "code" ? (
+                <RightPanelGrip width={rightWidth.width} onResize={rightWidth.setWidth} />
+              ) : null}
+              {rightPanel === "code" ? (
+                <CodePanel onClose={closeRight} />
+              ) : rightPanel === "tours" ? (
+                <ToursPanel onClose={closeRight} />
+              ) : rightPanel === "history" ? (
+                <HistoryPanel onClose={closeRight} />
+              ) : (
+                <InspectorPanel onClose={closeRight} />
+              )}
+            </aside>
+          ) : (
+            <div className="pointer-events-auto absolute right-3 top-16 max-md:hidden">
+              <Panel shape="pill" className="p-1">
+                <IconButton
+                  label="Show inspector"
+                  shape="round"
+                  tooltipSide="left"
+                  onClick={() => store.getState().togglePanel("inspector", true)}
+                >
+                  <PanelRightOpen />
+                </IconButton>
+              </Panel>
+            </div>
           )}
-        >
-          <div className="pointer-events-auto flex min-w-0 max-w-full justify-center">
-            <SceneStripDock />
+
+          {/* Bottom: zoom, scenes and (below lg) tools, centred in the space the panels leave */}
+          {/* With the library open on tablets the zoom buttons give way to the tools (pinch still zooms). */}
+          <div
+            className={cn(
+              "pointer-events-auto absolute bottom-3 flex flex-col items-start gap-2 max-md:hidden",
+              panels.library ? "left-clear-library max-lg:hidden" : "left-3",
+            )}
+          >
+            {showMinimap ? <Minimap /> : null}
+            <ZoomControls />
           </div>
-          <div className="pointer-events-auto flex max-w-full items-center gap-2 lg:hidden">
-            <Panel shape="pill" className="p-1 md:hidden">
-              <IconButton
-                label="Library"
-                shape="round"
-                onClick={() => store.getState().togglePanel("library", true)}
-              >
-                <Shapes />
-              </IconButton>
-            </Panel>
-            <ToolbarScroller />
-            <Panel shape="pill" className="p-1 md:hidden">
-              <IconButton
-                label="Inspector"
-                shape="round"
-                onClick={() => store.getState().togglePanel("inspector", true)}
-              >
-                <SlidersHorizontal />
-              </IconButton>
-            </Panel>
+          <div
+            className={cn(
+              "absolute bottom-3 flex flex-col items-center gap-2 max-md:inset-x-2 max-md:bottom-2",
+              // Clear of the zoom controls on the left and the open panel on the right.
+              panels.library
+                ? "md:left-clear-library lg:left-[calc(var(--spacing-clear-library)+var(--spacing-clear-zoom))]"
+                : "md:left-[calc(12px+var(--spacing-clear-zoom))]",
+              rightPanel === null
+                ? "md:right-clear-pill"
+                : rightPanel === "code"
+                  ? "md:right-clear-code xl:right-clear-code-xl"
+                  : "md:right-clear-right",
+              anySheet && "max-md:hidden",
+            )}
+          >
+            <div className="pointer-events-auto flex min-w-0 max-w-full justify-center">
+              <SceneStripDock />
+            </div>
+            <div className="pointer-events-auto flex max-w-full items-center gap-2 lg:hidden">
+              <Panel shape="pill" className="p-1 md:hidden">
+                <IconButton
+                  label="Library"
+                  shape="round"
+                  onClick={() => store.getState().togglePanel("library", true)}
+                >
+                  <Shapes />
+                </IconButton>
+              </Panel>
+              <ToolbarScroller />
+              <Panel shape="pill" className="p-1 md:hidden">
+                <IconButton
+                  label="Inspector"
+                  shape="round"
+                  onClick={() => store.getState().togglePanel("inspector", true)}
+                >
+                  <SlidersHorizontal />
+                </IconButton>
+              </Panel>
+            </div>
           </div>
+
+          <EmptyCanvasHint libraryOpen={panels.library} />
         </div>
 
-        <EmptyCanvasHint libraryOpen={panels.library} />
+        <BusyOverlay />
+        {dialog === "export" ? <ExportDialog /> : null}
+        <ShareDialog />
+        <ShortcutsDialog />
+        <CommandPalette />
+        <OpenDialog />
+        <ConceptGallery />
       </div>
-
-      <BusyOverlay />
-      {dialog === "export" ? <ExportDialog /> : null}
-      <ShareDialog />
-      <ShortcutsDialog />
-      {dialog === "history" ? <HistoryDialog /> : null}
-      <OpenDialog />
-    </div>
+    </CommandHostProvider>
   );
 }
 
@@ -310,6 +411,38 @@ function TourAuthoringBanner() {
           onClick={() => store.getState().setTourAuthoring(null)}
         >
           Done
+        </Button>
+      </Panel>
+    </div>
+  );
+}
+
+/** The assistant is changing the diagram while its panel is out of sight: say so, and offer Stop. */
+function AssistantWorking({ showing }: { showing: boolean }) {
+  const assistant = useAssistant();
+  const store = useEditorStore();
+  const working = useEditor((s) => s.assistant !== null);
+  const name = useConversation((s) => s.config?.name ?? "The assistant");
+  if (!working || showing) return null;
+  return (
+    <div className="pointer-events-auto">
+      <Panel
+        shape="pill"
+        className="flex items-center gap-2 py-1 pl-3 pr-1 text-label"
+        role="status"
+      >
+        <Sparkles aria-hidden className="size-3.5 animate-pulse text-violet" />
+        <span className="text-fg-soft">{name} is changing the diagram…</span>
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-7"
+          onClick={() => store.getState().showLeft("assistant")}
+        >
+          Show
+        </Button>
+        <Button size="sm" variant="secondary" className="h-7" onClick={() => assistant.stop()}>
+          Stop
         </Button>
       </Panel>
     </div>

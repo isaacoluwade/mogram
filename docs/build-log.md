@@ -409,3 +409,358 @@ an office sharing an IP) could exhaust.
   `nested`, `navigation`.
 - `next build`: no warnings.
 - Screenshots in `docs/screenshots/`: 104.
+
+## Step 19 — The editor rebuilt from a study of draw.io (2026-10-04)
+
+**Studied draw.io's source** (`drawio/`, cloned locally): its architecture, connectors, shapes
+and library, format panel, menus and commands, canvas gestures and document workflow, each
+written up with file and line references in `docs/research/drawio/01`–`07`, measured against
+Mogram (`00`) and turned into a plan of six milestones (`08-gap-analysis.md`). Every item in it
+is now done.
+
+- **M1 — Connectors** (D-59 – D-63): arrowheads per end from a curated set (filled, outline, ER
+  ends) with a size; line pattern, width, rounded or sharp corners and line jumps; bends on every
+  route, added by dragging a segment's midpoint and removed when they do nothing; fixed ends and
+  label places in the layout; bends follow moved elements; dropping a component on a connection
+  splits it.
+- **M2 — Commands** (D-64, D-65): one registry of commands behind the keyboard, the context menu
+  for each kind of selection, the command palette (⌘K or /), the Diagram menu and the shortcuts
+  list; Find (⌘F); lock; paste in place; copy and paste style; copy as image; resize with keys.
+- **M3 — Inspector** (D-66): Element, Style and Arrange tabs remembered per mode; folding
+  sections remembered per kind; true mixed values; position and size fields; an All properties
+  grid; a resizable panel.
+- **M4 — Shapes and library** (D-67, D-71): eleven outlines from one geometry registry (drawn,
+  hit-tested, connected and exported the same way), tones, fill, outline, corners, shadow,
+  opacity and label styling; one adjustable measure per shape with a diamond handle; Shapes,
+  Containers and Annotations first in the library, with search across shapes and icons.
+- **M5 — Canvas** (D-68, D-70): alignment, spacing and size guides; hover arrows that add a
+  connected copy; quick add by double-click; copy by dragging; a minimap; locking; a touch
+  threshold.
+- **M6 — The document** (D-69, D-70): undo returns to the level of the change; links and data
+  on any element, with `%key%` placeholders and diagram-wide data; PNG and SVG exports that open
+  again as the diagram; PDF; Tidy up; one preferences store; Find across nested diagrams; named
+  styles.
+- **Organisation** (D-72): the quick bar declared in one table per kind of selection, with "More
+  in inspector"; big library sections draw their tiles as they scroll in.
+
+Bugs found on the way and fixed: a selected shape's resize handles sat under its own hover ring;
+"?" opened the palette through the "/" key's physical-key fallback; right-clicking a bend
+dropped the selection; the quick bar covered a connection's end tiles; typed and arrow-stepped
+positions merged into one undo step; the minimap's view could fall off the map.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit, component and route tests: `@mogram/core` 205, `@mogram/icons` 104, web 191 — 500 in
+  total. New: bend following, copied and named styles, locking, every property, shapes and their
+  handles, links, data and placeholders, tidy up, command keys and the registry, smart guides,
+  editable exports, preferences, the quick-bar table.
+- Browser suite (20 spec files): 163 tests against the development server and the same 163
+  against `next start` with fresh throwaway secrets and its own database (the cloud spec, which
+  needs the development mailbox, runs separately). New specs: `commands`, `inspector`, `shapes`,
+  `canvas`, `document`; `connectors` grew with jumps, following and splitting.
+- `next build`: no warnings.
+- Screenshots in `docs/screenshots/`: 130.
+
+## Step 20 — Canvas themes with real variety, and a cleaner colour picker (2026-10-04)
+
+- **Colour picker.** The selected swatch's ring was cut off under the search field (the colours
+  scrolled in a box with no padding at the top); the box now pads inside, and the panel uses one
+  spacing throughout. Gradient swatches showed a second shape inside the circle: their 1px
+  border let the gradient repeat underneath, so the rim showed its other end. Swatches, the
+  gradient style previews and every swatch face now paint their colour once across the whole
+  shape and draw the outline as an inset ring over it (D-73).
+- **Canvas themes** (D-73): 20 new themes beside the 10 that stay — Slate; Ocean, Teal, Plum,
+  Wine, Olive; Aurora, Twilight, Sunset, Lagoon, Nebula; Blueprint, Chalkboard; Sky, Mint,
+  Blush, Lilac, Butter, Dawn, Seafoam — each with its own tiles, borders, lines and labels. The
+  Canvas tab shows ten with real variety, each tile previewing a node, a line and a label in the
+  theme's colours; "See all" shows all thirty by family, with names, in place.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit tests: `@mogram/core` 207, `@mogram/icons` 104, web 191 — 502. New: every theme's labels
+  and muted text readable on every colour of its background; every theme in one family; a
+  featured set that spans every family.
+- Browser suite: 164 tests against the development server (new: "See all" shows every theme
+  by family, and a theme picked there joins the first row).
+- Screenshots in `docs/screenshots/`: 132.
+
+## Step 21 — A grid that shows the snap grid, and the picker beside the inspector (2026-10-04)
+
+- **Grid** (D-74): every mark is a snap point, in two levels: single cells from 75% zoom up
+  (fading out by 60%) and a stronger mark every 10 cells, on the round numbers the Arrange tab,
+  the position hint and the YAML use. Zoomed out, only the 10-cell marks remain and the grid
+  eases lighter, so a small diagram isn't buried in dots. Dots or lines (like draw.io's), chosen
+  in the Canvas tab. Shown by default, and both choices remembered in the browser rather than
+  the file.
+- **Colour picker** opens beside the inspector, level with its button, instead of over the
+  inspector's own controls. In development, Radix's anchor was being taken back by a re-attached
+  trigger, so the anchor is renewed each time the picker opens.
+- **Custom backgrounds** are named: "Brown · custom", or the preset gradient's name.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit tests: `@mogram/core` 207, `@mogram/icons` 104, web 196 — 507. New: grid levels (single
+  cells from 75%, fading by 60%; 10-cell marks never closer than 16px; lighter zoomed out),
+  grid preferences.
+- Browser suite: 165 tests against the development server. New: dots or lines with every line
+  on the 8px grid, remembered after a reload; the picker beside the inspector; the custom
+  background's name.
+- Screenshots in `docs/screenshots/`: 133.
+
+## Step 22 — The library, reorganised; containers by cloud (2026-10-04)
+
+- **Alignment** (D-75): the title bar is as wide as the library below it (they were 269 and
+  288 px), and the library's list is padded inside its scrolling area, so its first row and its
+  focus ring no longer sit under the search field.
+- **Library** (D-75): search across everything, grouped by library; Recent (added lately, then
+  what the diagram uses); Basics with Shapes, Containers, Notes and Generic tabs; and Icons, one
+  library at a time from a menu (Uploaded is one of them, with the upload button), each
+  category a row with a glimpse of its icons that opens in place. The eight filter pills are
+  gone. Tiles share one size and wrap long names to two lines.
+- **Containers by cloud** (D-75): cloud-neutral kinds named the way the diagram's cloud names
+  them, in its nesting order, with the cloud's official group icons. `network` replaces `vnet`
+  and `vpc` (both still read); `cloud`, `account`, `public-subnet`, `private-subnet`,
+  `security-group`, `scaling-group` and `on-premises` are new. The templates use the new names.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit tests: `@mogram/core` 213, `@mogram/icons` 104, web 196 — 513. New: names, icons and
+  nesting order per cloud; `vnet` and `vpc` read as `network`; a diagram's cloud from its
+  settings or its icons; a new container written with its cloud's icon.
+- Browser suite: 166 tests against the development server. New: AWS containers in AWS's names
+  and order, a VPC added with its group icon, Azure's names for the same kinds, and the title
+  bar lined up with the library; the provider tests drive the library menu and open categories.
+- Screenshots in `docs/screenshots/`: 134.
+
+## Step 23 — Version history and the assistant (2026-10-04)
+
+Agreed with the product owner first (plan: `docs/plans/ai-and-history.md`).
+
+- **Version history** (D-76): a panel on the right with versions by day, each with what changed
+  ("Added Payments API · removed 1"), who made it and a thumbnail; one version per working
+  session; an earlier version on the canvas, read-only, with its changes drawn over it (against
+  the version before, or since then) and a banner to restore it (as a new version on top), copy
+  it or go back; Bring back for selected elements or scenes; named versions, kept for good;
+  drafts keep history in the browser and take it to the account. New core: `@mogram/core/diff`
+  and `restoreElements`. Database: revisions gain name, source, label, changes and
+  `restored_from_at` (migration 0002).
+- **Architecture review** (D-77): `@mogram/core/lint`, shown as Suggestions in the diagram's
+  inspector; the templates pass it.
+- **The assistant** (D-78 … D-81): a tab beside the Library (✨, ⌘J) that builds and changes the
+  diagram with you. Provider-neutral server (Claude, DeepSeek, OpenAI and compatible APIs, and a
+  scripted provider), a cached briefing (the whole file format and an example), tools mapped to
+  core edits (new `insertYaml` and `nestElements`) with every change checked, questions with
+  options and previews, plans, change cards with Show and Undo, selection and @mentions as
+  context, Stop, Follow, and the canvas glowing where it works. A turn is one undo step and one
+  version; the person's edits wait meanwhile. "Describe what you want to build" on the diagrams
+  page starts a diagram the assistant builds. `pnpm eval:ai` measures any provider. Database:
+  `ai_usage` (migration 0003), tokens only.
+- **Phones**: both top bars fit at 390 px again (the diagram menu was under the right-hand bar);
+  Export moves into the diagram menu there, and the save status is shortened.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit tests: `@mogram/core` 229, `@mogram/icons` 104, web 233 — 566. New: what changed between
+  versions and bringing things back; history rules; the review's rules; adding YAML snippets
+  and nesting; the tools (refused breaks, unknown icons with the closest real ones, asking
+  before big removals, replay matching the server); providers' wire formats and streams; the
+  turn loop (changes, questions, plans, a refused change fixed, stop, provider failure); the
+  route; limits; scripted evaluations; a turn as one undo step.
+- Browser suite: 180 tests against the development server (scripted assistant); 175 against a
+  production build (`next start`, everything but the `cloud` journeys, which need the
+  development mailbox). New: version history for drafts and the cloud, a draft's history going
+  to the account, suggestions, the assistant (one undo step and one version, questions answered
+  by number, plan then build, edits waiting and Stop, pointing at things, describe a diagram).
+- Real model calls weren't run: this environment has no provider key. `pnpm eval:ai` runs them
+  once one is set.
+- Screenshots in `docs/screenshots/`: 140.
+
+## Step 24 — Capacity, scaling and concepts (2026-10-05)
+
+Agreed with the product owner first (plan: `docs/plans/capacity-and-concepts.md`): scaling
+shown from what the diagram says, which anyone can set up on their own elements, not a
+one-off animation.
+
+- **Capacity in the format** (D-82): `scale` (copies between a least and a most, or sizes with
+  cores, memory and disks), `capacity`, `routing`, `hit` and `queue` on components; `traffic`
+  and `share` on connections; and in scenes, `users_to_lb: 5x`, shares, hit rates, and copies or
+  a size to hold at. Plain-language diagnostics; written back readably (`3x`, `70%`, a size per
+  line); the version diff names them.
+- **The engine** (`@mogram/core/capacity`): traffic through the graph (load balancers split,
+  calls copy, caches pass only misses, queues hold what their consumers can't take, backups
+  take over, down elements pass nothing), the copies or size each element needs, and overload
+  from load, as part of state resolution. Traffic is relative: a connection's `traffic`
+  multiplies what it carries. A deterministic timeline turns each new plan into motion: copies
+  start one after another and leave after a cool-down, newest first; a resize restarts the
+  machine and its traffic waits.
+- **Drawing**: a scale set (copies with the element's own icon in a frame that grows and shrinks
+  inside a faint outline of its most, a ring and a tick as each starts, traffic fanning out to
+  every copy, a load bar each); a container holding only it grows and shrinks with it. A machine
+  for scaling up (cores light up, memory fills, disks slide in, a restart, a dashed ceiling at
+  its largest size). Load bars, queue backlogs and cache hit rates on ordinary components; dots
+  follow the traffic. Layout reserves room for the most copies and the largest size. The same
+  in the editor, the viewer, thumbnails and exports.
+- **Inspector**: Scaling (off, out, up; copies, target, sizes with presets for virtual machines,
+  databases and tiers, add and remove sizes) and Traffic (routing, what it handles, cache hit
+  rate, queue) on components; Traffic (level, share) on connections. With a scene selected,
+  traffic, shares and hit rates are that scene's, and copies or a size can be held there.
+- **The inspector explains the scene**: Scaling opens with what the current scene does to the
+  element — the traffic reaching it, the copies or size it runs at and why (or that it's at its
+  largest and overloaded), and which connection the scene makes busier, one click away; the
+  size in use is marked. Under State, where the choice applies (this scene or every scene) and
+  why the canvas may show something else (overloaded by its load).
+- **Traffic slider** in the editor and, for viewers allowed "what if", in the viewer: 0× to 10×,
+  never saved; the viewer's Reset brings it back.
+- **Concepts** (D-83): a `concept:` section (summary and roles) makes any diagram a concept. Nine
+  built in (horizontal and vertical scaling, autoscaling, scale up vs out, load balancing,
+  caching, failover, queue load levelling, canary release). In the library, each opens into a
+  dialog that plays its scenes; Apply to your diagram (parts filled from the selection or
+  look-alikes), Insert the example, or Open it as a new diagram. Your own concepts: Make it a
+  concept in the Diagram inspector, or Make a concept from the selection; drafts and account
+  diagrams with a `concept:` section appear under Yours. Roles follow renames and deletes.
+- **The assistant**: `set_scaling` and `apply_concept` tools, capacity values in `update_scene`
+  and `update_elements`, the format's new sections in its briefing, and a scripted scenario.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean. `next build`: no
+  warnings.
+- Unit tests: `@mogram/core` 267, `@mogram/icons` 104, web 236 — 607. New: capacity in the
+  format and written back; the engine (splits, calls, caches, queues, backups, containers,
+  relative traffic, a seeded property test that splits never invent or lose traffic and copies
+  stay within their bounds); the timeline (staggered starts, cool-down, cancelled starts, resizes);
+  scaling presets; concepts (all nine read cleanly and every scene changes something; applying
+  to scale out and up, a failover standby joined, keeping what's set and merging scenes,
+  refusals, suggestions from the selection; inserting with fresh names; the concept section,
+  renames and deletes); the assistant's `set_scaling`, `apply_concept` and scene capacity.
+- Browser suite: 188 tests against the development server; 183 against a production build
+  (`next start`, everything but the five `cloud` journeys, which need the development mailbox).
+  New: a scale set and a machine through a spike and back; the inspector (scaling, sizes,
+  presets, traffic, values held in a scene); the traffic slider in the editor and the viewer;
+  concepts (watch, apply from the selection, insert, search, your own from a selection, open as
+  a new diagram, offered from the account); the assistant setting up scaling.
+- Screenshots in `docs/screenshots/`: 154.
+
+## Step 25 — Traffic on the arrow (2026-10-05)
+
+Agreed with the product owner after using Step 24 (plan: `docs/plans/traffic-patterns.md`):
+showing scaling took a scaling setting, a scene and switching scenes; "how much traffic" lived in
+five places; the floating traffic slider added complexity. Now traffic belongs on the arrow and
+can rise and fall on its own (D-84).
+
+- **Traffic patterns in the format**: `traffic: waves` (quiet for half of each cycle, busy for the
+  other half), `traffic: bursts` (quiet, with a short burst), or
+  `{ pattern, high, low, every }`; `traffic: 2x` stays the steady level. Plain-language
+  diagnostics (an unknown pattern with did-you-mean, cycles kept between 4 s and 120 s, quiet and
+  busy swapped); written back as briefly as it can be; the version diff names it.
+- **Behaviour**: the plan follows the pattern at each change of phase, and the capacity timeline
+  follows the plan lazily from the time asked about, so copies start as a wave rises and drain as
+  it falls, cycle after cycle, the same in the editor, the viewer, thumbnails and exports, however
+  often the picture is drawn (a tab left in the background catches up). An animated export with a
+  pattern lasts whole cycles of it and of every motion, starting from its second time round, so
+  it loops; capacity counts as something that moves, so GIF and WebP are offered.
+- **One Traffic section on the arrow**: flow, how much (Steady, Waves or Bursts, with quiet and
+  busy levels and the cycle), a scene's hold-at level, and its share of a split. Dot speed and
+  density move to Style as look only. In a diagram that models capacity an idle arrow carries its
+  traffic, so it shows as Traffic (in the inspector and the quick bar) and Idle isn't offered.
+- **The inspector says what happens over the cycle**: "Traffic reaching it rises and falls
+  between 1× and 5×. It runs 2 copies when quiet and 8 when busy (63%)", with the arrow that
+  sets it one click away; under State, when busy traffic overloads it.
+- **Plain words for the settings**: what one copy takes moved into Scaling ("Each copy takes
+  1×"); a component's other traffic settings became **Requests** ("Sends to" all or one of the
+  next steps, "Cache" answers, "Queue"), and every field has a line saying what it means. The
+  readout says why something stops short of its most copies ("That's all it needs: it would use
+  all 12 only with more than 7.7× reaching it").
+- **Scaling up without restarts**: a machine grows (or shrinks) smoothly into its new size over a
+  second, taking traffic all the while; the restart, its spinner and the pause in traffic are
+  gone.
+- **The traffic slider is gone** from the editor and the viewer, with its plumbing.
+- **Concepts**: horizontal scaling, vertical scaling, autoscaling, scale up vs out, caching and
+  queue load levelling use patterns, so their previews play on their own; failover, canary,
+  load balancing, a cold cache and vertical scaling's ceiling keep their scenes. Applying a
+  concept brings its pattern to where traffic enters on its way to the picked elements.
+- **The assistant**: patterns in `update_elements`, the briefing and tool descriptions; the
+  scripted scenario now gives the arrow waves instead of adding scenes.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean. `next build`: no
+  warnings.
+- Unit tests: `@mogram/core` 274, `@mogram/icons` 104, web 236 — 614. New: patterns read, written
+  and diagnosed; the moments they change; the plans when quiet and busy, and a scene's level
+  holding an arrow steady; a scale set growing and shrinking cycle after cycle; the same picture
+  however often it's asked for, and after a long gap; concepts telling their story with patterns
+  and bringing them when applied; the assistant's pattern-aware tools.
+- Browser suite: 190 tests against the development server; 185 against a production build
+  (`next start`, everything but the five `cloud` journeys, which need the development mailbox).
+  New: waves on an arrow scaling a set out and back in with no scenes (editor and viewer), the
+  inspector's Traffic section and its account of the cycle, an animated export of waves lasting
+  whole cycles (120 frames for 6 s waves at 10 a second); concepts and the assistant with
+  patterns. The traffic slider's journeys are gone with it.
+- Screenshots in `docs/screenshots/`: 155.
+
+## Step 26 — A concept library that holds hundreds (2026-10-05)
+
+Agreed with the product owner (plan: `docs/plans/concept-library.md`): concepts sat in the
+building-blocks library as a flat list with cut-off summaries, no previews and no grouping —
+fine for nine, not for the hundreds planned (networking, Azure, AWS, Git…). This step is the
+structure and the UI; adding concepts comes later (D-85).
+
+- **Filed by topic and platform**: `concept:` takes `topic` (ten, from scaling to Git and
+  architecture patterns), `platform` (any, Azure, AWS, Google Cloud, Kubernetes) and `tags`,
+  with did-you-mean warnings for a mistyped topic or platform. A concept with parts is a
+  **pattern** you apply; one without is an **explainer** you insert or open.
+- **`@mogram/concepts`**: one `.mogram.yaml` per concept under `content/<topic>/`, the nine moved
+  there; a generated catalog that lists, filters and searches without loading any diagram;
+  diagrams loaded a topic at a time; search that ranks titles, then tags, then the rest. Its test
+  refuses a concept that doesn't read cleanly, tell its story or sit under its topic, and a
+  catalog that's out of date.
+- **A Concepts tab**: the left panel is now Library (building blocks only) · Concepts ·
+  Assistant. Search, Yours and Recently used (two by two), and topics with counts that open into
+  the topic, with Browse all on the Topics heading.
+  Concepts show as small cards, two to a row, each drawing its diagram as it comes into view and
+  playing while the pointer is over it. A View menu command and the collapsed panel's rail open
+  it.
+- **Browse all**: a gallery with topics down the side (a select on phones), search, a count, and
+  a grid of larger cards with the summary. Opening one shows the concept window over the
+  gallery; using it closes both.
+- **Filters only when they'd change something**: a platform filter appears once some concepts
+  are a platform's own, listing only those platforms with counts ("AWS (3)"), opening on the
+  diagram's cloud and showing that platform's own first (general concepts always show); Apply /
+  Explain appears once there are both kinds. With the nine general patterns today, neither
+  shows.
+- **The concept window** says the topic, platform and where it comes from; an explainer offers
+  Insert and Open only. **Apply to your elements** lists what will change as the parts are
+  picked ("Web scales out, 1 to 8 copies", "Traffic on Shoppers → App gateway rises and falls…"),
+  worked out by applying the concept to a copy, so the list and the result can't disagree; when
+  Apply can't run yet it says why. The same lines are the message after applying, now covering
+  routing, queues, shares and backups too.
+- **The Diagram inspector's Concept section** sets the topic, platform and tags, and says which
+  kind the concept is.
+- **The assistant**: `find_concepts` searches the catalog (by words, topic, platform) and returns
+  ids with their parts; `apply_concept` takes an id, and the server sends the concept's file
+  with the change, so the browser replays it without the library in the editor's bundle.
+- **Smaller things**: the Library's and Concepts' search placeholders no longer cut off; a
+  dialog's footer (the concept window, Export, rename and delete) no longer rides up over the
+  space above it, leaving that space under its buttons.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean. `next build`: no
+  warnings.
+- Unit tests: `@mogram/core` 274, `@mogram/icons` 104, `@mogram/concepts` 6, web 245 — 629. New:
+  topics, platforms and tags read, written and diagnosed; what a concept is (`conceptInfo`); the
+  catalog (every concept valid, filed under its topic, up to date; search order; lazy loading);
+  browsing (platform, topic, yours, recently used, kind, search, counts, loading once); the
+  assistant finding concepts and refusing unknown ids.
+- Browser suite: 192 tests against the development server; 187 against a production build
+  (`next start`, everything but the five `cloud` journeys, which need the development mailbox).
+  New or changed: the Concepts tab (platform from the diagram, a topic's cards, Recently used,
+  search), the gallery (topics, search, kind, using a concept from it), topic and tags in the
+  inspector, an explainer of your own, an account concept under Yours, and both on a phone.
+- Screenshots in `docs/screenshots/`: 160.

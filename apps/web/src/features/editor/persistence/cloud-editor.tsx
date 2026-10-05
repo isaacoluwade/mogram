@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
 import type { ProjectFiles } from "@mogram/core/model";
+import type { Checkpoint } from "@/lib/history/rules";
 import type { DiagramDetail, Visibility } from "@/lib/api/contracts";
 import { api } from "@/lib/api/client";
 import { useMounted } from "@/lib/use-mounted";
@@ -9,6 +11,7 @@ import { nameOf } from "@/features/files/project-name";
 import { EditorProvider, useEditorStore } from "../editor-context";
 import { EditorShell } from "../editor-shell";
 import { useAutosave } from "./autosave";
+import type { HistorySource } from "@/features/history/source";
 import { EditorLoading } from "../../../components/screens";
 import { EditorHostContext, initialPanels, type EditorHost } from "./host";
 import { useThumbnails } from "./thumbnails";
@@ -41,12 +44,23 @@ function CloudHost({ initial, children }: { initial: DiagramDetail; children: Re
     allowViewerState: initial.allowViewerState,
   });
 
+  const router = useRouter();
   const persist = useCallback(
-    async (files: ProjectFiles) => {
+    async (files: ProjectFiles, checkpoint?: Checkpoint) => {
       const result = await api.saveDiagram(initial.id, {
         files,
         baseVersion: version.current,
         name: nameOf(files),
+        // Restores go through their own endpoint; assistant turns and names come with the save.
+        ...(checkpoint !== undefined && checkpoint.source !== "restore"
+          ? {
+              checkpoint: {
+                source: checkpoint.source,
+                ...(checkpoint.label !== undefined ? { label: checkpoint.label } : {}),
+                ...(checkpoint.name !== undefined ? { name: checkpoint.name } : {}),
+              },
+            }
+          : {}),
       });
       version.current = result.version;
     },
@@ -75,6 +89,25 @@ function CloudHost({ initial, children }: { initial: DiagramDetail; children: Re
         allowViewerState: latest.allowViewerState,
       });
     };
+    const history: HistorySource = {
+      key: ["revisions", initial.id],
+      list: () => api.listRevisions(initial.id),
+      files: (revisionId) => api.getRevisionFiles(initial.id, revisionId),
+      rename: (revisionId, name) => api.nameRevision(initial.id, revisionId, name),
+      nameCurrent: async (name) => {
+        if (!(await autosave.flush())) throw new Error("Save the diagram first.");
+        await api.nameCurrentVersion(initial.id, name);
+      },
+      restore: async (revisionId) => {
+        if (!(await autosave.flush())) throw new Error("Save the diagram first.");
+        await api.restoreRevision(initial.id, revisionId);
+        await reload();
+      },
+      copy: async (revisionId) => {
+        const created = await api.duplicateDiagram(initial.id, revisionId);
+        router.push(`/edit/${created.id}`);
+      },
+    };
     return {
       kind: "cloud",
       id: initial.id,
@@ -82,6 +115,8 @@ function CloudHost({ initial, children }: { initial: DiagramDetail; children: Re
       viewerHref: `/edit/${initial.id}/view`,
       share,
       saveNow: () => autosave.flush(),
+      checkpoint: (checkpoint) => autosave.checkpoint(checkpoint),
+      history,
       reload,
       resolveConflict: async (choice) => {
         try {
@@ -112,7 +147,7 @@ function CloudHost({ initial, children }: { initial: DiagramDetail; children: Re
         });
       },
     };
-  }, [initial.id, share, autosave, store]);
+  }, [initial.id, share, autosave, store, router]);
 
   return <EditorHostContext value={host}>{children}</EditorHostContext>;
 }

@@ -90,6 +90,15 @@ export const verification = pgTable(
 // Mogram tables
 
 /** Project files: path → text (binary assets as data: URLs). The YAML is the source of truth (D-4). */
+/** A version's change summary (see `@mogram/core/diff`). */
+export interface RevisionChanges {
+  readonly line: string;
+  readonly added: number;
+  readonly removed: number;
+  readonly changed: number;
+  readonly moved: number;
+}
+
 export type StoredFiles = Record<string, string>;
 
 export const diagram = pgTable(
@@ -134,6 +143,16 @@ export const revision = pgTable(
     version: integer("version").notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
+    /** A name someone gave this version; named versions are never cleaned up. */
+    name: text("name"),
+    /** How it was made: save, create, restore, ai (an assistant turn), named, import. */
+    source: text("source").notNull().default("save"),
+    /** What the source adds: the prompt of an assistant turn. */
+    label: text("label"),
+    /** What changed since the version before (counts and one line), worked out on save. */
+    changes: jsonb("changes").$type<RevisionChanges>(),
+    /** For a restore: when the version it brought back was made. */
+    restoredFromAt: timestamp("restored_from_at", { withTimezone: true }),
   },
   (table) => [index("revision_diagram_created_idx").on(table.diagramId, table.createdAt)],
 );
@@ -148,4 +167,37 @@ export const authThrottle = pgTable("auth_throttle", {
   resetAt: timestamp("reset_at", { withTimezone: true }).notNull(),
 });
 
-export const schema = { user, session, account, verification, diagram, revision, authThrottle };
+// -------------------------------------------------------------------------------------------------
+// Assistant usage: one row per turn, for limits and cost (the prompt itself isn't kept).
+
+export const aiUsage = pgTable(
+  "ai_usage",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /** Null for someone without an account (when the server allows that). */
+    userId: text("user_id").references(() => user.id, { onDelete: "set null" }),
+    provider: text("provider").notNull(),
+    model: text("model").notNull(),
+    inputTokens: integer("input_tokens").notNull().default(0),
+    outputTokens: integer("output_tokens").notNull().default(0),
+    cacheReadTokens: integer("cache_read_tokens").notNull().default(0),
+    cacheWriteTokens: integer("cache_write_tokens").notNull().default(0),
+    /** Model calls in the turn. */
+    steps: integer("steps").notNull().default(0),
+    /** How it ended: end, question, plan, limit, stopped, error. */
+    outcome: text("outcome").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [index("ai_usage_user_created_idx").on(table.userId, table.createdAt)],
+);
+
+export const schema = {
+  user,
+  session,
+  account,
+  verification,
+  diagram,
+  revision,
+  authThrottle,
+  aiUsage,
+};

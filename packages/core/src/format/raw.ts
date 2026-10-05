@@ -6,6 +6,7 @@ import type {
   Component,
   Connection,
   Container,
+  DataValue,
   Decoration,
   Group,
   LayoutEntry,
@@ -13,6 +14,7 @@ import type {
   Tour,
 } from "../model/types";
 import { type CanvasThemeName } from "../presets/names";
+import type { ConceptPlatform, ConceptTopic } from "../presets/concepts";
 import type { Paint } from "../presets/paint";
 import type { Position } from "./diagnostics";
 
@@ -24,15 +26,26 @@ export interface Ref {
   readonly at: Position;
 }
 
+export interface RawConcept {
+  readonly at: Position;
+  readonly summary: string | null;
+  readonly topic: ConceptTopic | null;
+  readonly platform: ConceptPlatform;
+  readonly tags: readonly string[];
+  readonly roles: { element: Ref; label: string; optional: boolean }[];
+}
+
 export interface RawSettings {
   readonly at: Position;
   name: string | null;
   description: string | null;
+  concept: RawConcept | null;
   theme: CanvasThemeName | null;
   background: Paint | null;
   grid: string | null;
   libraries: string[] | null;
   ports: Map<string, Ref>;
+  data: ReadonlyMap<string, DataValue>;
 }
 
 export interface RawComponent {

@@ -28,8 +28,9 @@ import {
 import { Panel, ToolbarDivider } from "@/components/ui/panel";
 import { cn } from "@/lib/cn";
 import { useEditorShallow, useEditorStore } from "../editor-context";
-import { shortcutLabel } from "../shortcuts";
+import { shortcutLabel } from "../commands/keys";
 import type { Tool } from "../store/editor-store";
+import { usePreference } from "@/lib/preferences";
 
 interface ToolInfo {
   readonly tool: Tool;
@@ -55,12 +56,12 @@ const MORE = TOOLS.filter((item) => !item.phone);
 /** Creation tools with their shortcut letters (Cloudairy pattern), in Eden's floating style. */
 export function Toolbar() {
   const store = useEditorStore();
-  const { tool, canUndo, canRedo, showGrid } = useEditorShallow((s) => ({
+  const { tool, canUndo, canRedo } = useEditorShallow((s) => ({
     tool: s.tool,
     canUndo: s.past.length > 0,
     canRedo: s.future.length > 0,
-    showGrid: s.showGrid,
   }));
+  const showGrid = usePreference("showGrid");
   const hidden = MORE.find((item) => item.tool === tool);
   return (
     <Panel shape="pill" role="toolbar" aria-label="Tools" className="flex items-center gap-0.5 p-1">

@@ -2,6 +2,8 @@
 
 import { createContext, use, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import type { Checkpoint } from "@/lib/history/rules";
+import type { HistorySource } from "@/features/history/source";
 import { NARROW_WIDTH } from "../store/editor-store";
 
 /**
@@ -16,6 +18,10 @@ export interface EditorHost {
   readonly viewerHref: string;
   /** Stores what is on screen now; false when it could not be stored (the reason is shown). */
   saveNow(): Promise<boolean>;
+  /** Stores what is on screen now as its own version (an assistant turn, a named version). */
+  checkpoint(checkpoint: Checkpoint): Promise<boolean>;
+  /** This diagram's versions. */
+  readonly history: HistorySource;
   /** Cloud: resolve a save conflict by loading the newer version or overwriting it. */
   resolveConflict?(choice: "reload" | "overwrite"): Promise<void>;
   /** Cloud: load the latest saved version from the server (after restoring a revision). */

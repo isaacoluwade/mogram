@@ -4,11 +4,21 @@ import type { Group as GroupModel } from "@mogram/core/model";
 import { useEditor } from "../editor-context";
 import { CommitInput, InspectorSection } from "./fields";
 import { useEdit } from "./shared";
+import type { InspectorTab } from "./tabs";
 
-/** A group outline: its label, and its members (each can be taken out). */
-export function GroupInspector({ group }: { group: GroupModel }) {
+/** A group outline: its label, and its members (each can be taken out). Ungroup is on Arrange. */
+export function GroupInspector({ group, tab }: { group: GroupModel; tab: InspectorTab }) {
   const { set } = useEdit();
   const diagram = useEditor((s) => s.parsed().diagram);
+  if (tab === "arrange") return null;
+  if (tab === "style")
+    return (
+      <InspectorSection title="Style">
+        <p className="text-caption text-fg-muted">
+          A group is a dashed outline drawn around its members; it takes no style of its own yet.
+        </p>
+      </InspectorSection>
+    );
   return (
     <>
       <InspectorSection title="Label">
@@ -46,9 +56,6 @@ export function GroupInspector({ group }: { group: GroupModel }) {
             </li>
           ))}
         </ul>
-        <p className="mt-2 text-caption text-fg-muted">
-          Groups are drawn around their members wherever they sit, so they have no position.
-        </p>
       </InspectorSection>
     </>
   );

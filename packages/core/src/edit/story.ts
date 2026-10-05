@@ -1,10 +1,11 @@
 import { Scalar, YAMLMap, isMap, isScalar, type Node } from "yaml";
-import type { Diagram, ProjectFiles, Tour } from "../model/types";
+import type { Diagram, ProjectFiles, SceneCapacity, Tour } from "../model/types";
 import { humanize, isValidName, toName, uniqueName } from "../model/names";
 import type { FlowPreset, MotionPreset, StatePreset } from "../presets/names";
 import { mainPath } from "../tours/graph";
 import { edit, type EditContext, type EditResult } from "./context";
 import { EditError, flowMap, renameKey, scalarString, setKey } from "./session";
+import { formatMultiple, formatPercent } from "./capacity";
 
 // -------------------------------------------------------------------------------------------------
 // Scenes (SC-5, SC-6)
@@ -106,6 +107,55 @@ export interface SceneValue {
   readonly state?: StatePreset | null;
   readonly flow?: FlowPreset | null;
   readonly motion?: MotionPreset | null;
+  /** Traffic, share, hit rate, copies or size in the scene; left out, what's there stays. */
+  readonly capacity?: SceneCapacity | null;
+}
+
+/** A scene line's capacity values, written readably (`traffic: 5x`, `share: 10%`). */
+function capacityEntries(capacity: SceneCapacity | null | undefined): [string, string | number][] {
+  if (capacity == null) return [];
+  const out: [string, string | number][] = [];
+  if (capacity.traffic !== undefined) out.push(["traffic", formatMultiple(capacity.traffic)]);
+  if (capacity.share !== undefined) out.push(["share", formatPercent(capacity.share)]);
+  if (capacity.hit !== undefined) out.push(["hit", formatPercent(capacity.hit)]);
+  if (capacity.copies !== undefined) out.push(["copies", capacity.copies]);
+  if (capacity.size !== undefined) out.push(["size", capacity.size]);
+  return out;
+}
+
+/**
+ * Sets a target's capacity values in a scene (traffic, share, hit rate, copies, size), keeping
+ * its state, flow and motion there. `null` for a key removes it.
+ */
+export function setSceneCapacity(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: {
+    readonly scene: string;
+    readonly target: string;
+    readonly capacity: {
+      readonly [K in keyof SceneCapacity]?: NonNullable<SceneCapacity[K]> | null;
+    };
+  },
+): EditResult {
+  const line = diagram.scenes
+    .find((s) => s.name === args.scene)
+    ?.entries.find((e) => e.target === args.target);
+  // Keys set to null are left out; keys not mentioned keep the scene's value.
+  const merged = Object.fromEntries([
+    ...Object.entries(line?.capacity ?? {}).filter(([key]) => !(key in args.capacity)),
+    ...Object.entries(args.capacity).filter(([, value]) => value !== null),
+  ]) as SceneCapacity;
+  return setSceneEntry(files, diagram, {
+    scene: args.scene,
+    target: args.target,
+    value: {
+      state: line?.state ?? null,
+      flow: line?.flow ?? null,
+      motion: line?.motion ?? null,
+      capacity: merged,
+    },
+  });
 }
 
 /**
@@ -139,16 +189,32 @@ export function setSceneEntry(
     const state = value?.state != null && value.state !== baseState ? value.state : null;
     const flow = value?.flow != null && value.flow !== baseFlow ? value.flow : null;
     const motion = value?.motion != null && value.motion !== baseMotion ? value.motion : null;
+    // Capacity stays as it is in the scene unless the value says otherwise.
+    const existing = diagram.scenes
+      .find((s) => s.name === args.scene)
+      ?.entries.find((e) => e.target === args.target)?.capacity;
+    const capacity = capacityEntries(value?.capacity === undefined ? existing : value.capacity);
 
-    if (state === null && flow === null && motion === null) {
+    const [only] = capacity;
+    if (state === null && flow === null && motion === null && capacity.length === 0) {
       map.delete(args.target);
-    } else if (motion === null) {
+    } else if (motion === null && capacity.length === 0) {
       map.set(args.target, state ?? flow);
+    } else if (
+      state === null &&
+      flow === null &&
+      motion === null &&
+      capacity.length === 1 &&
+      only?.[0] === "traffic"
+    ) {
+      // `users_to_lb: 5x`, the way people write a traffic level.
+      map.set(args.target, only[1]);
     } else {
-      const entries: [string, string][] = [];
+      const entries: [string, string | number][] = [];
       if (state !== null) entries.push(["state", state]);
       if (flow !== null) entries.push(["flow", flow]);
-      entries.push(["motion", motion]);
+      if (motion !== null) entries.push(["motion", motion]);
+      entries.push(...capacity);
       map.set(args.target, flowMap(entries));
     }
     if (map.items.length === 0) sceneSection(ctx, args.scene).set(args.scene, new Scalar(null));

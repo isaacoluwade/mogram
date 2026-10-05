@@ -2,8 +2,12 @@
 
 import { createStore, del, entries, get, set, values, type UseStore } from "idb-keyval";
 import { nanoid } from "nanoid";
+import { conceptInfo } from "@mogram/core/concepts";
+import type { ConceptSummary } from "@/lib/api/contracts";
 import type { ProjectFiles } from "@mogram/core/model";
 import { withName } from "@/features/files/project-name";
+import { deleteConversation } from "@/features/assistant/storage";
+import { deleteLocalHistory } from "@/features/history/local-history";
 
 /**
  * Local drafts (AC-1, AC-2): diagrams kept in this browser's IndexedDB, no account needed.
@@ -25,6 +29,8 @@ export interface DraftSummary {
   readonly updatedAt: string;
   /** Small JPEG data URL for the dashboard, or null until one has been rendered. */
   readonly thumbnail: string | null;
+  /** Set when the draft is a concept (D-83, D-85), so the library can offer it. */
+  readonly concept: ConceptSummary | null;
 }
 
 let stores: { drafts: UseStore; thumbnails: UseStore } | null = null;
@@ -43,6 +49,17 @@ export function isDraftId(id: string): boolean {
   return DRAFT_ID.test(id);
 }
 
+function conceptSummary(files: ProjectFiles): DraftSummary["concept"] {
+  try {
+    const info = conceptInfo(files);
+    if (info === null) return null;
+    const { summary, topic, platform, tags, kind } = info;
+    return { summary, topic, platform, tags, kind };
+  } catch {
+    return null;
+  }
+}
+
 export async function listDrafts(): Promise<DraftSummary[]> {
   const [drafts, thumbnails] = await Promise.all([
     values<Draft>(db().drafts),
@@ -56,6 +73,7 @@ export async function listDrafts(): Promise<DraftSummary[]> {
       createdAt: draft.createdAt,
       updatedAt: draft.updatedAt,
       thumbnail: thumbnailOf.get(draft.id) ?? null,
+      concept: conceptSummary(draft.files),
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }
@@ -113,7 +131,12 @@ export async function setDraftThumbnail(id: string, thumbnail: string): Promise<
 }
 
 export async function deleteDraft(id: string): Promise<void> {
-  await Promise.all([del(id, db().drafts), del(id, db().thumbnails)]);
+  await Promise.all([
+    del(id, db().drafts),
+    del(id, db().thumbnails),
+    deleteLocalHistory(id),
+    deleteConversation(`local:${id}`),
+  ]);
 }
 
 export async function duplicateDraft(id: string): Promise<Draft | null> {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useCapacity } from "./capacity";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ProjectFiles } from "@mogram/core/model";
 import { fitBox, type Camera } from "./camera";
@@ -82,6 +83,9 @@ export function DiagramPreview({
     [diagram, files, layout, routes, resolved, previous, transition, theme, fonts],
   );
 
+  // Capacity over time (D-82): a preview that changes scene shows copies booting and draining.
+  const capacity = useCapacity(diagram, resolved, () => clock.time(), !animate);
+
   const host = useRef<HTMLDivElement | null>(null);
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   useEffect(() => {
@@ -119,6 +123,7 @@ export function DiagramPreview({
       {camera !== null && size !== null ? (
         <DiagramSvg
           scene={model}
+          capacity={capacity}
           time={{ kind: "live", clock }}
           mode="view"
           fontFamily="var(--font-sans)"

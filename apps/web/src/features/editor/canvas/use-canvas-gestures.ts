@@ -3,19 +3,27 @@
 import { useEffect, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import {
   appendTourStep,
+  isLocked,
   moveElements,
   resizeElement,
-  setConnectionPath,
+  splitConnection,
+  updateElement,
   type Move,
 } from "@mogram/core/edit";
+import { parseDiagram } from "@mogram/core/format";
+import { SHAPE_ADJUST } from "@mogram/core/presets";
+import { routeConnections, type RoutedPath } from "@mogram/core/routing";
+import { snapToGuides } from "./guides";
+import { splitTarget } from "./split";
 import {
-  CONTAINER_UNITS,
+  GRID,
   computeLayout,
+  descendantsOf,
   toUnits,
+  type Box,
   type LayoutResult,
   type Point,
 } from "@mogram/core/layout";
-import { viaOrigin } from "@mogram/core/routing";
 import { toWorld, wheelZoomFactor, zoomAt } from "@/features/canvas/camera";
 import {
   addContainerBox,
@@ -24,16 +32,30 @@ import {
   addZoneBox,
   connect,
   containerAt,
+  cloneAndConnect,
+  cloneTo,
+  following,
+  isResizable,
+  minimumSize,
+  openQuickAdd,
   relativeTo,
+  spotBeside,
   topLevelSelection,
 } from "../actions";
 import { openNested } from "../levels";
 import type { EditorStore } from "../store/editor-store";
 import {
-  currentVia,
-  insertionIndex,
+  beginHandleDrag,
+  beginLineDrag,
+  endConnectionDrag,
+  moveConnectionDrag,
+  removeWaypointAt,
+} from "./connection-drag";
+import {
   intersectsFully,
+  touches,
   MOVE_THRESHOLD,
+  thresholdFor,
   normalize,
   sameParents,
   snap,
@@ -46,6 +68,19 @@ import { resizeHandleOf } from "./overlays";
 function elementAt(event: { target: EventTarget | null; clientX: number; clientY: number }) {
   return hitAt(event.target, event.clientX, event.clientY);
 }
+
+/** The centre of a connection's label when `target` is (inside) one, else null. */
+function labelCentre(target: EventTarget | null): Point | null {
+  if (!(target instanceof Element)) return null;
+  const label = target.closest('[data-part="label"]');
+  if (label === null) return null;
+  const x = Number(label.getAttribute("data-x"));
+  const y = Number(label.getAttribute("data-y"));
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+/** Numbers each shape-handle drag, so its edits merge into one undo step of their own. */
+let adjustSessions = 0;
 
 function handleAt(target: EventTarget | null): Element | null {
   if (!(target instanceof Element)) return null;
@@ -100,6 +135,34 @@ export function useCanvasGestures(
     };
   }, [host]);
 
+  // Escape cancels whatever is being dragged and puts everything back (draw.io does the same).
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      const current = gesture.current;
+      if (current === null || current.kind === "pan" || current.kind === "pinch") return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      if ("pointerId" in current && host.current?.hasPointerCapture(current.pointerId) === true)
+        host.current.releasePointerCapture(current.pointerId);
+      gesture.current = null;
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = null;
+      const state = store.getState();
+      if (current.kind === "adjust") {
+        state.revertTyping(current.session);
+        state.stopTyping(current.session);
+      }
+      state.setDrag(null);
+      state.setMarquee(null);
+      state.setResize(null);
+      state.setConnect(null);
+      state.setPathEdit(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [host, store]);
+
   // A preview frame queued just before the component goes away must not run afterwards.
   useEffect(
     () => () => {
@@ -138,15 +201,125 @@ export function useCanvasGestures(
     toWorld(store.getState().camera, screenPoint(event));
 
   /** What a press turns into once it moves: the selection's top-level elements, or null. */
-  const beginMove = (): { names: string[]; layout: LayoutResult } | null => {
+  const beginMove = (): {
+    names: string[];
+    layout: LayoutResult;
+    routes: ReadonlyMap<string, RoutedPath> | null;
+    bounds: Box | null;
+    neighbours: Box[];
+    offset: { dx: number; dy: number };
+  } | null => {
     const state = store.getState();
     const diagram = state.diagram();
     const layout = computeLayout(diagram);
     const selection = state.selection.flatMap(
       (name) => diagram.groups.get(name)?.members ?? [name],
     );
-    const names = topLevelSelection(layout, selection);
-    return names.length === 0 ? null : { names, layout };
+    // Locked elements stay put (they can still be selected and edited).
+    const names = topLevelSelection(layout, selection).filter((name) => !isLocked(diagram, name));
+    if (names.length === 0) return null;
+    // One component on its own can be dropped onto a connection to split it (ED-29).
+    const single = names.length === 1 && diagram.components.has(names[0] ?? "");
+    // Smart guides: what's drawn (tiles for icons) beside the moving elements, in their container.
+    const drawn = (name: string) => layout.tiles.get(name) ?? layout.elements.get(name)?.box;
+    const moving = new Set(names.flatMap((name) => [name, ...descendantsOf(layout, name)]));
+    const parent = layout.elements.get(names[0] ?? "")?.parent ?? null;
+    const neighbours = [...layout.elements.values()]
+      .filter((element) => element.parent === parent && !moving.has(element.name))
+      .map((element) => drawn(element.name))
+      .filter((box) => box !== undefined);
+    const parentBox = parent === null ? undefined : layout.elements.get(parent)?.box;
+    if (parentBox !== undefined) neighbours.push(parentBox);
+    const boxes = names.map(drawn).filter((box) => box !== undefined);
+    const bounds =
+      boxes.length === 0
+        ? null
+        : {
+            x: Math.min(...boxes.map((b) => b.x)),
+            y: Math.min(...boxes.map((b) => b.y)),
+            w: Math.max(...boxes.map((b) => b.x + b.w)) - Math.min(...boxes.map((b) => b.x)),
+            h: Math.max(...boxes.map((b) => b.y + b.h)) - Math.min(...boxes.map((b) => b.y)),
+          };
+    return {
+      names,
+      layout,
+      routes: single ? routeConnections(diagram, layout) : null,
+      bounds,
+      neighbours,
+      offset: { dx: 0, dy: 0 },
+    };
+  };
+
+  /**
+   * The move's preview: the grid offset pulled onto smart guides (Alt turns them off), the
+   * guides to draw, and where it will sit. Remembers the offset for the drop.
+   */
+  const previewMove = (
+    move: {
+      names: readonly string[];
+      layout: LayoutResult;
+      bounds: Box | null;
+      neighbours: readonly Box[];
+      offset: { dx: number; dy: number };
+      routes: ReadonlyMap<string, RoutedPath> | null;
+    },
+    start: Point,
+    world: Point,
+    event: { altKey: boolean; shiftKey: boolean },
+  ) => {
+    const grid = { dx: snap(world.x - start.x), dy: snap(world.y - start.y) };
+    const guided =
+      move.bounds === null || event.altKey
+        ? { ...grid, guides: [] }
+        : snapToGuides(move.bounds, move.neighbours, grid.dx, grid.dy);
+    move.offset = { dx: guided.dx, dy: guided.dy };
+    const first = move.layout.elements.get(move.names[0] ?? "");
+    const hint =
+      move.names.length === 1 && first !== undefined && move.bounds !== null
+        ? {
+            text: `${first.rel.x + guided.dx / GRID}, ${first.rel.y + guided.dy / GRID}`,
+            // Under the whole footprint, so it never covers a component's name.
+            at: {
+              x: first.box.x + guided.dx + first.box.w / 2,
+              y: first.box.y + guided.dy + first.box.h + 6,
+            },
+          }
+        : null;
+    const target = containerAt(move.layout, world, new Set(move.names));
+    const split = splitFor(move, guided.dx, guided.dy, event);
+    schedule(() =>
+      store.getState().setDrag({
+        names: move.names,
+        dx: guided.dx,
+        dy: guided.dy,
+        target,
+        split,
+        guides: guided.guides,
+        hint,
+      }),
+    );
+  };
+
+  /** The connection the moving component would split if dropped now (no Alt or Shift). */
+  const splitFor = (
+    move: {
+      names: readonly string[];
+      layout: LayoutResult;
+      routes: ReadonlyMap<string, RoutedPath> | null;
+    },
+    dx: number,
+    dy: number,
+    event: { altKey: boolean; shiftKey: boolean },
+  ): string | null => {
+    const name = move.names[0];
+    const tile =
+      name === undefined
+        ? undefined
+        : (move.layout.tiles.get(name) ?? move.layout.elements.get(name)?.box);
+    if (move.routes === null || name === undefined || tile === undefined) return null;
+    if (event.altKey || event.shiftKey) return null;
+    const centre = { x: tile.x + tile.w / 2 + dx, y: tile.y + tile.h / 2 + dy };
+    return splitTarget(store.getState().diagram(), move.layout, move.routes, name, tile, centre);
   };
 
   /**
@@ -156,11 +329,12 @@ export function useCanvasGestures(
   const finishMove = (
     names: readonly string[],
     layout: LayoutResult,
-    start: Point,
+    offset: { dx: number; dy: number },
     world: Point,
+    split: string | null = null,
+    clone = false,
   ): void => {
-    const dx = snap(world.x - start.x);
-    const dy = snap(world.y - start.y);
+    const { dx, dy } = offset;
     const target = containerAt(layout, world, new Set(names));
     if (dx === 0 && dy === 0 && sameParents(layout, names, target)) return;
     const moves: Move[] = names.flatMap((name) => {
@@ -169,7 +343,26 @@ export function useCanvasGestures(
       const topLeft = { x: element.box.x + dx, y: element.box.y + dy };
       return [{ name, parent: target, at: relativeTo(layout, target, topLeft) }];
     });
-    store.getState().edit("Move", (files, diagram) => moveElements(files, diagram, moves));
+    // Ctrl/Cmd held at the drop leaves the originals and puts copies there (06 §20 P1-13).
+    if (clone) {
+      cloneTo(store, names, moves);
+      return;
+    }
+    const element = names[0];
+    if (split !== null && element !== undefined) {
+      const folder = store.getState().folder;
+      const move = following(store, (files, diagram) => moveElements(files, diagram, moves));
+      store.getState().edit("Insert into connection", (files, diagram) => {
+        const moved = move(files, diagram);
+        const next = parseDiagram(moved.files, folder).diagram;
+        return splitConnection(moved.files, next, { name: split, element });
+      });
+      return;
+    }
+    store.getState().edit(
+      "Move",
+      following(store, (files, diagram) => moveElements(files, diagram, moves)),
+    );
   };
 
   /** Coalesces preview updates to one per animation frame. */
@@ -220,6 +413,30 @@ export function useCanvasGestures(
       return;
     }
 
+    // An earlier version is only looked at: a press selects (or draws a selection box), and
+    // nothing moves, resizes or connects.
+    if (state.viewing !== null) {
+      const hit = elementAt(event);
+      const additive = event.shiftKey || event.metaKey;
+      if (hit !== null && !event.altKey) {
+        state.select([hit.name], additive ? "add" : "replace");
+        return;
+      }
+      if (!additive) state.select([]);
+      state.setOpenCard(null);
+      gesture.current =
+        event.pointerType === "touch"
+          ? { kind: "pan", pointerId: event.pointerId, start: screen, camera: state.camera }
+          : {
+              kind: "marquee",
+              pointerId: event.pointerId,
+              start: world,
+              base: additive ? state.selection : [],
+              layout: computeLayout(state.diagram()),
+            };
+      return;
+    }
+
     const handle = handleAt(event.target);
     if (handle !== null) {
       const kind = handle.getAttribute("data-handle");
@@ -229,14 +446,8 @@ export function useCanvasGestures(
         const element = layout.elements.get(selected);
         if (element === undefined) return;
         const isZone = element.kind === "decoration";
-        const isNote = state.diagram().decorations.get(selected)?.variant === "note";
-        // A container can't be smaller than what it holds: lay it out with no size of its own
-        // to find that (its label, its children and their padding).
-        const fitted = isZone
-          ? null
-          : computeLayout(state.diagram(), {
-              sizes: new Map([[selected, { w: 0, h: 0 }]]),
-            }).elements.get(selected)?.size;
+        // A container can't be smaller than what it holds; shapes, zones and notes have a floor.
+        const min = minimumSize(state.diagram(), selected);
         gesture.current = {
           kind: "resize",
           pointerId: event.pointerId,
@@ -245,41 +456,71 @@ export function useCanvasGestures(
           start: world,
           at: element.rel,
           size: element.size,
-          minW: isNote ? 8 : isZone ? 4 : (fitted?.w ?? CONTAINER_UNITS.minW),
-          minH: isNote ? 6 : isZone ? 3 : (fitted?.h ?? CONTAINER_UNITS.minH),
+          minW: min.w,
+          minH: min.h,
+          siblings: [...layout.elements.values()]
+            .filter(
+              (other) =>
+                other.parent === element.parent &&
+                other.name !== selected &&
+                isResizable(state.diagram(), other.name),
+            )
+            .map((other) => ({ name: other.name, w: other.size.w, h: other.size.h })),
           isZone,
+        };
+        return;
+      }
+      if (kind === "adjust" && selected !== undefined) {
+        const shape = state.diagram().components.get(selected)?.shape;
+        const box = computeLayout(state.diagram()).elements.get(selected)?.box;
+        if (shape == null || box === undefined) return;
+        const session = `adjust-${selected}-${++adjustSessions}`;
+        state.startTyping(session);
+        gesture.current = {
+          kind: "adjust",
+          pointerId: event.pointerId,
+          name: selected,
+          shape,
+          box,
+          session,
+          last: null,
         };
         return;
       }
       if (kind === "connect") {
         const from = state.hovered ?? selected;
         if (from !== undefined && from !== null) {
-          gesture.current = { kind: "connect", pointerId: event.pointerId, from };
+          const direction = handle.getAttribute("data-direction");
+          gesture.current = {
+            kind: "connect",
+            pointerId: event.pointerId,
+            from,
+            direction:
+              direction === "up" ||
+              direction === "right" ||
+              direction === "down" ||
+              direction === "left"
+                ? direction
+                : null,
+            startScreen: screen,
+          };
           state.setConnect({ from, pointer: world, target: null });
         }
         return;
       }
-      if ((kind === "waypoint" || kind === "add-waypoint") && selected !== undefined) {
-        const layout = computeLayout(state.diagram());
-        const via = currentVia(state.diagram(), layout, selected);
-        let index = Number(handle.getAttribute("data-index") ?? "0");
-        if (kind === "add-waypoint") {
-          const point = {
-            x: Number(handle.getAttribute("data-x")),
-            y: Number(handle.getAttribute("data-y")),
+      if (
+        (kind === "waypoint" || kind === "add-waypoint" || kind === "segment" || kind === "end") &&
+        selected !== undefined
+      ) {
+        const drag = beginHandleDrag(store, event.pointerId, selected, handle, world);
+        if (drag !== null)
+          gesture.current = {
+            kind: "path",
+            pointerId: event.pointerId,
+            drag,
+            startScreen: screen,
+            moved: false,
           };
-          index = insertionIndex(state, layout, selected, via, point);
-          via.splice(index, 0, { x: snap(point.x), y: snap(point.y) });
-        }
-        gesture.current = {
-          kind: "bend",
-          pointerId: event.pointerId,
-          connection: selected,
-          index,
-          via,
-          layout,
-        };
-        state.setBend({ connection: selected, via });
         return;
       }
     }
@@ -287,7 +528,13 @@ export function useCanvasGestures(
     const hit = elementAt(event);
     if (state.tool === "connect") {
       if (hit !== null && (hit.kind === "component" || hit.kind === "container")) {
-        gesture.current = { kind: "connect", pointerId: event.pointerId, from: hit.name };
+        gesture.current = {
+          kind: "connect",
+          pointerId: event.pointerId,
+          from: hit.name,
+          direction: null,
+          startScreen: screen,
+        };
         state.setConnect({ from: hit.name, pointer: world, target: null });
       }
       return;
@@ -345,12 +592,14 @@ export function useCanvasGestures(
     if (!wasSelected) state.select([hit.name], additive ? "add" : "replace");
     gesture.current = {
       kind: "press",
+      threshold: thresholdFor(event.pointerType),
       pointerId: event.pointerId,
       element: hit.name,
       start: world,
       startScreen: screen,
       additive,
       wasSelected,
+      label: hit.kind === "connection" ? labelCentre(event.target) : null,
     };
   };
 
@@ -409,31 +658,54 @@ export function useCanvasGestures(
       case "press": {
         if (
           Math.hypot(screen.x - current.startScreen.x, screen.y - current.startScreen.y) <
-          MOVE_THRESHOLD
+          current.threshold
         )
           return;
+        // Dragging a connection reshapes it: its end, label, segment or a new bend (ED-29).
+        if (state.diagram().connections.has(current.element)) {
+          // Shift or Cmd while pressing adds the connection to the selection; it doesn't reshape it.
+          const drag = current.additive
+            ? null
+            : beginLineDrag(
+                store,
+                current.pointerId,
+                current.element,
+                current.start,
+                current.label,
+              );
+          if (drag === null) {
+            gesture.current = null;
+            return;
+          }
+          state.select([current.element]);
+          gesture.current = {
+            kind: "path",
+            pointerId: current.pointerId,
+            drag,
+            startScreen: current.startScreen,
+            moved: true,
+          };
+          moveConnectionDrag(store, drag, world, event);
+          return;
+        }
         const moving = beginMove();
         if (moving === null) {
           gesture.current = null;
           return;
         }
-        gesture.current = {
-          kind: "move",
+        const move = {
+          kind: "move" as const,
           pointerId: current.pointerId,
           ...moving,
           start: current.start,
         };
+        gesture.current = move;
         // Preview straight away, so even a single move event shows where it's going.
-        const target = containerAt(moving.layout, world, new Set(moving.names));
-        const [dx, dy] = [snap(world.x - current.start.x), snap(world.y - current.start.y)];
-        schedule(() => store.getState().setDrag({ names: moving.names, dx, dy, target }));
+        previewMove(move, current.start, world, event);
         return;
       }
       case "move": {
-        const dx = snap(world.x - current.start.x);
-        const dy = snap(world.y - current.start.y);
-        const target = containerAt(current.layout, world, new Set(current.names));
-        schedule(() => store.getState().setDrag({ names: current.names, dx, dy, target }));
+        previewMove(current, current.start, world, event);
         return;
       }
       case "marquee":
@@ -442,9 +714,12 @@ export function useCanvasGestures(
         schedule(() => store.getState().setMarquee(box));
         if (current.kind === "marquee") {
           const { layout } = current;
+          // Enclosed by default, so big containers aren't always caught; Alt takes whatever the
+          // box touches (06 §20 P2-16).
+          const caught = event.altKey ? touches : intersectsFully;
           const inside = [...layout.elements.values()]
             .filter((element) =>
-              intersectsFully(
+              caught(
                 box,
                 element.kind === "component"
                   ? (layout.tiles.get(element.name) ?? element.box)
@@ -454,6 +729,26 @@ export function useCanvasGestures(
             .map((element) => element.name);
           state.select([...new Set([...current.base, ...inside])]);
         }
+        return;
+      }
+      case "adjust": {
+        const adjust = SHAPE_ADJUST[current.shape];
+        if (adjust === undefined) return;
+        const { w, h } = current.box;
+        const local = { x: world.x - current.box.x, y: world.y - current.box.y };
+        const value = Math.round(Math.max(0, Math.min(adjust.from(w, h, local), adjust.max(w, h))));
+        if (value === current.last) return;
+        current.last = value;
+        // The shape's own measure isn't written (FI-3).
+        const written = value === Math.round(adjust.initial(w, h)) ? null : value;
+        schedule(() =>
+          store.getState().edit(`Change ${adjust.label.toLowerCase()}`, (files, diagram) =>
+            updateElement(files, diagram, {
+              name: current.name,
+              set: { [adjust.key]: written },
+            }),
+          ),
+        );
         return;
       }
       case "resize": {
@@ -473,8 +768,31 @@ export function useCanvasGestures(
           y = current.at.y + (current.size.h - next);
           h = next;
         }
+        // Size guides: within a cell of a sibling's width or height, take it (Alt: don't).
+        const matches = { w: [] as string[], h: [] as string[] };
+        if (!event.altKey) {
+          // Only the sides being dragged snap and get marked.
+          const sideways = current.handle.includes("e") || current.handle.includes("w");
+          const upDown = current.handle.includes("n") || current.handle.includes("s");
+          const near = (value: number, axis: "w" | "h") =>
+            current.siblings.find((other) => Math.abs(other[axis] - value) <= 1)?.[axis];
+          const snapW = sideways ? near(w, "w") : undefined;
+          const snapH = upDown ? near(h, "h") : undefined;
+          if (snapW !== undefined && snapW >= current.minW) {
+            if (current.handle.includes("w")) x += w - snapW;
+            w = snapW;
+          }
+          if (snapH !== undefined && snapH >= current.minH) {
+            if (current.handle.includes("n")) y += h - snapH;
+            h = snapH;
+          }
+          for (const other of current.siblings) {
+            if (sideways && other.w === w) matches.w.push(other.name);
+            if (upDown && other.h === h) matches.h.push(other.name);
+          }
+        }
         schedule(() =>
-          store.getState().setResize({ name: current.name, at: { x, y }, size: { w, h } }),
+          store.getState().setResize({ name: current.name, at: { x, y }, size: { w, h }, matches }),
         );
         return;
       }
@@ -494,12 +812,20 @@ export function useCanvasGestures(
         schedule(() => store.getState().setConnect({ from: current.from, pointer: world, target }));
         return;
       }
-      case "bend": {
-        const via = current.via.map((point, index) =>
-          index === current.index ? { x: snap(world.x), y: snap(world.y) } : point,
-        );
-        current.via = via;
-        schedule(() => store.getState().setBend({ connection: current.connection, via }));
+      case "path": {
+        if (
+          !current.moved &&
+          Math.hypot(screen.x - current.startScreen.x, screen.y - current.startScreen.y) <
+            MOVE_THRESHOLD
+        )
+          return;
+        current.moved = true;
+        const pointer = {
+          clientX: event.clientX,
+          clientY: event.clientY,
+          shiftKey: event.shiftKey,
+        };
+        schedule(() => moveConnectionDrag(store, current.drag, world, pointer));
         return;
       }
     }
@@ -528,9 +854,15 @@ export function useCanvasGestures(
           screen.x - current.startScreen.x,
           screen.y - current.startScreen.y,
         );
-        if (travelled >= MOVE_THRESHOLD && state.tourAuthoring === null) {
+        if (travelled >= current.threshold && state.tourAuthoring === null) {
           const moving = beginMove();
-          if (moving !== null) finishMove(moving.names, moving.layout, current.start, world);
+          if (moving !== null)
+            finishMove(
+              moving.names,
+              moving.layout,
+              { dx: snap(world.x - current.start.x), dy: snap(world.y - current.start.y) },
+              world,
+            );
           return;
         }
         // Tour authoring: clicking elements in order appends steps (TO-9).
@@ -550,10 +882,19 @@ export function useCanvasGestures(
           state.select([current.element], current.additive ? "toggle" : "replace");
         return;
       }
-      case "move":
+      case "move": {
         state.setDrag(null);
-        finishMove(current.names, current.layout, current.start, world);
+        const clone = event.ctrlKey || event.metaKey;
+        finishMove(
+          current.names,
+          current.layout,
+          current.offset,
+          world,
+          clone ? null : splitFor(current, current.offset.dx, current.offset.dy, event),
+          clone,
+        );
         return;
+      }
       case "marquee":
         state.setMarquee(null);
         return;
@@ -574,6 +915,10 @@ export function useCanvasGestures(
         state.setTool("select");
         return;
       }
+      case "adjust": {
+        state.stopTyping(current.session);
+        return;
+      }
       case "resize": {
         const preview = state.resize;
         state.setResize(null);
@@ -585,36 +930,57 @@ export function useCanvasGestures(
           preview.at.y === current.at.y;
         if (unchanged) return;
         const atChanged = preview.at.x !== current.at.x || preview.at.y !== current.at.y;
-        state.edit("Resize", (files, diagram) =>
-          resizeElement(files, diagram, {
-            name: current.name,
-            size: preview.size,
-            ...(atChanged ? { at: preview.at } : {}),
-          }),
+        state.edit(
+          "Resize",
+          following(store, (files, diagram) =>
+            resizeElement(files, diagram, {
+              name: current.name,
+              size: preview.size,
+              ...(atChanged ? { at: preview.at } : {}),
+            }),
+          ),
         );
         return;
       }
       case "connect": {
         const draft = state.connect;
         state.setConnect(null);
+        // A click on a hover arrow (no drag): add a connected copy that way, or with Alt,
+        // choose what to add there (06-canvas-interactions §9).
+        const screen = screenPoint(event);
+        const clicked =
+          Math.hypot(screen.x - current.startScreen.x, screen.y - current.startScreen.y) <
+          MOVE_THRESHOLD;
+        if (clicked && current.direction !== null) {
+          if (event.altKey) {
+            const spot = spotBeside(
+              computeLayout(state.diagram()),
+              current.from,
+              current.direction,
+            );
+            if (spot !== null)
+              openQuickAdd(
+                store,
+                { x: spot.x + spot.w / 2, y: spot.y + spot.h / 2 },
+                { name: current.from, direction: current.direction },
+              );
+          } else {
+            cloneAndConnect(store, current.from, current.direction);
+          }
+          return;
+        }
         if (draft?.target != null) {
           connect(store, current.from, draft.target);
           if (state.tool === "connect") state.setTool("select");
         }
         return;
       }
-      case "bend": {
-        state.setBend(null);
-        const connection = state.diagram().connections.get(current.connection);
-        if (connection === undefined) return;
-        const origin = viaOrigin(current.layout, connection);
-        const via = current.via.map((point) => ({
-          x: toUnits(point.x - origin.x),
-          y: toUnits(point.y - origin.y),
-        }));
-        state.edit("Bend connection", (files, diagram) =>
-          setConnectionPath(files, diagram, { name: current.connection, via }),
-        );
+      case "path": {
+        if (!current.moved) {
+          state.setPathEdit(null);
+          return;
+        }
+        endConnectionDrag(store, current.drag, event);
         return;
       }
       case "pan":
@@ -624,29 +990,27 @@ export function useCanvasGestures(
 
   const onDoubleClick = (event: React.MouseEvent<HTMLDivElement>) => {
     const state = store.getState();
-    const handle = handleAt(event.target);
+    const handle = state.viewing === null ? handleAt(event.target) : null;
     if (handle?.getAttribute("data-handle") === "waypoint") {
       const name = state.selection[0];
-      if (name === undefined) return;
-      const layout = computeLayout(state.diagram());
-      const via = currentVia(state.diagram(), layout, name);
-      via.splice(Number(handle.getAttribute("data-index") ?? "0"), 1);
-      const connection = state.diagram().connections.get(name);
-      if (connection === undefined) return;
-      const origin = viaOrigin(layout, connection);
-      state.edit("Remove bend", (files, diagram) =>
-        setConnectionPath(files, diagram, {
-          name,
-          via:
-            via.length === 0
-              ? null
-              : via.map((p) => ({ x: toUnits(p.x - origin.x), y: toUnits(p.y - origin.y) })),
-        }),
-      );
+      if (name !== undefined)
+        removeWaypointAt(store, name, Number(handle.getAttribute("data-index") ?? "0"));
       return;
     }
+    if (handle !== null) return;
     const hit = elementAt(event);
-    if (hit === null) return;
+    // An earlier version can be gone into (nested diagrams), not added to or typed in.
+    if (state.viewing !== null) {
+      if (hit?.kind === "component") openNested(store, hit.name);
+      return;
+    }
+    // Double-click on empty canvas: choose something to add right there (06 §20 P1-10).
+    if (hit === null) {
+      // Not while going in or out of a nested diagram: the canvas under the pointer is moving.
+      if (state.tool === "select" && state.levelZoom === null)
+        openQuickAdd(store, worldPoint(event));
+      return;
+    }
     if (hit.kind === "component" && openNested(store, hit.name)) return;
     state.select([hit.name]);
     state.setEditingLabel(hit.name);
@@ -654,6 +1018,8 @@ export function useCanvasGestures(
 
   const onPointerCancel = (event: ReactPointerEvent<HTMLDivElement>) => {
     pointers.current.delete(event.pointerId);
+    const current = gesture.current;
+    if (current?.kind === "adjust") store.getState().stopTyping(current.session);
     gesture.current = null;
     cancelPreviews();
   };
@@ -667,7 +1033,7 @@ export function useCanvasGestures(
     state.setMarquee(null);
     state.setResize(null);
     state.setConnect(null);
-    state.setBend(null);
+    state.setPathEdit(null);
   }
 
   return { onPointerDown, onPointerMove, onPointerUp, onPointerCancel, onDoubleClick };

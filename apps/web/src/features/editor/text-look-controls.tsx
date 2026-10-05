@@ -31,7 +31,7 @@ import { fontStack } from "@/features/canvas/fonts";
 import { cn } from "@/lib/cn";
 import { activeTextCommands } from "./canvas/text-editor";
 import { useEditor } from "./editor-context";
-import { shortcutLabel } from "./shortcuts";
+import { shortcutLabel } from "./commands/keys";
 import { documentColors } from "./inspector/document-colors";
 import { useEdit } from "./inspector/shared";
 

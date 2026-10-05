@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { element, openDraft, shot, yaml } from "./support";
+import { element, openDraft, shot, yaml, inspectorTab } from "./support";
 
 /** Arranging: what's in front is what gets clicked, and z-order follows containers (ED-23). */
 
@@ -65,21 +65,21 @@ test("a container brought to front carries everything inside it", async ({ page 
   await shot(page, "editor/arrange-container-front");
 });
 
-test("moves that would change nothing are disabled, and connections have no Arrange", async ({
+test("moves that would change nothing aren't offered, and connections have no Arrange", async ({
   page,
 }) => {
   await openDraft(page, "web-app");
-  // Product images is the only component in East US: nothing to stack against.
+  // Product images is the only component in East US: nothing to stack against, so the context
+  // menu leaves Arrange out (it hides what doesn't apply).
   const storage = await tileCentre(page, "storage");
   await page.mouse.click(storage.x, storage.y, { button: "right" });
-  await page.getByRole("menuitem", { name: /Arrange/ }).hover();
-  await expect(page.getByRole("menuitem", { name: /Bring to front/ })).toBeDisabled();
-  await expect(page.getByRole("menuitem", { name: /Send to back/ })).toBeDisabled();
-  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menuitem", { name: /Duplicate/ })).toBeVisible();
+  await expect(page.getByRole("menuitem", { name: /Arrange/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
   // The inspector offers the same, with the same rules.
   await page.mouse.click(storage.x, storage.y);
+  await inspectorTab(page, "Arrange");
   await expect(page.getByRole("button", { name: "Bring to front" })).toBeDisabled();
 
   // Web VM has a sibling: Bring forward works once, then there is nothing above it.

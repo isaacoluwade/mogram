@@ -80,7 +80,8 @@ function OpenBody() {
             Drop a Mogram file, folder zip or files here
           </p>
           <p className="mt-1 text-caption text-fg-muted">
-            .mogram.yaml, a folder with mogram.yaml, or a .zip of one
+            .mogram.yaml, a folder with mogram.yaml, a .zip of one, or a PNG or SVG exported with an
+            editable copy
           </p>
         </div>
         <div className="mt-1 flex flex-wrap justify-center gap-2">

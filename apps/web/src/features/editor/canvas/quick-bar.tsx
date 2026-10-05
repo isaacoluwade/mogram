@@ -1,23 +1,11 @@
 "use client";
 
-import { useCallback, useState, type ReactNode } from "react";
-import {
-  ArrowDownToLine,
-  ArrowUpToLine,
-  Copy,
-  Ellipsis,
-  Activity,
-  Layers,
-  PanelRight,
-  Pencil,
-  Trash2,
-  Waves,
-} from "lucide-react";
+import { Fragment, useCallback, useState, type ReactNode } from "react";
+import { Ellipsis, Activity, Layers, PanelRight, Waves } from "lucide-react";
 import type { Box, LayoutResult } from "@mogram/core/layout";
-import type { Diagram } from "@mogram/core/model";
+import type { Connection, Diagram } from "@mogram/core/model";
 import {
   FLOW_INFO,
-  FLOW_PRESETS,
   MOTION_INFO,
   MOTION_PRESETS,
   STATE_INFO,
@@ -46,19 +34,31 @@ import { toScreen } from "@/features/canvas/camera";
 import type { CanvasTheme } from "@/features/canvas/theme";
 import { cn } from "@/lib/cn";
 import { NEUTRAL_SWATCH } from "@/styles/colors";
-import {
-  deleteSelection,
-  duplicateSelection,
-  setFlow,
-  setMotion,
-  setState,
-  zOrder,
-} from "../actions";
+import { setFlow, setMotion, setState } from "../actions";
 import { openNested } from "../levels";
 import { useEditor, useEditorShallow, useEditorStore } from "../editor-context";
 import { documentColors } from "../inspector/document-colors";
-import { effectiveState, sceneValue, useEdit, useSceneView } from "../inspector/shared";
-import { shortcutLabel } from "../shortcuts";
+import {
+  effectiveState,
+  flowChoices,
+  sceneValue,
+  shownFlow,
+  useEdit,
+  useSceneView,
+} from "../inspector/shared";
+import { useCommandContext } from "../commands/context";
+import { CommandMenuItems } from "../commands/menu-items";
+import { menuFor, resolveMenu } from "../commands/menus";
+import { selectionInfo } from "../commands/selection";
+import type { CommandContext } from "../commands/types";
+import {
+  barHome,
+  quickBarFor,
+  revealInInspector,
+  type InspectorHome,
+  type ResolvedControl,
+} from "./quick-bar-schema";
+import { ArrowheadPicker, LineStyleMenu, RouteControl, common } from "../connection-controls";
 import {
   AlignMenu,
   EmphasisButtons,
@@ -103,7 +103,7 @@ export function QuickBar({
       s.resize !== null ||
       s.marquee !== null ||
       s.connect !== null ||
-      s.bend !== null,
+      s.pathEdit !== null,
     tool: s.tool,
     editingLabel: s.editingLabel,
     zooming: s.levelZoom !== null,
@@ -128,7 +128,7 @@ export function QuickBar({
 
   const editingPlain =
     view.editingLabel !== null && !isRich(diagram.decorations.get(view.editingLabel));
-  const bounds = selectionBounds(view.selection, layout, routes);
+  const bounds = selectionBounds(view.selection, layout, routes, diagram);
   if (
     bounds === null ||
     view.busy ||
@@ -165,11 +165,15 @@ export function QuickBar({
   );
 }
 
-/** The selection's world bounds: element boxes, tiles, group outlines and connection paths. */
+/**
+ * The selection's world bounds: element boxes, tiles, group outlines and connection paths with
+ * the tiles at their ends, so the bar never covers what a connection joins.
+ */
 function selectionBounds(
   names: readonly string[],
   layout: LayoutResult,
   routes: ReadonlyMap<string, RoutedPath>,
+  diagram: Diagram,
 ): Box | null {
   let x1 = Infinity;
   let y1 = Infinity;
@@ -192,8 +196,14 @@ function selectionBounds(
       continue;
     }
     const route = routes.get(name);
-    if (route !== undefined)
-      for (const point of route.points) add({ x: point.x, y: point.y, w: 0, h: 0 });
+    if (route === undefined) continue;
+    for (const point of route.points) add({ x: point.x, y: point.y, w: 0, h: 0 });
+    const connection = diagram.connections.get(name);
+    for (const end of connection === undefined ? [] : [connection.from, connection.to]) {
+      const tile = layout.tiles.get(end.element) ?? layout.elements.get(end.element)?.box;
+      // A container end is too big to clear; its edge is where the line meets it anyway.
+      if (tile !== undefined && layout.elements.get(end.element)?.kind !== "container") add(tile);
+    }
   }
   return x1 === Infinity ? null : { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
 }
@@ -207,75 +217,137 @@ function BarContent({
   diagram: Diagram;
   theme: CanvasTheme;
 }) {
-  const single = names.length === 1 ? names[0] : undefined;
-  if (single !== undefined) {
-    const decoration = diagram.decorations.get(single);
-    if (isRich(decoration)) return <TextBar decoration={decoration} theme={theme} />;
-    if (decoration !== undefined) return <ToneBar name={single} tone={decoration.tone} />;
-  }
-  const components = names.filter((name) => diagram.components.has(name));
-  const placeables = names.filter(
-    (name) => diagram.components.has(name) || diagram.containers.has(name),
-  );
-  const connections = names.filter((name) => diagram.connections.has(name));
-  const opens = single !== undefined ? diagram.components.get(single)?.opens : null;
+  const sel = selectionInfo(diagram, names);
+  const { items } = quickBarFor(sel, diagram);
   return (
     <>
-      {placeables.length > 0 ? <StateMenu names={placeables} diagram={diagram} /> : null}
-      {components.length > 0 ? <MotionMenu names={components} diagram={diagram} /> : null}
-      {connections.length > 0 ? <FlowMenu names={connections} diagram={diagram} /> : null}
-      {single !== undefined && (placeables.length > 0 || connections.length > 0) ? (
-        <ElementColor name={single} diagram={diagram} />
-      ) : null}
-      {opens != null && single !== undefined ? <OpenNestedButton name={single} /> : null}
-      {placeables.length + connections.length > 0 ? <ToolbarDivider /> : null}
-      <MoreMenu single={single} />
+      {items.map((item, index) =>
+        item === "|" ? (
+          <ToolbarDivider key={`divider-${index}`} />
+        ) : (
+          <Fragment key={item.id}>
+            <QuickControlView control={item} diagram={diagram} theme={theme} />
+          </Fragment>
+        ),
+      )}
+      {items.length > 0 ? <ToolbarDivider /> : null}
+      <MoreMenu home={barHome(items)} />
     </>
   );
 }
 
-function TextBar({ decoration, theme }: { decoration: RichDecoration; theme: CanvasTheme }) {
-  const { set } = useEdit();
-  return (
-    <>
-      {decoration.variant === "note" ? (
+/** One declared control (quick-bar-schema), drawn with the same pieces as the inspector's. */
+function QuickControlView({
+  control,
+  diagram,
+  theme,
+}: {
+  control: ResolvedControl;
+  diagram: Diagram;
+  theme: CanvasTheme;
+}) {
+  const names = control.names;
+  const name = names[0] ?? "";
+  const lines = names
+    .map((n) => diagram.connections.get(n))
+    .filter((c): c is Connection => c !== undefined);
+  const text = diagram.decorations.get(name);
+  const decoration = isRich(text) ? text : null;
+  switch (control.id) {
+    case "state":
+      return <StateMenu names={names} diagram={diagram} />;
+    case "motion":
+      return <MotionMenu names={names} diagram={diagram} />;
+    case "flow":
+      return <FlowMenu names={names} diagram={diagram} />;
+    case "tone":
+      return <ShapeToneMenu name={name} diagram={diagram} />;
+    case "color":
+      return <ElementColor name={name} diagram={diagram} />;
+    case "open-nested":
+      return <OpenNestedButton name={name} />;
+    case "route":
+      return (
+        <div className="px-0.5">
+          <RouteControl names={names} value={common(lines, (c) => c.route)} />
+        </div>
+      );
+    case "line":
+      return (
+        <LineStyleMenu
+          names={names}
+          pattern={common(lines, (c) => (c.dash === null ? c.line : null))}
+          width={common(lines, (c) => c.width)}
+          jumps={common(lines, (c) => c.jumps)}
+        />
+      );
+    case "arrow-start":
+    case "arrow-end": {
+      const end = control.id === "arrow-start" ? "start" : "end";
+      return (
+        <ArrowheadPicker
+          names={names}
+          end={end}
+          value={common(lines, (c) => c.arrows[end])}
+          compact
+        />
+      );
+    }
+    case "text-style":
+      return decoration?.variant !== "text" ? null : <TextStyleMenu decoration={decoration} />;
+    case "note-fill":
+      return decoration?.variant !== "note" ? null : (
         <NoteFillPicker decoration={decoration}>
           <BarButton label="Note colour">
             <NoteFillFace fill={decoration.fill} />
           </BarButton>
         </NoteFillPicker>
-      ) : (
-        <Menu>
-          <MenuButton label="Text style">{STYLE_LABELS[decoration.style]}</MenuButton>
-          <MenuContent align="start" className="w-40">
-            <MenuRadioGroup
-              value={decoration.style}
-              onValueChange={(style) => set(decoration.name, { style }, "Change text style")}
-            >
-              {(["title", "heading", "body", "caption"] as const).map((style) => (
-                <MenuRadioItem key={style} value={style}>
-                  {STYLE_LABELS[style]}
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </MenuContent>
-        </Menu>
-      )}
-      <ToolbarDivider />
-      <FontMenu decoration={decoration} />
-      <FontSizeMenu decoration={decoration} />
-      <ToolbarDivider />
-      <EmphasisButtons decoration={decoration} />
-      <AlignMenu decoration={decoration} />
-      <ListButton decoration={decoration} />
-      <TextColorPicker decoration={decoration}>
-        <BarButton label="Text colour">
-          <TextColorFace color={textInk(decoration, theme.text)} />
-        </BarButton>
-      </TextColorPicker>
-      <ToolbarDivider />
-      <MoreMenu single={decoration.name} />
-    </>
+      );
+    case "font":
+      return decoration === null ? null : <FontMenu decoration={decoration} />;
+    case "font-size":
+      return decoration === null ? null : <FontSizeMenu decoration={decoration} />;
+    case "emphasis":
+      return decoration === null ? null : <EmphasisButtons decoration={decoration} />;
+    case "align":
+      return decoration === null ? null : <AlignMenu decoration={decoration} />;
+    case "list":
+      return decoration === null ? null : <ListButton decoration={decoration} />;
+    case "text-color":
+      return decoration === null ? null : (
+        <TextColorPicker decoration={decoration}>
+          <BarButton label="Text colour">
+            <TextColorFace color={textInk(decoration, theme.text)} />
+          </BarButton>
+        </TextColorPicker>
+      );
+    case "decoration-tone":
+      return <DecorationTone name={name} tone={text?.tone ?? "neutral"} />;
+  }
+}
+
+function TextStyleMenu({
+  decoration,
+}: {
+  decoration: Extract<RichDecoration, { variant: "text" }>;
+}) {
+  const { set } = useEdit();
+  return (
+    <Menu>
+      <MenuButton label="Text style">{STYLE_LABELS[decoration.style]}</MenuButton>
+      <MenuContent align="start" className="w-40">
+        <MenuRadioGroup
+          value={decoration.style}
+          onValueChange={(style) => set(decoration.name, { style }, "Change text style")}
+        >
+          {(["title", "heading", "body", "caption"] as const).map((style) => (
+            <MenuRadioItem key={style} value={style}>
+              {STYLE_LABELS[style]}
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuContent>
+    </Menu>
   );
 }
 
@@ -305,31 +377,27 @@ function BarButton({
   );
 }
 
-function ToneBar({ name, tone }: { name: string; tone: string }) {
+function DecorationTone({ name, tone }: { name: string; tone: string }) {
   const { set } = useEdit();
   return (
-    <>
-      <div role="radiogroup" aria-label="Tone" className="flex items-center gap-1 px-1">
-        {TONE_NAMES.map((option) => (
-          <button
-            key={option}
-            type="button"
-            role="radio"
-            aria-checked={tone === option}
-            aria-label={option}
-            title={option}
-            onClick={() => set(name, { tone: option }, "Change tone")}
-            className={cn(
-              "size-6 rounded-full border-2 transition-transform hover:scale-110",
-              tone === option ? "border-fg" : "border-transparent",
-            )}
-            style={{ background: TONES[option].dark.solid }}
-          />
-        ))}
-      </div>
-      <ToolbarDivider />
-      <MoreMenu single={name} />
-    </>
+    <div role="radiogroup" aria-label="Tone" className="flex items-center gap-1 px-1">
+      {TONE_NAMES.map((option) => (
+        <button
+          key={option}
+          type="button"
+          role="radio"
+          aria-checked={tone === option}
+          aria-label={option}
+          title={option}
+          onClick={() => set(name, { tone: option }, "Change tone")}
+          className={cn(
+            "size-6 rounded-full border-2 transition-transform hover:scale-110",
+            tone === option ? "border-fg" : "border-transparent",
+          )}
+          style={{ background: TONES[option].dark.solid }}
+        />
+      ))}
+    </div>
   );
 }
 
@@ -427,11 +495,7 @@ function FlowMenu({ names, diagram }: { names: readonly string[]; diagram: Diagr
   const store = useEditorStore();
   const view = useSceneView();
   const scene = view.scene;
-  const flows = new Set(
-    names.map(
-      (name) => sceneValue(view, name)?.flow ?? diagram.connections.get(name)?.flow ?? "idle",
-    ),
-  );
+  const flows = new Set(names.map((name) => shownFlow(view, diagram, name)));
   const current = flows.size === 1 ? [...flows][0] : undefined;
   return (
     <Menu>
@@ -444,9 +508,51 @@ function FlowMenu({ names, diagram }: { names: readonly string[]; diagram: Diagr
           value={current ?? ""}
           onValueChange={(value) => setFlow(store, names, value as FlowPreset)}
         >
-          {FLOW_PRESETS.map((preset) => (
+          {flowChoices(diagram).map((preset) => (
             <MenuRadioItem key={preset} value={preset} description={FLOW_INFO[preset].description}>
               {FLOW_INFO[preset].label}
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuContent>
+    </Menu>
+  );
+}
+
+/** A shape's tone (03 §5 P0-2): fill, outline and words change colour together. */
+function ShapeToneMenu({ name, diagram }: { name: string; diagram: Diagram }) {
+  const { set } = useEdit();
+  const tone = diagram.components.get(name)?.look?.tone ?? "neutral";
+  return (
+    <Menu>
+      <MenuTrigger asChild>
+        <BarButton label="Tone">
+          <span
+            aria-hidden
+            className="size-4 rounded-full ring-1 ring-border"
+            style={{ background: TONES[tone].dark.solid }}
+          />
+        </BarButton>
+      </MenuTrigger>
+      <MenuContent align="start" className="w-44">
+        <MenuRadioGroup
+          value={tone}
+          onValueChange={(value) => set(name, { tone: value }, "Change tone")}
+        >
+          {TONE_NAMES.map((option) => (
+            <MenuRadioItem
+              key={option}
+              value={option}
+              icon={
+                <span
+                  aria-hidden
+                  className="size-3 rounded-full"
+                  style={{ background: TONES[option].dark.solid }}
+                />
+              }
+            >
+              {option[0]?.toUpperCase()}
+              {option.slice(1)}
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
@@ -498,57 +604,38 @@ function OpenNestedButton({ name }: { name: string }) {
   );
 }
 
-function MoreMenu({ single }: { single: string | undefined }) {
+/**
+ * Everything the right-click menu offers, so nothing is out of reach from the bar, then "More in
+ * inspector": the inspector opened at the section holding the rest of the bar's first control.
+ */
+function MoreMenu({ home }: { home: InspectorHome }) {
   const store = useEditorStore();
+  const contextNow = useCommandContext();
+  const [context, setContext] = useState<CommandContext | null>(null);
   return (
-    <Menu>
+    <Menu onOpenChange={(open) => setContext(open ? contextNow() : null)}>
       <MenuTrigger asChild>
         <IconButton label="More">
           <Ellipsis />
         </IconButton>
       </MenuTrigger>
-      <MenuContent align="end" className="w-56">
-        {single !== undefined ? (
-          <MenuItem icon={<Pencil />} onSelect={() => store.getState().setEditingLabel(single)}>
-            Edit text
-          </MenuItem>
-        ) : null}
-        <MenuItem
-          icon={<Copy />}
-          shortcut={shortcutLabel("mod+d")}
-          onSelect={() => duplicateSelection(store)}
-        >
-          Duplicate
-        </MenuItem>
-        <MenuItem
-          icon={<ArrowUpToLine />}
-          shortcut={shortcutLabel("mod+alt+]")}
-          onSelect={() => zOrder(store, "front")}
-        >
-          Bring to front
-        </MenuItem>
-        <MenuItem
-          icon={<ArrowDownToLine />}
-          shortcut={shortcutLabel("mod+alt+[")}
-          onSelect={() => zOrder(store, "back")}
-        >
-          Send to back
-        </MenuItem>
-        <MenuItem
-          icon={<PanelRight />}
-          onSelect={() => store.getState().togglePanel("inspector", true)}
-        >
-          All properties
-        </MenuItem>
-        <MenuSeparator />
-        <MenuItem
-          icon={<Trash2 />}
-          tone="danger"
-          shortcut={shortcutLabel("backspace")}
-          onSelect={() => deleteSelection(store)}
-        >
-          Delete
-        </MenuItem>
+      <MenuContent align="end" className="w-60">
+        {context === null ? null : (
+          <>
+            <CommandMenuItems
+              entries={resolveMenu(menuFor(context.sel), context, true)}
+              context={context}
+              variant="dropdown"
+            />
+            <MenuSeparator />
+            <MenuItem
+              icon={<PanelRight />}
+              onSelect={() => revealInInspector(store, context.diagram, context.sel, home)}
+            >
+              More in inspector
+            </MenuItem>
+          </>
+        )}
       </MenuContent>
     </Menu>
   );

@@ -101,6 +101,7 @@ export function YamlEditor({
   readOnly = false,
   label,
   language = "yaml",
+  reveal = null,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -108,6 +109,8 @@ export function YamlEditor({
   readOnly?: boolean;
   label: string;
   language?: "yaml" | "markdown";
+  /** A line to select and scroll to ("Show in YAML"); a new object each time it's asked for. */
+  reveal?: { readonly line: number } | null;
 }) {
   const host = useRef<HTMLDivElement | null>(null);
   const view = useRef<EditorView | null>(null);
@@ -199,6 +202,19 @@ export function YamlEditor({
       effects: readOnlyCompartment.current.reconfigure(EditorState.readOnly.of(readOnly)),
     });
   }, [readOnly]);
+
+  useEffect(() => {
+    const editor = view.current;
+    if (editor === null || reveal === null) return;
+    const doc = editor.state.doc;
+    if (reveal.line < 1 || reveal.line > doc.lines) return;
+    const line = doc.line(reveal.line);
+    editor.dispatch({
+      selection: { anchor: line.from, head: line.to },
+      effects: EditorView.scrollIntoView(line.from, { y: "center" }),
+    });
+    editor.focus();
+  }, [reveal]);
 
   // Problems come from parsing every file, so refresh them when they change, not just on typing.
   useEffect(() => {

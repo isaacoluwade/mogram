@@ -13,3 +13,6 @@ apps/web/test-results/
 docs/screenshots/
 # Template content is written by hand, exactly as a user's project files would be.
 apps/web/src/features/templates/*/
+# Concepts are written by hand like any project file; the catalog is generated from them.
+packages/concepts/content/
+packages/concepts/src/**/*.generated.ts

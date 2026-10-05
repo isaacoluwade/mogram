@@ -6,12 +6,13 @@ with pointers to the code and tests that enforce each rule.
 
 ## 1. Where diagrams live
 
-| Where                   | What                                                                | Who can read it                                       |
-| ----------------------- | ------------------------------------------------------------------- | ----------------------------------------------------- |
-| The browser (IndexedDB) | Drafts made without an account: files and a thumbnail               | Only that browser profile. Never sent to the server.  |
-| Postgres                | Users, sessions, verification codes (hashed), diagrams, revisions   | The owner, through the API, after an ownership check. |
-| Share links (`/s/…`)    | The latest saved version of a diagram whose owner turned sharing on | Anyone with the link, read-only.                      |
-| The person's computer   | Downloaded `.mogram.yaml`, zips, and exports (made in the browser)  | Them.                                                 |
+| Where                   | What                                                                | Who can read it                                                               |
+| ----------------------- | ------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| The browser (IndexedDB) | Drafts made without an account: files and a thumbnail               | Only that browser profile. Never sent to the server.                          |
+| The browser (IndexedDB) | A draft's version history; conversations with the assistant         | Only that browser profile (history goes up with a draft saved to an account). |
+| Postgres                | Users, sessions, verification codes (hashed), diagrams, revisions   | The owner, through the API, after an ownership check.                         |
+| Share links (`/s/…`)    | The latest saved version of a diagram whose owner turned sharing on | Anyone with the link, read-only.                                              |
+| The person's computer   | Downloaded `.mogram.yaml`, zips, and exports (made in the browser)  | Them.                                                                         |
 
 Drafts are stored by `features/drafts/drafts.ts` in two IndexedDB databases (files,
 thumbnails) so a thumbnail write can never race a save of the files.
@@ -161,7 +162,30 @@ PNG, JPEG, SVG, GIF and animated WebP are produced entirely in the browser: the 
 rendered to SVG with embedded fonts, rasterised to a canvas, and encoded (GIF in a Web Worker).
 Nothing is uploaded to export.
 
-## 9. Reporting and review
+## 9. The assistant
+
+- **Off unless set up, keys on the server.** The model provider's key is read from the server's
+  environment (`server/ai/config.ts`) and never sent to the browser; with no provider set up the
+  assistant is off and says so. The browser talks only to Mogram (`POST /api/ai/chat`, refused
+  from other sites like every other change), never to the provider.
+- **What's sent, and to whom.** A turn sends the diagram's files, the names of what's selected
+  and the request to the configured provider through the server; earlier turns go as text.
+  People are told which assistant answers (its name in the panel). Choose a provider whose data
+  terms suit the deployment (Anthropic's API, for one, doesn't train on API data by default).
+- **What's kept.** The server records one row per turn (`ai_usage`: tokens, model, how it
+  ended), never the prompt or the diagram. The conversation is kept in the person's browser.
+- **Who and how much.** Signing in is required unless `AI_ALLOW_ANONYMOUS=1`. Each person (or,
+  without an account, each address behind `TRUSTED_IP_HEADER`) gets 12 turns a minute and a
+  daily allowance (`AI_DAILY_TURNS`, 30 without an account), counted atomically in Postgres
+  like the sign-in throttle. A turn is at most 16 model calls and five minutes.
+- **What the model can do.** Only Mogram's own edits, each checked before it counts: inputs are
+  validated (`lib/ai/tools.ts`), a change that breaks the diagram or names an unknown icon is
+  refused, files can be written only inside the project and only as Mogram YAML or markdown
+  cards, and removing more than eight elements needs the person's agreement. Every turn is one
+  undo step and one version, so anything it does can be undone or restored. Its text is shown as
+  plain text, never as HTML.
+
+## 10. Reporting and review
 
 Each release gets a security review against this document (findings and fixes are recorded in
 `build-log.md`). Dependencies are pinned to exact versions in `package.json`.

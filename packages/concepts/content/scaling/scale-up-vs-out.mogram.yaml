@@ -1,0 +1,29 @@
+mogram: 1
+name: Scale up vs scale out
+description: The same rise in traffic, met two ways.
+concept:
+  summary: Scaling up makes one machine bigger, up to the largest size there is. Scaling out adds more machines behind a load balancer, with room to keep growing.
+  topic: scaling
+  tags: [scale out, scale up, comparison]
+  roles:
+    out: { label: What scales out, optional: true }
+    up: { label: What scales up, optional: true }
+containers:
+  out_set: { type: scaling-group, label: Scale out }
+components:
+  users_a: { type: generic/users, label: Users }
+  lb: { type: generic/load-balancer, label: Load balancer }
+  out: { type: generic/server, label: Small servers, in: out_set, scale: { min: 1, max: 8 } }
+  users_b: { type: generic/users, label: Users }
+  up:
+    type: generic/server
+    label: One big server
+    scale:
+      sizes:
+        - { name: Small, cpu: 2, memory: 8, disks: 1 }
+        - { name: Medium, cpu: 4, memory: 16, disks: 2 }
+        - { name: Large, cpu: 8, memory: 32, disks: 4 }
+connections:
+  users_a_to_lb: { from: users_a, to: lb, traffic: { pattern: waves, every: 12s } }
+  lb_to_out: { from: lb, to: out_set }
+  users_b_to_up: { from: users_b, to: up, traffic: { pattern: waves, every: 12s } }

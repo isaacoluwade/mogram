@@ -18,9 +18,9 @@ import {
   type Paint,
 } from "@mogram/core/presets";
 import { ArrowLeft, Pipette, Plus, Trash2 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
-import { Popover, PopoverContent, PopoverTrigger } from "../popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "../popover";
 import { SearchField } from "../search-field";
 import { Tabs, TabsList, TabsTrigger } from "../tabs";
 import { CHECKERBOARD, Swatch } from "./swatch";
@@ -72,9 +72,32 @@ export function ColorPicker({
   ...props
 }: ColorPickerProps) {
   const [open, setOpen] = useState(false);
+  // Inside a side panel (marked `data-popover-edge`), the picker opens beside the whole panel,
+  // level with its button, rather than beside the button and over the panel's own controls. A
+  // new anchor each time it opens: Radix only re-reads an anchor that changed, and in development
+  // a re-attached trigger can otherwise take its place.
+  const id = useId();
+  const anchor = useMemo(
+    () => ({
+      current: {
+        getBoundingClientRect: (): DOMRect => {
+          const button = document.querySelector(`[data-picker-trigger="${CSS.escape(id)}"]`);
+          const rect = button?.getBoundingClientRect() ?? new DOMRect();
+          const panel = button?.closest("[data-popover-edge]")?.getBoundingClientRect();
+          if (panel === undefined || (side !== "left" && side !== "right")) return rect;
+          return new DOMRect(side === "left" ? panel.left : panel.right, rect.top, 0, rect.height);
+        },
+      },
+    }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` renews it on purpose
+    [id, side, open],
+  );
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>{children}</PopoverTrigger>
+      <PopoverAnchor virtualRef={anchor} />
+      <PopoverTrigger asChild data-picker-trigger={id}>
+        {children}
+      </PopoverTrigger>
       <PopoverContent
         side={side}
         align={align}
@@ -202,10 +225,10 @@ function PickerPanel({
   if (view.kind === "gradients") {
     return (
       <SubPanel title="Default gradients" onBack={() => setView({ kind: "main" })}>
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-5">
           {GRADIENT_GROUPS.map((group) => (
             <section key={group.name} aria-label={group.name}>
-              <h4 className="mb-2 text-caption text-fg-muted">{group.name}</h4>
+              <h4 className="mb-2.5 text-caption font-medium text-fg-soft">{group.name}</h4>
               <div className="grid grid-cols-7 gap-2">
                 {group.gradients.map((entry) => (
                   <Swatch
@@ -228,7 +251,7 @@ function PickerPanel({
   const canDrop = eyeDropper() !== null;
   return (
     <div className="flex max-h-[min(600px,80dvh)] flex-col">
-      <div className="px-3 pb-2 pt-3">
+      <div className="px-3 pb-1.5 pt-3">
         <SearchField
           placeholder='Try "blue" or "#00c4cc"'
           aria-label={`Search colours for ${label.toLowerCase()}`}
@@ -245,7 +268,11 @@ function PickerPanel({
           className="min-h-9"
         />
       </div>
-      <div className="flex flex-col gap-4 overflow-y-auto px-3 pb-3">
+      {/*
+        Padded inside the scrolling area, not outside it, so a selected swatch's ring (which sits
+        4px outside the swatch) and the hover grow are never cut off under the search field.
+      */}
+      <div className="flex flex-col gap-5 overflow-y-auto px-3 pb-4 pt-1.5">
         {query.trim() !== "" ? (
           <Section title="Results">
             {results.length === 0 ? (
@@ -276,7 +303,7 @@ function PickerPanel({
                 aria-label="Custom colour"
                 title="Custom colour"
                 onClick={() => setView({ kind: "custom", stop: null })}
-                className="flex size-8 items-center justify-center rounded-full border border-border-strong text-fg-soft transition-colors hover:text-fg [&_svg]:size-4"
+                className="flex size-8 shrink-0 items-center justify-center rounded-full inset-ring inset-ring-border-strong text-fg-soft transition-[transform,color] hover:scale-105 hover:text-fg [&_svg]:size-4"
                 style={{
                   background:
                     "conic-gradient(#ef4444, #f59e0b, #facc15, #22c55e, #06b6d4, #3b82f6, #a855f7, #ec4899, #ef4444)",
@@ -292,7 +319,7 @@ function PickerPanel({
                   aria-label="Pick a colour from the screen"
                   title="Pick a colour from the screen"
                   onClick={() => void pickWithEyeDropper()}
-                  className="flex size-8 items-center justify-center rounded-full border border-border-strong text-fg-soft transition-colors hover:bg-fill-hover hover:text-fg [&_svg]:size-4"
+                  className="flex size-8 shrink-0 items-center justify-center rounded-full inset-ring inset-ring-border-strong text-fg-soft transition-colors hover:bg-fill-hover hover:text-fg [&_svg]:size-4"
                 >
                   <Pipette />
                 </button>
@@ -435,7 +462,7 @@ function Section({
 }) {
   return (
     <section aria-label={title}>
-      <div className="mb-2 flex items-center justify-between gap-2">
+      <div className="mb-2.5 flex h-5 items-center justify-between gap-2">
         <h4 className="text-caption font-medium text-fg-soft">{title}</h4>
         {action !== undefined ? (
           <button
@@ -478,7 +505,7 @@ function SubPanel({
         </button>
         <h3 className="text-label font-medium text-fg">{title}</h3>
       </div>
-      <div className="overflow-y-auto p-3">{children}</div>
+      <div className="overflow-y-auto px-3 pb-4 pt-3">{children}</div>
     </div>
   );
 }
@@ -532,10 +559,10 @@ function GradientEditor({
                 title={style.label}
                 onClick={() => onChange(preview)}
                 className={cn(
-                  "h-10 rounded-md border border-border-strong outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-border-emphasis",
+                  "h-10 rounded-md inset-ring inset-ring-border-strong outline-none transition-shadow focus-visible:ring-2 focus-visible:ring-border-emphasis",
                   current === style.id && "ring-2 ring-fg ring-offset-2 ring-offset-card",
                 )}
-                style={{ background: paintCss(preview) }}
+                style={{ background: `${paintCss(preview)} no-repeat border-box` }}
               />
             );
           })}
@@ -621,7 +648,7 @@ function CustomColor({
         <div className="flex items-center gap-2">
           <span
             aria-hidden
-            className="size-8 shrink-0 rounded-full border border-border-strong"
+            className="size-8 shrink-0 rounded-full inset-ring inset-ring-border-strong"
             style={{ background: `linear-gradient(${current}, ${current}), ${CHECKERBOARD}` }}
           />
           <input

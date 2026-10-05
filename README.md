@@ -34,7 +34,17 @@ pnpm --filter @mogram/web build                             # production build
 
 `E2E_BASE_URL=http://localhost:3200 pnpm --filter @mogram/web test:e2e` runs the browser suite
 against another server, such as `next start` on a production build. The `cloud` journeys sign in
-through the development mailbox, so they run against local development only.
+through the development mailbox, so they run against local development only. The `assistant`
+journeys need the server started with `AI_PROVIDER=scripted AI_ALLOW_ANONYMOUS=1` (the
+development server Playwright starts has them).
+
+## The assistant
+
+Off until a model provider is set up on the server: `ANTHROPIC_API_KEY` for Claude,
+`DEEPSEEK_API_KEY` for DeepSeek, or any OpenAI-compatible API (see `apps/web/.env.example`).
+`AI_PROVIDER=scripted` runs it from scripts, with no key, for tests and demos. To compare
+models, set a provider's key and run `pnpm --filter @mogram/web eval:ai`: realistic requests,
+checked for what an architect would expect.
 
 ## Update the icons
 

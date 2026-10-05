@@ -1,5 +1,8 @@
-import { Document, Pair, Scalar, YAMLMap, isMap, isScalar, type Node } from "yaml";
+import { writeConnectionCapacity, writeFlowBehaviour } from "./capacity";
+import { Document, Scalar, YAMLMap, isMap, isScalar, type Node } from "yaml";
 import type {
+  ElementExtras,
+  ShapeLook,
   CardRef,
   Component,
   Connection,
@@ -10,11 +13,13 @@ import type {
   ProjectFiles,
 } from "../model/types";
 import { LAYOUT_FILE, basename, dirname, isMogramFile, joinPath } from "../model/paths";
+import { formatPaint } from "../presets/paint";
 import { parseDiagram } from "../format/parse";
 import { endpointToString } from "../format/read";
-import { edit, SECTION_OF, type EditContext, type EditResult } from "./context";
-import { EditError, flowSeq, pointNode, setKey } from "./session";
+import { edit, type EditContext, type EditResult } from "./context";
+import { EditError, flowSeq, insertSetting, pointNode, setKey } from "./session";
 import { printDocument } from "./patch";
+import { addEntry } from "./elements";
 
 // -------------------------------------------------------------------------------------------------
 // Settings
@@ -35,19 +40,7 @@ export function setSetting(
       return;
     }
     if (value !== undefined && !root.has(args.key)) {
-      // Settings sit at the top of the file, after the format version.
-      const keyNode = new Scalar(args.key);
-      const pair = new Pair(keyNode, new Scalar(value));
-      const index = root.items.findIndex(
-        (item) =>
-          isScalar(item.key) &&
-          !["mogram", "name", "description", "theme", "background", "grid"].includes(
-            String(item.key.value),
-          ),
-      );
-      const first = root.items[0];
-      if (index === 0 && first !== undefined && isScalar(first.key)) first.key.spaceBefore = true;
-      root.items.splice(index === -1 ? root.items.length : index, 0, pair);
+      insertSetting(root, args.key, new Scalar(value));
       return;
     }
     setKey(root, args.key, value);
@@ -91,7 +84,7 @@ export function moveToFile(
       if (kind === "decoration") continue;
       const source = ctx.fileOf(name);
       if (source === target) continue;
-      const sectionKey = SECTION_OF[kind];
+      const sectionKey = ctx.sectionOf(name);
       const from = ctx.session.section(source, sectionKey);
       const pair = from.items.find((item) => isScalar(item.key) && item.key.value === name);
       if (pair === undefined) continue;
@@ -167,7 +160,7 @@ export function copySnippet(
   }
   for (const component of diagram.components.values()) {
     if (!selected.has(component.name)) continue;
-    section("components").set(
+    section(component.shape === null ? "components" : "shapes").set(
       component.name,
       componentNode(component, diagram.folder, identity, !topLevel.includes(component.name)),
     );
@@ -217,11 +210,20 @@ export function pasteSnippet(
   diagram: Diagram,
   args: { readonly text: string; readonly parent: string | null; readonly at: GridPoint },
 ): EditResult {
+  return pasteSnippetNamed(files, diagram, args).result;
+}
+
+/** Pastes like `pasteSnippet`, and says what each pasted element is called now. */
+export function pasteSnippetNamed(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly text: string; readonly parent: string | null; readonly at: GridPoint },
+): { readonly result: EditResult; readonly renamed: ReadonlyMap<string, string> } {
   const clip = parseDiagram({ "clipboard.mogram.yaml": args.text }).diagram;
   if (clip.components.size + clip.containers.size === 0)
     throw new EditError("There's nothing Mogram can paste on the clipboard.");
-  return edit(files, diagram, (ctx) => {
-    const renamed = new Map<string, string>();
+  const renamed = new Map<string, string>();
+  const result = edit(files, diagram, (ctx) => {
     for (const name of [
       ...clip.containers.keys(),
       ...clip.components.keys(),
@@ -264,9 +266,15 @@ export function pasteSnippet(
         rename,
         true,
       );
-      ctx.session
-        .section(ctx.homeFor(ownParent ?? parent), "components")
-        .set(rename(component.name), node);
+      addEntry(
+        ctx.session.section(
+          ctx.homeFor(ownParent ?? parent),
+          component.shape === null ? "components" : "shapes",
+        ),
+        rename(component.name),
+        node,
+        true,
+      );
       place(component.name, ownParent);
     }
     for (const group of clip.groups.values()) {
@@ -281,6 +289,7 @@ export function pasteSnippet(
     }
     return top;
   });
+  return { result, renamed };
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -330,7 +339,8 @@ function componentNode(
   withParent: boolean,
 ): YAMLMap {
   const map = new YAMLMap();
-  map.set("type", component.type);
+  if (component.shape === null) map.set("type", component.type);
+  else map.set("shape", component.shape);
   if (withParent && component.parent !== null) map.set("in", rename(component.parent));
   if (component.hasExplicitLabel) map.set("label", component.label);
   if (component.hasExplicitState && component.state !== "healthy")
@@ -341,7 +351,32 @@ function componentNode(
   if (component.color !== null) map.set("color", component.color);
   if (component.card !== null) map.set("card", cardNode(component.card, folder));
   if (component.opens !== null) map.set("opens", opensPath(folder, component.opens));
+  writeFlowBehaviour(map, component);
+  if (component.look !== null) writeShapeLook(map, component.look);
+  writeExtras(map, component, rename);
   return map;
+}
+
+/** A shape's look, writing only what differs from the defaults. */
+function writeShapeLook(map: YAMLMap, look: ShapeLook): void {
+  if (look.tone !== "neutral") map.set("tone", look.tone);
+  if (look.fill !== null) map.set("fill", formatPaint(look.fill));
+  if (look.stroke !== null) map.set("stroke", look.stroke);
+  if (look.strokeWidth !== 1.5) map.set("stroke_width", look.strokeWidth);
+  if (look.dash !== "solid") map.set("dash", look.dash);
+  if (look.corner !== null) map.set("corner", look.corner);
+  if (look.lid !== null) map.set("lid", look.lid);
+  if (look.slant !== null) map.set("slant", look.slant);
+  if (look.wave !== null) map.set("wave", look.wave);
+  if (look.shadow) map.set("shadow", true);
+  if (look.opacity !== 100) map.set("opacity", look.opacity);
+  const text = look.text;
+  if (text.font !== null) map.set("font", text.font);
+  if (text.fontSize !== null) map.set("font_size", text.fontSize);
+  if (text.bold) map.set("bold", true);
+  if (text.italic) map.set("italic", true);
+  if (text.align !== "center") map.set("align", text.align);
+  if (text.color !== null) map.set("text_color", text.color);
 }
 
 function containerNode(
@@ -360,6 +395,7 @@ function containerNode(
   if (container.color !== null) map.set("color", container.color);
   if (container.icon !== null) map.set("icon", container.icon);
   if (container.card !== null) map.set("card", cardNode(container.card, folder));
+  writeExtras(map, container, rename);
   return map;
 }
 
@@ -367,6 +403,7 @@ function groupNode(group: Group, rename: (n: string) => string): YAMLMap {
   const map = new YAMLMap();
   if (group.hasExplicitLabel) map.set("label", group.label);
   map.set("members", flowSeq(group.members.map(rename)));
+  writeExtras(map, group, rename);
   return map;
 }
 
@@ -390,5 +427,29 @@ function connectionNode(
   if (connection.color !== null) map.set("color", connection.color);
   if (connection.backupFor !== null) map.set("backup_for", rename(connection.backupFor));
   if (connection.card !== null) map.set("card", cardNode(connection.card, folder));
+  writeConnectionCapacity(map, connection);
+  writeExtras(map, connection, rename);
   return map;
+}
+
+/** `link:` and `data:` travel with a copied element; element links follow renamed copies. */
+function writeExtras(map: YAMLMap, element: ElementExtras, rename: (n: string) => string): void {
+  const link = element.link;
+  if (link !== null)
+    map.set(
+      "link",
+      link.kind === "url"
+        ? link.url
+        : link.kind === "scene"
+          ? `scene:${link.scene}`
+          : link.kind === "tour"
+            ? `tour:${link.tour}`
+            : `#${rename(link.element)}`,
+    );
+  if (element.data.size > 0) {
+    const data = new YAMLMap();
+    data.flow = true;
+    for (const [key, value] of element.data) data.set(key, value);
+    map.set("data", data);
+  }
 }

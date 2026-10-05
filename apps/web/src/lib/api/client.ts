@@ -1,3 +1,4 @@
+import type { VersionSource } from "@/lib/history/rules";
 import type {
   ApiErrorBody,
   DiagramDetail,
@@ -67,6 +68,12 @@ export interface SaveInput {
   readonly baseVersion: number;
   readonly name?: string;
   readonly thumbnail?: string | null;
+  /** Make this save its own version: an assistant turn, or one given a name. */
+  readonly checkpoint?: {
+    readonly source: "ai" | "named";
+    readonly label?: string;
+    readonly name?: string;
+  };
 }
 
 export const api = {
@@ -80,6 +87,7 @@ export const api = {
     name: string;
     files: Record<string, string>;
     thumbnail?: string | null;
+    source?: "create" | "import";
   }): Promise<DiagramDetail> =>
     (
       await request<{ diagram: DiagramDetail }>("/api/diagrams", {
@@ -107,11 +115,13 @@ export const api = {
   deleteDiagram: (id: string): Promise<void> =>
     request(`/api/diagrams/${encodeURIComponent(id)}`, { method: "DELETE" }),
 
-  duplicateDiagram: async (id: string): Promise<DiagramDetail> =>
+  duplicateDiagram: async (id: string, revisionId?: string): Promise<DiagramDetail> =>
     (
       await request<{ diagram: DiagramDetail }>(
         `/api/diagrams/${encodeURIComponent(id)}/duplicate`,
-        { method: "POST" },
+        revisionId === undefined
+          ? { method: "POST" }
+          : { method: "POST", body: json({ revisionId }) },
       )
     ).diagram,
 
@@ -139,6 +149,34 @@ export const api = {
         `/api/diagrams/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`,
       )
     ).files,
+
+  nameRevision: (id: string, revisionId: string, name: string | null): Promise<void> =>
+    request(`/api/diagrams/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`, {
+      method: "PATCH",
+      body: json({ name }),
+    }),
+
+  nameCurrentVersion: (id: string, name: string): Promise<void> =>
+    request(`/api/diagrams/${encodeURIComponent(id)}/revisions`, {
+      method: "POST",
+      body: json({ name }),
+    }),
+
+  importVersions: (
+    id: string,
+    versions: readonly {
+      files: Record<string, string>;
+      createdAt: string;
+      name: string | null;
+      source: VersionSource;
+      label: string | null;
+      restoredFromAt: string | null;
+    }[],
+  ): Promise<{ imported: number }> =>
+    request(`/api/diagrams/${encodeURIComponent(id)}/revisions/import`, {
+      method: "POST",
+      body: json({ versions }),
+    }),
 
   restoreRevision: (
     id: string,

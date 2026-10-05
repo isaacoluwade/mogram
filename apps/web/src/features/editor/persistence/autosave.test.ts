@@ -45,7 +45,8 @@ describe("autosave", () => {
     expect(persist).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(500);
     expect(persist).toHaveBeenCalledTimes(1);
-    expect(persist).toHaveBeenCalledWith(store.getState().files);
+    // A plain save: no checkpoint goes with it.
+    expect(persist).toHaveBeenCalledWith(store.getState().files, undefined);
     expect(store.getState().save.kind).toBe("saved");
     detach();
   });

@@ -13,8 +13,11 @@ import {
   Plus,
   Shapes,
   ShieldCheck,
+  Sparkles,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useQuery } from "@tanstack/react-query";
+import type { AssistantConfig } from "@/lib/ai/protocol";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -216,6 +219,11 @@ export function Dashboard({
               )}
             />
 
+            <Describe
+              disabled={dashboard.creating}
+              onBuild={(text) => dashboard.createFromDescription(text)}
+            />
+
             <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
               <SearchField
                 ref={search}
@@ -316,6 +324,68 @@ export function Dashboard({
         </main>
       </div>
     </div>
+  );
+}
+
+/**
+ * "Describe what you want to build" (A5): a new diagram that the assistant draws from the
+ * description. Shown only when the assistant is on for this person.
+ */
+function Describe({ onBuild, disabled }: { onBuild: (text: string) => void; disabled: boolean }) {
+  const [text, setText] = useState("");
+  const config = useQuery({
+    queryKey: ["assistant-config"],
+    queryFn: async (): Promise<AssistantConfig> => {
+      const response = await fetch("/api/ai/config", { credentials: "same-origin" });
+      if (!response.ok) throw new Error("unavailable");
+      return ((await response.json()) as { assistant: AssistantConfig }).assistant;
+    },
+    staleTime: 60_000,
+  });
+  if (config.data?.enabled !== true) return null;
+  const build = () => {
+    if (text.trim() !== "") onBuild(text);
+  };
+  return (
+    <form
+      aria-label="Describe a new diagram"
+      onSubmit={(event) => {
+        event.preventDefault();
+        build();
+      }}
+      className="flex flex-col gap-2 rounded-xl border border-border-subtle bg-surface p-3 focus-within:border-border-strong"
+    >
+      <label
+        htmlFor="describe"
+        className="flex items-center gap-2 px-1 text-label font-medium text-fg"
+      >
+        <Sparkles aria-hidden className="size-4 text-violet" />
+        Describe what you want to build
+      </label>
+      <textarea
+        id="describe"
+        rows={2}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            build();
+          }
+        }}
+        placeholder="e.g. An online shop on Azure: Front Door, a web app and an API in a virtual network, Azure SQL, and a Redis cache"
+        className="w-full resize-none bg-transparent px-1 text-body-sm text-fg outline-none placeholder:text-fg-ghost"
+      />
+      <div className="flex items-center justify-between gap-3">
+        <p className="px-1 text-caption text-fg-faint">
+          {config.data.name} drafts it on the canvas; you can keep changing it together.
+        </p>
+        <Button type="submit" variant="primary" size="sm" disabled={disabled || text.trim() === ""}>
+          <Sparkles />
+          Build it
+        </Button>
+      </div>
+    </form>
   );
 }
 

@@ -76,16 +76,30 @@ export class EditContext {
     return element.source.file;
   }
 
-  /** The definition map of a component, container, group or connection. */
+  /** The section an element is written under: shapes have their own (`shapes:`). */
+  sectionOf(name: string): string {
+    const kind = this.requireKind(name);
+    if (kind === "decoration") return "layout";
+    if (kind === "component" && this.diagram.components.get(name)?.shape != null) return "shapes";
+    return SECTION_OF[kind];
+  }
+
+  /** Whether `name` is a shape (a component drawn as an outline). */
+  isShape(name: string): boolean {
+    return this.diagram.components.get(name)?.shape != null;
+  }
+
+  /** The definition map of a component, shape, container, group or connection. */
   definition(name: string): YAMLMap {
     const kind = this.requireKind(name);
     if (kind === "decoration") return this.decoration(name);
-    const section = this.session.section(this.fileOf(name), SECTION_OF[kind]);
+    const section = this.session.section(this.fileOf(name), this.sectionOf(name));
     const node = section.get(name, true) as Node | undefined;
     if (isMap(node)) return node;
     const map = new YAMLMap();
     const shorthand = scalarString(node);
-    if (kind === "component" && shorthand !== null) map.set("type", shorthand);
+    if (kind === "component" && shorthand !== null)
+      map.set(this.isShape(name) ? "shape" : "type", shorthand);
     section.set(name, map);
     return map;
   }
@@ -97,7 +111,7 @@ export class EditContext {
       this.decorationsMap(this.fileOf(name)).delete(name);
       return;
     }
-    this.session.section(this.fileOf(name), SECTION_OF[kind]).delete(name);
+    this.session.section(this.fileOf(name), this.sectionOf(name)).delete(name);
   }
 
   /** File for new architecture next to a container (FI-12): its file, else the settings file. */
@@ -156,7 +170,7 @@ export class EditContext {
   /** Sets or clears a layout field, switching between short and long forms as needed. */
   setLayoutField(
     name: string,
-    field: "at" | "size" | "z" | "via",
+    field: "at" | "size" | "z" | "via" | "from_anchor" | "to_anchor" | "label" | "locked",
     value: Node | number | undefined,
   ): void {
     const layout = this.layoutSection(this.layoutFileOf(name));
@@ -174,6 +188,11 @@ export class EditContext {
     if (value === undefined) map.delete(field);
     else map.set(field, value);
     if (map.items.length === 0) layout.delete(name);
+    // Back to the short form when only the position is left: `app: [2, 2]`.
+    else if (value === undefined && map.items.length === 1 && map.has("at")) {
+      const at = map.get("at", true) as Node | undefined;
+      if (isSeq(at)) layout.set(name, at);
+    }
   }
 
   removeLayout(name: string): void {

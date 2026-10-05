@@ -1,0 +1,22 @@
+mogram: 1
+name: Caching
+description: Answer repeat requests nearby, so the database sees only the misses.
+concept:
+  summary: A cache keeps answers to requests it has seen. Hits come straight back; only misses go on to the database, so it carries a fraction of the traffic.
+  topic: scaling
+  tags: [cache, redis, hit rate, database]
+  roles:
+    cache: What answers repeat requests
+    db: { label: What it protects, optional: true }
+components:
+  users: { type: generic/users, label: Users }
+  app: { type: generic/web-app, label: App }
+  cache: { type: generic/cache, label: Cache, hit: 80% }
+  db: { type: generic/database, label: Database, capacity: 1x }
+connections:
+  users_to_app: { from: users, to: app, traffic: { pattern: waves, high: 3x } }
+  app_to_cache: { from: app, to: cache }
+  cache_to_db: { from: cache, to: db }
+scenes:
+  cold_cache:
+    cache: { hit: 5% }

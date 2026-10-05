@@ -1,18 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import { FileCode2, Pin } from "lucide-react";
+import { FileCode2, PaintRoller, Paintbrush, Pin } from "lucide-react";
 import { moveToFile, renameElement, updateElement, type PropertyValue } from "@mogram/core/edit";
 import { elementNames, isValidName, type Diagram, type SceneEntry } from "@mogram/core/model";
-import type { StatePreset } from "@mogram/core/presets";
+import { modelsCapacity } from "@mogram/core/capacity";
+import { FLOW_PRESETS, type FlowPreset, type StatePreset } from "@mogram/core/presets";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { PropertyRow } from "@/components/ui/property-row";
-import { sceneEntry } from "../actions";
+import { copyStyle, hasCopiedStyle, pasteStyle, sceneEntry } from "../actions";
 import { useEditor, useEditorShallow, useEditorStore } from "../editor-context";
 import { sceneTarget, storyDiagram } from "../store/editor-store";
-import { CommitInput } from "./fields";
+import { CommitInput, InspectorSection } from "./fields";
 
 /** Writes element properties to the files as one undo step. */
 export function useEdit() {
@@ -192,6 +193,20 @@ export function sceneValue(view: SceneView, name: string): SceneEntry | undefine
   return sceneEntry(view.story, view.scene, sceneTarget(view.levelPath, name));
 }
 
+/**
+ * The flow an arrow is drawn with in the current scene. In a diagram that models capacity, an
+ * arrow left idle carries its traffic (D-82), so it shows as Traffic, and Idle isn't offered:
+ * Blocked, or a level of 0×, stops it.
+ */
+export function shownFlow(view: SceneView, diagram: Diagram, name: string): FlowPreset {
+  const own = sceneValue(view, name)?.flow ?? diagram.connections.get(name)?.flow ?? "idle";
+  return own === "idle" && modelsCapacity(diagram) ? "traffic" : own;
+}
+
+export function flowChoices(diagram: Diagram): readonly FlowPreset[] {
+  return modelsCapacity(diagram) ? FLOW_PRESETS.filter((f) => f !== "idle") : FLOW_PRESETS;
+}
+
 export function effectiveState(view: SceneView, name: string, base: StatePreset): StatePreset {
   return sceneValue(view, name)?.state ?? base;
 }
@@ -199,4 +214,29 @@ export function effectiveState(view: SceneView, name: string, base: StatePreset)
 export function opensRelative(folder: string, opens: string): string {
   if (folder.length === 0) return `./${opens}`;
   return opens.startsWith(`${folder}/`) ? `./${opens.slice(folder.length + 1)}` : opens;
+}
+
+/** Copy style / paste style for the selection, the same commands as ⌥⌘C and ⌥⌘V. */
+export function StyleClipboard() {
+  const store = useEditorStore();
+  // Re-render when the selection changes, so "Paste" knows whether there's a style to give.
+  useEditor((s) => s.selection);
+  return (
+    <InspectorSection id="style-clipboard" title="Copy style" defaultOpen={false}>
+      <div className="flex gap-1.5">
+        <Button variant="secondary" size="sm" onClick={() => copyStyle(store)}>
+          <Paintbrush /> Copy style
+        </Button>
+        <Button
+          variant="secondary"
+          size="sm"
+          disabled={!hasCopiedStyle()}
+          title={hasCopiedStyle() ? undefined : "Copy a style first"}
+          onClick={() => pasteStyle(store)}
+        >
+          <PaintRoller /> Paste style
+        </Button>
+      </div>
+    </InspectorSection>
+  );
 }

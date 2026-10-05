@@ -1,0 +1,25 @@
+mogram: 1
+name: Failover
+description: When the primary fails, a standby takes its traffic.
+concept:
+  summary: Traffic goes to a primary while it's healthy. A standby waits beside it, and when the primary fails, its traffic moves to the standby.
+  topic: reliability
+  tags: [standby, disaster recovery, dns, backup]
+  roles:
+    primary: What usually serves
+    standby: What takes over
+    switch: { label: What moves the traffic, optional: true }
+components:
+  users: { type: generic/users, label: Users }
+  switch: { type: generic/dns, label: Traffic manager }
+  primary: { type: generic/server, label: Primary, capacity: 1x }
+  standby: { type: generic/server, label: Standby, capacity: 1x }
+connections:
+  users_to_switch: { from: users, to: switch }
+  switch_to_primary: { from: switch, to: primary }
+  switch_to_standby: { from: switch, to: standby, backup_for: switch_to_primary }
+scenes:
+  outage:
+    primary: down
+    switch_to_primary: blocked
+    switch_to_standby: rerouted

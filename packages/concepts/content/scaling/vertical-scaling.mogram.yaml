@@ -1,0 +1,24 @@
+mogram: 1
+name: Vertical scaling
+description: More traffic, a bigger machine, up to the biggest there is.
+concept:
+  summary: Give one machine more cores, memory and disks as its load grows, and less as it falls. There is always a largest size; past it, the machine is overloaded.
+  topic: scaling
+  tags: [scale up, vm size, database, cpu, memory]
+  roles:
+    db: What scales up
+components:
+  app: { type: generic/web-app, label: App }
+  db:
+    type: generic/database
+    label: Database
+    scale:
+      sizes:
+        - { name: Small, cpu: 2, memory: 8, disks: 1 }
+        - { name: Medium, cpu: 4, memory: 16, disks: 2 }
+        - { name: Large, cpu: 8, memory: 32, disks: 4 }
+connections:
+  app_to_db: { from: app, to: db, traffic: { pattern: waves, high: 2.5x, low: 0.5x } }
+scenes:
+  too_busy:
+    app_to_db: 5x

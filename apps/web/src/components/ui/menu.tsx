@@ -43,6 +43,8 @@ export interface MenuRowProps {
   description?: ReactNode;
   shortcut?: string;
   tone?: "default" | "danger";
+  /** A toggle's or choice's state: a check mark at the end of the row when true. */
+  checked?: boolean;
 }
 
 function RowBody({
@@ -50,6 +52,7 @@ function RowBody({
   children,
   description,
   shortcut,
+  checked,
 }: MenuRowProps & { children: ReactNode }) {
   return (
     <>
@@ -61,6 +64,9 @@ function RowBody({
         ) : null}
       </span>
       {shortcut !== undefined ? <Kbd className="ml-auto">{shortcut}</Kbd> : null}
+      {checked !== undefined ? (
+        <Check aria-hidden className={cn("!text-fg", checked ? "visible" : "invisible")} />
+      ) : null}
     </>
   );
 }
@@ -71,6 +77,7 @@ export function MenuItem({
   description,
   shortcut,
   tone = "default",
+  checked,
   children,
   ...props
 }: ComponentProps<typeof MenuPrimitive.Item> & MenuRowProps) {
@@ -81,12 +88,14 @@ export function MenuItem({
         tone === "danger" && "text-rose data-[highlighted]:text-rose [&_svg]:text-rose",
         className,
       )}
+      {...(checked !== undefined ? { role: "menuitemcheckbox", "aria-checked": checked } : {})}
       {...props}
     >
       <RowBody
         icon={icon}
         description={description}
         {...(shortcut !== undefined ? { shortcut } : {})}
+        {...(checked !== undefined ? { checked } : {})}
       >
         {children}
       </RowBody>
@@ -192,6 +201,7 @@ export function ContextMenuItem({
   description,
   shortcut,
   tone = "default",
+  checked,
   children,
   ...props
 }: ComponentProps<typeof ContextPrimitive.Item> & MenuRowProps) {
@@ -202,12 +212,14 @@ export function ContextMenuItem({
         tone === "danger" && "text-rose data-[highlighted]:text-rose [&_svg]:text-rose",
         className,
       )}
+      {...(checked !== undefined ? { role: "menuitemcheckbox", "aria-checked": checked } : {})}
       {...props}
     >
       <RowBody
         icon={icon}
         description={description}
         {...(shortcut !== undefined ? { shortcut } : {})}
+        {...(checked !== undefined ? { checked } : {})}
       >
         {children}
       </RowBody>

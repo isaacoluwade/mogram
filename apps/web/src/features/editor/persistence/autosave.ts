@@ -2,12 +2,18 @@
 
 import { useEffect, useState } from "react";
 import type { ProjectFiles } from "@mogram/core/model";
+import type { Checkpoint } from "@/lib/history/rules";
 import { ApiError } from "@/lib/api/client";
 import type { EditorStore } from "../store/editor-store";
 
 export interface Autosave {
   /** Saves now (if anything changed); true once the files on screen are stored. */
   flush(): Promise<boolean>;
+  /**
+   * Saves now as its own version (an assistant turn, a named version, a restore); true once
+   * stored. With nothing to save, there's no new version.
+   */
+  checkpoint(checkpoint: Checkpoint): Promise<boolean>;
   /** Marks `files` as already stored (after loading a newer version from the server). */
   markSaved(files: ProjectFiles): void;
 }
@@ -42,8 +48,12 @@ function messageFor(error: unknown): string {
  * backoff; a conflict (409) stops saving until the person chooses what to keep. Leaving the page
  * with unstored changes asks for confirmation.
  */
+export type Persist = (files: ProjectFiles, checkpoint?: Checkpoint) => Promise<void>;
+
 export class AutosaveController implements Autosave {
-  private persist: ((files: ProjectFiles) => Promise<void>) | null = null;
+  private persist: Persist | null = null;
+  /** Goes with the next save: it becomes its own version. */
+  private pending: Checkpoint | null = null;
   private saved: ProjectFiles;
   private timer: number | null = null;
   private running: Promise<boolean> | null = null;
@@ -72,6 +82,12 @@ export class AutosaveController implements Autosave {
     }, ms);
   }
 
+  async checkpoint(checkpoint: Checkpoint): Promise<boolean> {
+    if (!this.hasUnsaved()) return true;
+    this.pending = checkpoint;
+    return this.flush();
+  }
+
   async flush(): Promise<boolean> {
     if (this.timer !== null) window.clearTimeout(this.timer);
     this.timer = null;
@@ -98,8 +114,10 @@ export class AutosaveController implements Autosave {
   }
 
   private async attempt(files: ProjectFiles): Promise<boolean> {
+    const checkpoint = this.pending ?? undefined;
+    this.pending = null;
     try {
-      await this.persist?.(files);
+      await this.persist?.(files, checkpoint);
       this.saved = files;
       this.failures = 0;
       if (this.store.getState().files === files)
@@ -113,6 +131,8 @@ export class AutosaveController implements Autosave {
           .setSave({ kind: "conflict", currentVersion: error.currentVersion ?? 0 });
         return false;
       }
+      // The next attempt still makes this save its own version.
+      if (checkpoint !== undefined) this.pending ??= checkpoint;
       this.store.getState().setSave({ kind: "error", message: messageFor(error) });
       // Network trouble and server errors retry with backoff; a refused request won't fix itself.
       if (!isPermanent(error)) {
@@ -124,13 +144,15 @@ export class AutosaveController implements Autosave {
   }
 
   /** Starts saving with `persist`, watching the store and the page lifecycle; returns the cleanup. */
-  attach(persist: (files: ProjectFiles) => Promise<void>): () => void {
+  attach(persist: Persist): () => void {
     this.persist = persist;
     const unsubscribe = this.store.subscribe((state, previous) => {
+      // An assistant turn is saved when it ends, as its own version (host.checkpoint).
       if (
         state.files !== previous.files &&
         state.files !== this.saved &&
-        state.save.kind !== "conflict"
+        state.save.kind !== "conflict" &&
+        state.assistant === null
       )
         this.schedule();
     });
@@ -157,7 +179,7 @@ export class AutosaveController implements Autosave {
 
 export function useAutosave(
   store: EditorStore,
-  persist: (files: ProjectFiles) => Promise<void>,
+  persist: Persist,
   delay: number,
 ): AutosaveController {
   const [controller] = useState(() => new AutosaveController(store, delay));

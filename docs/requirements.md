@@ -9,36 +9,46 @@ that proves it (e2e = `apps/web/e2e`, core = `packages/core/test`).
 
 ## ED — Editor
 
-| ID    | Requirement                                                                                      | Status | Evidence                                                |
-| ----- | ------------------------------------------------------------------------------------------------ | ------ | ------------------------------------------------------- |
-| ED-1  | Infinite canvas with smooth pan and zoom                                                         | ☑      | e2e editor overview; wheel, pinch and hand tool         |
-| ED-2  | Library panel to drag icons onto the canvas                                                      | ☑      | e2e "adds an icon from the library"                     |
-| ED-3  | Undo and redo                                                                                    | ☑      | e2e undo/redo; store test                               |
-| ED-4  | Copy and paste                                                                                   | ☑      | e2e "copy and paste"                                    |
-| ED-5  | Multi-select (shift-click, marquee)                                                              | ☑      | e2e shift-click and marquee                             |
-| ED-6  | Align and distribute                                                                             | ☑      | e2e "align left from the inspector"                     |
-| ED-7  | Keyboard shortcuts                                                                               | ☑      | e2e shortcuts dialog; `shortcuts.ts` table              |
-| ED-8  | Canvas themes: solid colours and gradients, light and dark, chosen from presets                  | ☑      | e2e "changes the canvas background theme"; core presets |
-| ED-9  | 8px grid snaps silently, hidden unless turned on; positions always whole numbers                 | ☑      | core layout tests; grid contrast tests; e2e (D-52)      |
-| ED-10 | Positions stored in grid units relative to parent container (moving a VNet changes one line)     | ☑      | core edit tests (one-line diffs)                        |
-| ED-11 | Elements without a position are auto-placed and unpinned; dragging pins                          | ☑      | core layout tests (auto-placement)                      |
-| ED-12 | Containers nest (region, VNet, subnet, resource group, cluster)                                  | ☑      | e2e container tool; core layout tests                   |
-| ED-13 | Containers auto-size to children + padding; size saved only after manual resize                  | ☑      | e2e resize saves size; core layout tests                |
-| ED-14 | Container look comes from a per-type preset; nothing visual saved unless overridden              | ☑      | core presets; renderer                                  |
-| ED-15 | Groups: dashed boundary around chosen members across containers; no position                     | ☑      | e2e grouping                                            |
-| ED-16 | Connections drawn by dragging element to element                                                 | ☑      | e2e "the connect tool draws a connection"               |
-| ED-17 | Connections auto-routed around other elements                                                    | ☑      | core routing tests                                      |
-| ED-18 | Connection path saved only if bent by hand                                                       | ☑      | e2e "bending a connection"; core routing                |
-| ED-19 | Connection can attach to a named port on a nested diagram                                        | ☑      | core nested tests; AKS template                         |
-| ED-20 | Inspector: type, name, state, presets, card, file                                                | ☑      | e2e state; fields save as typed (D-51); screenshots     |
-| ED-21 | Advanced preset settings behind an "Advanced" section                                            | ☑      | inspector "Advanced" sections                           |
-| ED-22 | Decorative free text, labels and highlight zones, stored with layout                             | ☑      | e2e text tool; core edit tests                          |
-| ED-23 | Z-order: bring forward / send backward / to front / to back (user request)                       | ☑      | e2e "brings an element to the front"; core edit tests   |
-| ED-24 | Background can be changed (user request; covered by ED-8 + custom colour)                        | ☑      | e2e theme change; custom colour palette (D-52)          |
-| ED-25 | Sticky notes with rich text (bold, italic, lists), font, size, alignment, colours (user request) | ☑      | e2e notes; core notes tests (D-54)                      |
-| ED-26 | Quick-edit bar over the selection with edits specific to the element (user request)              | ☑      | e2e quick bar; screenshots (D-55)                       |
-| ED-27 | Custom colours, opacity and gradients with presets; grid colour and opacity (user request)       | ☑      | core paint tests; picker screenshots (D-53)             |
-| ED-28 | Preview the diagram as viewers see it, from where you are editing (user request)                 | ☑      | e2e navigation: Preview, Shift+P (D-57)                 |
+| ID    | Requirement                                                                                                                      | Status | Evidence                                                          |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------- |
+| ED-1  | Infinite canvas with smooth pan and zoom                                                                                         | ☑      | e2e editor overview; wheel, pinch and hand tool                   |
+| ED-2  | Library panel to drag icons onto the canvas                                                                                      | ☑      | e2e "adds an icon from the library"                               |
+| ED-3  | Undo and redo                                                                                                                    | ☑      | e2e undo/redo; store test                                         |
+| ED-4  | Copy and paste                                                                                                                   | ☑      | e2e "copy and paste"                                              |
+| ED-5  | Multi-select (shift-click, marquee)                                                                                              | ☑      | e2e shift-click and marquee                                       |
+| ED-6  | Align and distribute                                                                                                             | ☑      | e2e "align left from the inspector"                               |
+| ED-7  | Keyboard shortcuts                                                                                                               | ☑      | e2e shortcuts dialog; command registry (D-64)                     |
+| ED-8  | Canvas themes: solid colours and gradients, light and dark, chosen from presets (30, by family; D-73)                            | ☑      | e2e theme change and "See all"; core theme contrast tests         |
+| ED-9  | 8px grid snaps silently; shown by default (user request), dots or lines, every mark a snap point; positions always whole numbers | ☑      | core layout tests; grid contrast and step tests; e2e (D-52, D-74) |
+| ED-10 | Positions stored in grid units relative to parent container (moving a VNet changes one line)                                     | ☑      | core edit tests (one-line diffs)                                  |
+| ED-11 | Elements without a position are auto-placed and unpinned; dragging pins                                                          | ☑      | core layout tests (auto-placement)                                |
+| ED-12 | Containers nest (region, VNet, subnet, resource group, cluster)                                                                  | ☑      | e2e container tool; core layout tests                             |
+| ED-13 | Containers auto-size to children + padding; size saved only after manual resize                                                  | ☑      | e2e resize saves size; core layout tests                          |
+| ED-14 | Container look comes from a per-type preset; nothing visual saved unless overridden                                              | ☑      | core presets; renderer                                            |
+| ED-15 | Groups: dashed boundary around chosen members across containers; no position                                                     | ☑      | e2e grouping                                                      |
+| ED-16 | Connections drawn by dragging element to element                                                                                 | ☑      | e2e "the connect tool draws a connection"                         |
+| ED-17 | Connections auto-routed around other elements                                                                                    | ☑      | core routing tests                                                |
+| ED-18 | Connection path saved only if bent by hand                                                                                       | ☑      | e2e "bending a connection"; core routing                          |
+| ED-19 | Connection can attach to a named port on a nested diagram                                                                        | ☑      | core nested tests; AKS template                                   |
+| ED-20 | Inspector: type, name, state, presets, card, file                                                                                | ☑      | e2e state; fields save as typed (D-51); screenshots               |
+| ED-21 | Advanced preset settings behind an "Advanced" section                                                                            | ☑      | inspector "Advanced" sections                                     |
+| ED-22 | Decorative free text, labels and highlight zones, stored with layout                                                             | ☑      | e2e text tool; core edit tests                                    |
+| ED-23 | Z-order: bring forward / send backward / to front / to back (user request)                                                       | ☑      | e2e "brings an element to the front"; core edit tests             |
+| ED-24 | Background can be changed (user request; covered by ED-8 + custom colour)                                                        | ☑      | e2e theme change; custom colour palette (D-52)                    |
+| ED-25 | Sticky notes with rich text (bold, italic, lists), font, size, alignment, colours (user request)                                 | ☑      | e2e notes; core notes tests (D-54)                                |
+| ED-26 | Quick-edit bar over the selection with edits specific to the element (user request)                                              | ☑      | e2e quick bar; screenshots (D-55)                                 |
+| ED-27 | Custom colours, opacity and gradients with presets; grid colour and opacity (user request)                                       | ☑      | core paint tests; picker screenshots (D-53)                       |
+| ED-28 | Preview the diagram as viewers see it, from where you are editing (user request)                                                 | ☑      | e2e navigation: Preview, Shift+P (D-57)                           |
+| ED-29 | Connections: arrowheads, line style, bends on every route, fixed ends, label place, jumps (user request)                         | ☑      | e2e connectors; core connectors tests (D-59–D-61)                 |
+| ED-30 | Bends follow moved elements; dropping a component on a connection splits it                                                      | ☑      | e2e connectors; core follow tests (D-62, D-63)                    |
+| ED-31 | One command registry: keys, context menus per selection, palette (⌘K), shortcuts list                                            | ☑      | e2e commands; registry tests (D-64)                               |
+| ED-32 | Find, lock, paste in place, copy and paste style, copy as image, resize with keys                                                | ☑      | e2e commands; core style and lock tests (D-65)                    |
+| ED-33 | Inspector tabs (Element, Style, Arrange), folding sections, mixed values, position and size fields                               | ☑      | e2e inspector (D-66)                                              |
+| ED-34 | Shapes: 11 outlines with tone, fill, outline, corner, shadow, opacity and label styling                                          | ☑      | e2e shapes; core shapes tests (D-67)                              |
+| ED-35 | Smart guides, hover arrows for connected copies, quick add, copy by dragging, minimap                                            | ☑      | e2e canvas; guides tests (D-68)                                   |
+| ED-36 | Links and data on elements, editable PNG/SVG exports, PDF, Tidy up, undo across levels                                           | ☑      | e2e document; core links tests (D-69)                             |
+| ED-37 | Size guides, Find across nested diagrams, `%key%` placeholders, named styles                                                     | ☑      | e2e canvas, commands, document, shapes; core tests (D-70)         |
+| ED-38 | Library: search, Recent, Basics tabs, one icon library at a time by category; containers named for the diagram's cloud           | ☑      | e2e providers, shapes; core cloud tests (D-75)                    |
 
 ## IC — Icons
 
@@ -183,6 +193,59 @@ that proves it (e2e = `apps/web/e2e`, core = `packages/core/test`).
 | AC-5 | Diagrams private by default until shared                                        | ☑      | API tests (404 for others, private by default)                          |
 | AC-6 | Clear explanation of where diagrams are stored and who can see them             | ☑      | `/security` page; share dialog notes                                    |
 | AC-7 | Security is a first-release requirement                                         | ☑      | docs/security.md; API, sanitiser and markdown tests; production CSP run |
+
+## HI — Version history (agreed 2026-10-04, D-76)
+
+| ID   | Requirement                                                                                 | Status | Evidence                                                       |
+| ---- | ------------------------------------------------------------------------------------------- | ------ | -------------------------------------------------------------- |
+| HI-1 | Versions by day with what changed, who made it and a thumbnail, in a panel on the right     | ☑      | e2e history (versions with change lines); core history tests   |
+| HI-2 | One version per working session; named, assistant, restore and first versions stand alone   | ☑      | web rules tests; e2e history                                   |
+| HI-3 | An earlier version shown read-only on the canvas with a banner (Restore, Make a copy, Back) | ☑      | e2e history (read-only, Esc back, restore, copy)               |
+| HI-4 | Show changes against the version before or against now (added, changed, removed ghosts)     | ☑      | e2e history (overlay marks); screenshot editor/version-history |
+| HI-5 | Bring back selected elements or scenes, with their children and connections                 | ☑      | core history tests; e2e history (bring back, one undo step)    |
+| HI-6 | Name versions; named versions are kept forever; retention hourly then daily                 | ☑      | web rules tests; e2e history (name, rename); cloud e2e         |
+| HI-7 | Drafts keep history in the browser and take it to the account                               | ☑      | e2e cloud (a draft's history goes with it)                     |
+
+## AI — The assistant (agreed 2026-10-04, D-77 … D-81)
+
+| ID    | Requirement                                                                                  | Status | Evidence                                                                  |
+| ----- | -------------------------------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------- |
+| AI-1  | Chat beside the library (✨ and ⌘J) that builds and changes the diagram on the canvas        | ☑      | e2e assistant; screenshots editor/assistant\*                             |
+| AI-2  | Understands the whole format: the briefing carries it, every change is checked against it    | ☑      | tools tests (refused breaks, unknown icons); server tests                 |
+| AI-3  | Asks with 2–4 options (with previews), something else, multi-select, keys 1–4                | ☑      | e2e assistant (question, answer by number); screenshot assistant-question |
+| AI-4  | Plans before big builds; builds on agreement                                                 | ☑      | e2e assistant (plan, build it)                                            |
+| AI-5  | Changes apply as it works; each turn one undo step and one version; edits wait meanwhile     | ☑      | store tests; e2e assistant (undo from the card, version, edits wait)      |
+| AI-6  | Not tied to one vendor: Claude, DeepSeek, OpenAI and compatible APIs; fast and strong models | ☑      | server tests (both wire formats, config)                                  |
+| AI-7  | Architecture review: suggestions in the inspector, fed back to the model                     | ☑      | core lint tests; templates pass review; e2e suggestions                   |
+| AI-8  | Selection and @mentions as context; Ask about this; Stop                                     | ☑      | e2e assistant (stop, points at things)                                    |
+| AI-9  | Describe what you want to build on the diagrams page                                         | ☑      | e2e assistant (description becomes a diagram)                             |
+| AI-10 | Evaluations against any provider; scripted runs in the normal tests                          | ☑      | `pnpm eval:ai`; test/ai-eval.test.ts                                      |
+| AI-11 | Keys stay on the server; sign-in by default; limits; usage without prompts                   | ☑      | server tests (route refuses other sites); docs/security.md §9             |
+
+## CP — Capacity and scaling (agreed 2026-10-04, D-82; patterns 2026-10-05, D-84)
+
+| ID   | Requirement                                                                                                                                             | Status | Evidence                                                                                                                                                               |
+| ---- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CP-1 | Traffic, scaling (out and up), capacity, routing, caches and queues in the format, with diagnostics                                                     | ☑      | core capacity-format tests; docs/file-format.md Capacity                                                                                                               |
+| CP-2 | Traffic through the graph decides copies and sizes; past the limits, overloaded from load                                                               | ☑      | core capacity tests (property test: splits keep traffic, copies bound)                                                                                                 |
+| CP-3 | Copies start and stop, machines grow and shrink smoothly, over time and the same everywhere (editor, viewer, exports)                                   | ☑      | core timeline tests; e2e capacity (spike and back)                                                                                                                     |
+| CP-4 | Out: a scale set that grows and shrinks inside room for its most, traffic fanned out to each copy                                                       | ☑      | e2e capacity; screenshots editor/capacity-\*                                                                                                                           |
+| CP-5 | Up: a machine whose cores, memory and disks grow and shrink smoothly, up to a ceiling                                                                   | ☑      | e2e capacity (largest size); screenshot editor/capacity-spike                                                                                                          |
+| CP-6 | Built in the inspector: scaling with size presets, traffic, routing, hit rate, queue; per scene, with what the scene does to it and why                 | ☑      | e2e capacity (inspector, explains each scene); screenshots editor/inspector-scaling, -scene-copies, -capacity-now                                                      |
+| CP-7 | Traffic on an arrow can rise and fall on its own (waves, bursts), so things scale out and in on a loop with no scenes; one Traffic section on the arrow | ☑      | core pattern tests (deterministic however often asked); e2e capacity (waves); screenshots editor/traffic-waves, editor/inspector-traffic-pattern, viewer/traffic-waves |
+
+## CO — Concepts (agreed 2026-10-04, D-83; filed and browsed, 2026-10-05, D-85)
+
+| ID   | Requirement                                                                                               | Status | Evidence                                                                                                          |
+| ---- | --------------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------------------------------------------------------------------- |
+| CO-1 | A concept is a diagram with a summary and roles; the nine built in play their stories                     | ☑      | core concepts tests (every scene changes something)                                                               |
+| CO-2 | Watch one, apply it to your own elements (from the selection), insert its example, open it                | ☑      | e2e concepts; screenshots editor/concept-\*                                                                       |
+| CO-3 | Applying is generic: behaviour onto the picked elements, joined like the roles, scenes aimed there        | ☑      | core concepts tests (scale out, sizes, failover, merging, refusals)                                               |
+| CO-4 | Your own concepts: from the Diagram inspector or a selection; drafts and account diagrams offered         | ☑      | e2e concepts (your own); screenshot editor/inspector-concept                                                      |
+| CO-5 | The assistant sets up scaling and applies concepts                                                        | ☑      | tools tests; e2e assistant (sets up scaling)                                                                      |
+| CO-6 | Concepts are filed by topic and platform, with tags; patterns (with parts) and explainers (without)       | ☑      | core concepts tests (topic and platform warnings); concepts package tests                                         |
+| CO-7 | A Concepts tab (search, platform, yours, recently used, topics) and a gallery with previews, for hundreds | ☑      | browse tests; e2e concepts, phone; screenshots editor/concepts-\*, editor/concept-gallery, editor/phone-concept\* |
+| CO-8 | The assistant finds concepts by search and applies them by id, without the library in the editor          | ☑      | tools tests (find_concepts, unknown ids, replay from what's sent)                                                 |
 
 ## UX — Non-functional (from the build brief)
 

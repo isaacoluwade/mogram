@@ -1,5 +1,7 @@
 "use client";
 
+import { CapacityTimeline } from "@mogram/core/capacity";
+import { settledCapacity, type CapacityRuntime } from "@/features/canvas/capacity";
 import { createElement } from "react";
 import { parseDiagram } from "@mogram/core/format";
 import { computeLayout, type Box } from "@mogram/core/layout";
@@ -19,9 +21,11 @@ import { loadFonts } from "@/features/canvas/text";
 import { resolveFor } from "@/features/canvas/use-diagram";
 import { GifEncoderClient, type GifWorker } from "./gif-client";
 import { muxAnimatedWebp, type AnimatedWebpFrame } from "./webp-mux";
+import { embedInPng, embedInSvg } from "./embed";
+import { jpegToPdf } from "./pdf";
 
 /** Export formats (EX-1 … EX-5). GIF and WebP are only offered when something moves. */
-export type ExportFormat = "png" | "jpeg" | "svg" | "gif" | "webp";
+export type ExportFormat = "png" | "jpeg" | "svg" | "pdf" | "gif" | "webp";
 export type ExportArea = "fit" | "1:1" | "4:5" | "16:9" | "4:3" | "16:10";
 
 export interface ExportOptions {
@@ -33,6 +37,11 @@ export interface ExportOptions {
   readonly animation: "loop" | "story";
   readonly fps: 10 | 20 | 25;
   readonly fileName: string;
+  /**
+   * Put the diagram's files inside the PNG or SVG, so opening the image in Mogram gives the
+   * diagram back (07 §18 P0-6). On unless turned off.
+   */
+  readonly embed?: boolean;
 }
 
 export interface ExportRequest {
@@ -60,11 +69,15 @@ const ASPECTS: Readonly<Record<Exclude<ExportArea, "fit">, number>> = {
   "16:10": 16 / 10,
 };
 
-/** True when the diagram has anything to animate: traffic, motion, overload, or several scenes. */
+/**
+ * True when the diagram has anything to animate: traffic, motion, overload, several scenes, or
+ * capacity (its traffic always flows, and patterns make things scale, D-82, D-84).
+ */
 export function hasAnimation(files: ProjectFiles, folder: string, scene: string | null): boolean {
   const { diagram } = parseDiagram(files, folder);
   if (diagram.scenes.length > 0) return true;
   const resolved = resolveFor(files, folder, diagram, scene);
+  if (resolved.capacity.active) return true;
   for (const status of resolved.connections.values())
     if (FLOW_INFO[status.flow].animated) return true;
   for (const status of resolved.elements.values())
@@ -167,6 +180,7 @@ interface Prepared {
   readonly sceneNames: readonly (string | null)[];
   readonly title: string;
   readonly fonts: ReadonlySet<FontName>;
+  readonly diagram: Diagram;
 }
 
 async function prepare(request: ExportRequest): Promise<Prepared> {
@@ -203,6 +217,7 @@ async function prepare(request: ExportRequest): Promise<Prepared> {
     sceneNames: [null, ...diagram.scenes.map((s) => s.name)],
     title: diagram.settings.name,
     fonts,
+    diagram,
     modelFor: (current, previous, transitionStart) =>
       buildScene({
         diagram,
@@ -218,11 +233,30 @@ async function prepare(request: ExportRequest): Promise<Prepared> {
   };
 }
 
+/** A still picture's capacity: the scene's plan, settled. */
+/**
+ * How long an animation with a traffic pattern runs so it loops: a whole number of the pattern's
+ * cycles and of the 4 s every motion repeats in, kept to 40 s (beyond that, one cycle).
+ */
+function patternLoop(cycle: number): number {
+  const halves = (n: number) => Math.max(1, Math.round(n * 2));
+  const gcd = (a: number, b: number): number => (b === 0 ? a : gcd(b, a % b));
+  const a = halves(cycle);
+  const b = halves(LOOP_SECONDS);
+  const both = (a * b) / gcd(a, b) / 2;
+  return both <= 40 ? both : cycle;
+}
+
+function still(prepared: Prepared, scene: string | null): CapacityRuntime | null {
+  return settledCapacity(prepared.diagram, prepared.resolvedFor(scene));
+}
+
 async function markup(
   prepared: Prepared,
   model: SceneModel,
   t: number,
   transparent: boolean,
+  capacity: CapacityRuntime | null = null,
 ): Promise<string> {
   const { renderToStaticMarkup } = await import("react-dom/server");
   const style = await embeddedFonts(prepared.fonts);
@@ -235,6 +269,7 @@ async function markup(
     transparent,
     embeddedStyle: style,
     title: prepared.title,
+    capacity,
   });
   return `<?xml version="1.0" encoding="UTF-8"?>\n${renderToStaticMarkup(element)}`;
 }
@@ -304,9 +339,17 @@ export async function runExport(
   const prepared = await prepare(request);
   const filename = `${defaultFileName(options.fileName)}.${options.format === "jpeg" ? "jpg" : options.format}`;
 
+  const embed = options.embed !== false;
   if (options.format === "svg") {
     const model = prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
-    const svg = await markup(prepared, model, 0, options.transparent);
+    const plain = await markup(
+      prepared,
+      model,
+      0,
+      options.transparent,
+      still(prepared, request.scene),
+    );
+    const svg = embed ? embedInSvg(plain, request.files) : plain;
     onProgress(1);
     return {
       blob: new Blob([svg], { type: "image/svg+xml" }),
@@ -321,16 +364,49 @@ export async function runExport(
     const height = Math.round(prepared.frame.h * options.scale);
     const transparent = options.format === "png" && options.transparent;
     const model = prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
-    const svg = await markup(prepared, model, 0, transparent);
+    const svg = await markup(prepared, model, 0, transparent, still(prepared, request.scene));
     const canvas = await rasterize(
       svg,
       width,
       height,
       options.format === "jpeg" ? prepared.theme.base : null,
     );
-    const blob = await toBlob(canvas, options.format === "png" ? "image/png" : "image/jpeg", 0.92);
+    const image = await toBlob(canvas, options.format === "png" ? "image/png" : "image/jpeg", 0.92);
+    const blob =
+      options.format === "png" && embed
+        ? new Blob(
+            [embedInPng(new Uint8Array(await image.arrayBuffer()), request.files).slice().buffer],
+            {
+              type: "image/png",
+            },
+          )
+        : image;
     onProgress(1);
     return { blob, filename, width, height };
+  }
+
+  if (options.format === "pdf") {
+    // A print-quality image of the diagram on a page its size (07 §18 P0-7).
+    const scale = Math.max(2, options.scale);
+    const width = Math.round(prepared.frame.w * scale);
+    const height = Math.round(prepared.frame.h * scale);
+    const model = prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
+    const svg = await markup(prepared, model, 0, false, still(prepared, request.scene));
+    const canvas = await rasterize(svg, width, height, prepared.theme.base);
+    const jpeg = await toBlob(canvas, "image/jpeg", 0.95);
+    const pdf = jpegToPdf(
+      new Uint8Array(await jpeg.arrayBuffer()),
+      { width, height },
+      { width: prepared.frame.w, height: prepared.frame.h },
+      options.fileName,
+    );
+    onProgress(1);
+    return {
+      blob: new Blob([pdf.slice().buffer], { type: "application/pdf" }),
+      filename,
+      width: Math.round(prepared.frame.w),
+      height: Math.round(prepared.frame.h),
+    };
   }
 
   // Animated: sample the shared clock frame by frame (PR-9). Every period divides 4s, so the
@@ -340,10 +416,50 @@ export async function runExport(
   const height = Math.max(2, Math.round(prepared.frame.h * scale));
   const sceneCount = prepared.sceneNames.length;
   const story = options.animation === "story" && sceneCount > 1;
-  const duration = story ? sceneCount * STORY_HOLD : LOOP_SECONDS;
+  // A traffic pattern (D-84) loops once per cycle (and every motion's loop): frames come from its
+  // second time round, so copies that are draining at the end are draining at the start too.
+  const cycle = story
+    ? null
+    : (prepared.resolvedFor(request.scene).capacityOverTime?.cycle ?? null);
+  const duration = story
+    ? sceneCount * STORY_HOLD
+    : cycle === null
+      ? LOOP_SECONDS
+      : patternLoop(cycle);
+  const offset = cycle === null ? 0 : duration;
   const frameCount = Math.round(duration * options.fps);
   const delay = Math.round(1000 / options.fps);
   const transparent = options.format === "webp" && options.transparent;
+
+  // Capacity in an animation: copies boot and drain as the story moves from scene to scene.
+  let timeline: CapacityTimeline | null = null;
+  let shown = -1;
+  const capacityAt = (t: number): CapacityRuntime | null => {
+    const position = story ? storyAt(t, sceneCount) : { from: 0, to: 0 };
+    const name = story ? (prepared.sceneNames[position.to] ?? null) : request.scene;
+    const resolved = prepared.resolvedFor(name);
+    if (!resolved.capacity.active) return null;
+    if (timeline === null) {
+      timeline = new CapacityTimeline(
+        resolved.capacity,
+        prepared.diagram,
+        story ? t : 0,
+        resolved.capacityOverTime,
+      );
+      shown = position.to;
+    } else if (position.to !== shown) {
+      const local = ((t % duration) + duration) % duration;
+      timeline.update(
+        resolved.capacity,
+        prepared.diagram,
+        t - (local - position.to * STORY_HOLD),
+        false,
+        resolved.capacityOverTime,
+      );
+      shown = position.to;
+    }
+    return { timeline, version: position.to };
+  };
 
   const modelAt = (t: number): SceneModel => {
     if (!story) return prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
@@ -378,9 +494,9 @@ export async function runExport(
     try {
       for (let i = 0; i < frameCount; i++) {
         encoder.check();
-        const t = i / options.fps;
+        const t = offset + i / options.fps;
         const canvas = await rasterize(
-          await markup(prepared, modelAt(t), t, false),
+          await markup(prepared, modelAt(t), t, false, capacityAt(t)),
           width,
           height,
           prepared.theme.base,
@@ -406,9 +522,9 @@ export async function runExport(
   const frames: AnimatedWebpFrame[] = [];
   for (let i = 0; i < frameCount; i++) {
     if (signal?.aborted === true) throw new DOMException("Export cancelled", "AbortError");
-    const t = i / options.fps;
+    const t = offset + i / options.fps;
     const canvas = await rasterize(
-      await markup(prepared, modelAt(t), t, transparent),
+      await markup(prepared, modelAt(t), t, transparent, capacityAt(t)),
       width,
       height,
       transparent ? null : prepared.theme.base,
@@ -441,7 +557,7 @@ export async function renderThumbnail(files: ProjectFiles): Promise<string> {
   };
   const prepared = await prepare({ files, folder: "", scene: null, options });
   const model = prepared.modelFor(prepared.resolvedFor(null), null, null);
-  const svg = await markup(prepared, model, 0.5, false);
+  const svg = await markup(prepared, model, 0.5, false, still(prepared, null));
   const canvas = await rasterize(svg, THUMBNAIL.width, THUMBNAIL.height, prepared.theme.base);
   return canvas.toDataURL("image/jpeg", 0.78);
 }

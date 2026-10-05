@@ -156,8 +156,8 @@ describe("searchIcons ranking", () => {
     expect(ids(searchIcons([spread], "vym"))).toEqual([spread.id]);
   });
 
-  it("does not match when one word of the query matches nothing", () => {
-    expect(searchIcons([exact], "gateway omega")).toEqual([]);
+  it("falls back to the words that do match when no icon has every word", () => {
+    expect(ids(searchIcons([exact], "gateway omega"))).toEqual(ids([exact]));
   });
 
   it("gives the same answer when the catalog is searched again", () => {
@@ -169,5 +169,13 @@ describe("normalise", () => {
   it("lowercases, strips accents and collapses punctuation", () => {
     expect(normalise("  Café--Front_Door (Classic) ")).toBe("cafe front door classic");
     expect(normalise(".NET")).toBe("net");
+  });
+});
+
+describe("searchIcons falls back to any word", () => {
+  it("offers what matches some words when nothing matches all of them", () => {
+    const icons = [icon("tool", "PostgreSQL", ["postgres"]), icon("tool", "Redis", ["cache"])];
+    expect(ids(searchIcons(icons, "postgres cache"))).toEqual(["tool/postgresql", "tool/redis"]);
+    expect(ids(searchIcons(icons, "postgres zebra"))).toEqual(["tool/postgresql"]);
   });
 });

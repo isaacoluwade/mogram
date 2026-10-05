@@ -1,0 +1,31 @@
+{
+  "name": "@mogram/concepts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mogram's ready-made concepts: diagrams that explain an idea (scaling, networking, Git…), grouped by topic and platform, with a catalog that loads instantly and diagrams that load when opened.",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": "./src/index.ts",
+    "./all": "./src/all.generated.ts"
+  },
+  "scripts": {
+    "build:catalog": "tsx scripts/build-catalog.ts",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json && tsc --noEmit -p tsconfig.scripts.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@mogram/core": "workspace:*"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.1",
+    "eslint": "10.12.0",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.3"
+  }
+}

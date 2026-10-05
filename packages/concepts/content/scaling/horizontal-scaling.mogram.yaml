@@ -1,0 +1,19 @@
+mogram: 1
+name: Horizontal scaling
+description: More traffic, more copies; less traffic, fewer.
+concept:
+  summary: Run more copies of a service as traffic grows and fewer as it falls. A load balancer spreads the requests, so each copy carries a fair share.
+  topic: scaling
+  tags: [scale out, scale set, load balancer, vm]
+  roles:
+    app: What scales out
+    lb: { label: What spreads the traffic, optional: true }
+containers:
+  app_set: { type: scaling-group, label: Scale set }
+components:
+  users: { type: generic/users, label: Users }
+  lb: { type: generic/load-balancer, label: Load balancer }
+  app: { type: generic/server, label: App server, in: app_set, scale: { min: 1, max: 8 } }
+connections:
+  users_to_lb: { from: users, to: lb, traffic: waves }
+  lb_to_app: { from: lb, to: app_set }

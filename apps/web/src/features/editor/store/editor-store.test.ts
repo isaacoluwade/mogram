@@ -91,6 +91,40 @@ describe("editor store", () => {
     expect(store.getState().save).toEqual({ kind: "conflict", currentVersion: 4 });
   });
 
+  it("makes an assistant turn one undo step, and holds the person's edits meanwhile", () => {
+    const store = createEditorStore({ files: FILES });
+    const start = store.getState().files;
+    const move = (x: number) =>
+      moveElements(store.getState().files, store.getState().diagram(), [
+        { name: "db", parent: null, at: { x, y: 0 } },
+      ]).files;
+    store.getState().startAssistant("t1");
+    // The person's own edits and undo wait while it works.
+    expect(
+      store
+        .getState()
+        .edit("Move", (f, d) =>
+          moveElements(f, d, [{ name: "db", parent: null, at: { x: 5, y: 0 } }]),
+        ),
+    ).toBe(false);
+    store
+      .getState()
+      .applyAssistant("t1", move(30), { label: "Assistant: move", select: ["db"], follow: true });
+    const last = move(40);
+    store
+      .getState()
+      .applyAssistant("t1", last, { label: "Assistant: move", select: ["db"], follow: true });
+    expect(store.getState().assistant?.touched).toEqual(["db"]);
+    expect(store.getState().selection).toEqual(["db"]);
+    store.getState().undo();
+    expect(store.getState().files).toBe(last);
+    store.getState().endAssistant("t1");
+    // Both changes go with one undo.
+    expect(store.getState().undoAssistant("t1")).toBe(true);
+    expect(store.getState().files).toBe(start);
+    expect(store.getState().undoAssistant("t1")).toBe(false);
+  });
+
   it("shows one right-hand panel at a time, and one panel at all on narrow screens", () => {
     const store = createEditorStore({ files: FILES });
     store.getState().togglePanel("code", true);
@@ -102,6 +136,7 @@ describe("editor store", () => {
       inspector: false,
       code: false,
       tours: true,
+      history: false,
     });
   });
 
@@ -156,5 +191,32 @@ describe("editor store", () => {
       .getState()
       .replaceFiles({ "mogram.yaml": "components:\n  web: generic/server\n" }, "Open files");
     expect(store.getState().selection).toEqual(["web"]);
+  });
+});
+
+describe("undo across nested diagrams", () => {
+  const NESTED = {
+    "mogram.yaml": "components:\n  aks: { type: azure/kubernetes-services, opens: ./aks }\n",
+    "aks/mogram.yaml": "components:\n  web: generic/server\n",
+  };
+
+  it("goes back to the level the step was made at, and asks for it to be framed", () => {
+    const store = createEditorStore({ files: NESTED });
+    store.getState().openLevel("aks", "aks");
+    store
+      .getState()
+      .edit("Rename", (f, d) => updateElement(f, d, { name: "web", set: { label: "Web tier" } }));
+    store.getState().closeLevel();
+    expect(store.getState().levelPath).toEqual([]);
+    const fits = store.getState().fitRequest;
+    store.getState().undo();
+    expect(store.getState().levelPath).toEqual(["aks"]);
+    expect(store.getState().folder).toBe("aks");
+    expect(store.getState().fitRequest).toBe(fits + 1);
+    expect(store.getState().files).toEqual(NESTED);
+    // Redo stays where it is: the step was made here.
+    store.getState().redo();
+    expect(store.getState().levelPath).toEqual(["aks"]);
+    expect(store.getState().files["aks/mogram.yaml"]).toContain("label: Web tier");
   });
 });

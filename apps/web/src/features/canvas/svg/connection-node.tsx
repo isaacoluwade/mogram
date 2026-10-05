@@ -1,7 +1,6 @@
 "use client";
 
 import { memo, useRef } from "react";
-import { pointAtLength } from "@mogram/core/routing";
 import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import { currentTime, useFrame, useTimeSource } from "../clock";
 import { connectionAnimates, connectionFrame, progressAt, type FlowLayer } from "../frames";
@@ -11,7 +10,8 @@ import { actionProps, focusOpacity, useRender } from "./render-context";
 
 interface Refs {
   line: SVGPathElement | null;
-  arrow: SVGPathElement | null;
+  start: SVGPathElement | null;
+  end: SVGPathElement | null;
   cross: SVGGElement | null;
   fromDots: SVGPathElement | null;
   fromReverse: SVGPathElement | null;
@@ -22,27 +22,29 @@ interface Refs {
 function setDots(path: SVGPathElement | null, layer: FlowLayer, reverse: boolean): void {
   if (path === null) return;
   const offset = reverse ? layer.reverseOffset : layer.offset;
+  path.setAttribute("stroke-dasharray", `0 ${layer.spacing}`);
   path.setAttribute("stroke-dashoffset", String(offset ?? 0));
   path.setAttribute("opacity", String(reverse && layer.reverseOffset === null ? 0 : layer.opacity));
 }
 
-/** Arrowhead at the end of the path, pointing along the final segment. */
-function arrowPath(connection: SceneConnection): string {
-  const samples = connection.path.samples;
-  const end = samples[samples.length - 1];
-  if (end === undefined || samples.length < 2) return "";
-  const back = pointAtLength(samples, Math.max(0, connection.path.length - 6)).point;
-  const angle = Math.atan2(end.y - back.y, end.x - back.x);
-  const size = 7;
-  const left = {
-    x: end.x - size * Math.cos(angle - 0.45),
-    y: end.y - size * Math.sin(angle - 0.45),
+/** Dots that follow the traffic a connection carries (D-82): denser with more, fading out with none. */
+function withTraffic(layer: FlowLayer, traffic: number): FlowLayer {
+  const scale = Math.min(3, Math.max(0.45, Math.sqrt(traffic)));
+  const spacing = layer.spacing / scale;
+  const ratio = spacing / layer.spacing;
+  return {
+    ...layer,
+    spacing,
+    offset: layer.offset * ratio,
+    reverseOffset: layer.reverseOffset === null ? null : layer.reverseOffset * ratio,
+    opacity: layer.opacity * Math.min(1, traffic / 0.08),
   };
-  const right = {
-    x: end.x - size * Math.cos(angle + 0.45),
-    y: end.y - size * Math.sin(angle + 0.45),
-  };
-  return `M${left.x} ${left.y} L${end.x} ${end.y} L${right.x} ${right.y}`;
+}
+
+/** The line's dash pattern: the author's, else the flow's own dashes (blocked, idle…). */
+function dashArray(dash: readonly number[] | null, flowDashed: boolean): string | undefined {
+  if (dash !== null) return dash.map((value) => Math.round(value * 100) / 100).join(" ");
+  return flowDashed ? "6 6" : undefined;
 }
 
 /** A connection with traffic flowing along its routed path (PR-2, PR-7). */
@@ -56,10 +58,18 @@ export const ConnectionNode = memo(function ConnectionNode({
   const source = useTimeSource();
   const now = currentTime(source);
   const transitioning = transitionStart !== null && now - transitionStart < SCENE_TRANSITION + 0.1;
-  const frame = connectionFrame(connection, theme, now, progressAt(now, transitionStart));
+  const timeline = connection.carries ? (settings.capacity?.timeline ?? null) : null;
+  const frameAt = (t: number) => {
+    const base = connectionFrame(connection, theme, t, progressAt(t, transitionStart));
+    if (timeline === null) return base;
+    const traffic = timeline.carried(connection.name, t);
+    return { ...base, from: withTraffic(base.from, traffic), to: withTraffic(base.to, traffic) };
+  };
+  const frame = frameAt(now);
   const refs = useRef<Refs>({
     line: null,
-    arrow: null,
+    start: null,
+    end: null,
     cross: null,
     fromDots: null,
     fromReverse: null,
@@ -68,12 +78,20 @@ export const ConnectionNode = memo(function ConnectionNode({
   }).current;
 
   useFrame(connectionAnimates(connection, transitioning), (t) => {
-    const next = connectionFrame(connection, theme, t, progressAt(t, transitionStart));
+    const next = frameAt(t);
     refs.line?.setAttribute("stroke", next.lineColor);
     refs.line?.setAttribute("stroke-opacity", String(next.lineOpacity));
-    refs.line?.setAttribute("stroke-dasharray", next.dashed ? "6 6" : "none");
-    refs.arrow?.setAttribute("stroke", next.lineColor);
-    refs.arrow?.setAttribute("stroke-opacity", String(Math.min(1, next.lineOpacity + 0.25)));
+    refs.line?.setAttribute("stroke-dasharray", dashArray(look.dash, next.dashed) ?? "none");
+    for (const [marker, node] of [
+      [look.start, refs.start],
+      [look.end, refs.end],
+    ] as const) {
+      if (node === null || marker === null) continue;
+      node.setAttribute("stroke", next.lineColor);
+      if (marker.shape.filled) node.setAttribute("fill", next.lineColor);
+      node.setAttribute("stroke-opacity", String(Math.min(1, next.lineOpacity + 0.25)));
+      node.setAttribute("fill-opacity", String(Math.min(1, next.lineOpacity + 0.25)));
+    }
     refs.cross?.setAttribute("opacity", String(next.crossOpacity));
     setDots(refs.fromDots, next.from, false);
     setDots(refs.fromReverse, next.from, true);
@@ -82,15 +100,16 @@ export const ConnectionNode = memo(function ConnectionNode({
   });
 
   const d = connection.path.d;
+  const look = connection.look;
   const mid = connection.labelAt;
   const labelWidth = connection.label === null ? 0 : measure(connection.label, 11, 500) + 16;
   const dots = (layer: FlowLayer, reverse: boolean, ref: (node: SVGPathElement | null) => void) => (
     <path
       ref={ref}
-      d={d}
+      d={look.lineD}
       fill="none"
       stroke={layer.color}
-      strokeWidth={4.5}
+      strokeWidth={Math.max(4.5, look.width * 2.2)}
       strokeLinecap="round"
       strokeDasharray={`0 ${layer.spacing}`}
       strokeDashoffset={(reverse ? layer.reverseOffset : layer.offset) ?? 0}
@@ -107,33 +126,50 @@ export const ConnectionNode = memo(function ConnectionNode({
       style={{ transition: "opacity 400ms ease" }}
     >
       {mode !== "export" ? (
-        <path d={d} fill="none" stroke="transparent" strokeWidth={14} data-hit="connection" />
+        <path
+          d={d}
+          fill="none"
+          stroke="transparent"
+          strokeWidth={Math.max(14, look.width + 10)}
+          data-hit="connection"
+        />
       ) : null}
       <path
         ref={(node) => void (refs.line = node)}
-        d={d}
+        d={look.lineD}
         fill="none"
         stroke={frame.lineColor}
         strokeOpacity={frame.lineOpacity}
-        strokeWidth={1.6}
-        strokeDasharray={frame.dashed ? "6 6" : undefined}
-        strokeLinecap="round"
+        strokeWidth={look.width}
+        strokeDasharray={dashArray(look.dash, frame.dashed)}
+        strokeLinecap={look.dash !== null ? "butt" : "round"}
         strokeLinejoin="round"
-      />
-      <path
-        ref={(node) => void (refs.arrow = node)}
-        d={arrowPath(connection)}
-        fill="none"
-        stroke={frame.lineColor}
-        strokeOpacity={Math.min(1, frame.lineOpacity + 0.25)}
-        strokeWidth={1.6}
-        strokeLinecap="round"
-        strokeLinejoin="round"
+        data-part="line"
       />
       {dots(frame.from, false, (node) => void (refs.fromDots = node))}
       {dots(frame.from, true, (node) => void (refs.fromReverse = node))}
       {dots(frame.to, false, (node) => void (refs.toDots = node))}
       {dots(frame.to, true, (node) => void (refs.toReverse = node))}
+      {[look.start, look.end].map((marker, index) =>
+        marker === null ? null : (
+          <path
+            key={index === 0 ? "start" : "end"}
+            ref={(node) => void (index === 0 ? (refs.start = node) : (refs.end = node))}
+            data-part={index === 0 ? "start-arrow" : "end-arrow"}
+            d={marker.shape.d}
+            transform={marker.transform}
+            fill={
+              marker.shape.filled ? frame.lineColor : marker.shape.knockout ? theme.base : "none"
+            }
+            fillOpacity={marker.shape.filled ? Math.min(1, frame.lineOpacity + 0.25) : 1}
+            stroke={frame.lineColor}
+            strokeOpacity={Math.min(1, frame.lineOpacity + 0.25)}
+            strokeWidth={look.width}
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        ),
+      )}
       <g
         ref={(node) => void (refs.cross = node)}
         opacity={frame.crossOpacity}
@@ -148,7 +184,13 @@ export const ConnectionNode = memo(function ConnectionNode({
         />
       </g>
       {connection.label !== null ? (
-        <g transform={`translate(${mid.x} ${mid.y - (frame.crossOpacity > 0.5 ? 20 : 0)})`}>
+        <g
+          data-part="label"
+          data-x={mid.x}
+          data-y={mid.y}
+          transform={`translate(${mid.x} ${mid.y - (frame.crossOpacity > 0.5 ? 20 : 0)})`}
+          style={mode === "edit" ? { cursor: "move" } : undefined}
+        >
           <rect
             x={-labelWidth / 2}
             y={-10}

@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { element, openDraft, shot, yaml } from "./support";
+import { element, openDraft, shot, yaml, inspectorTab } from "./support";
 
 /** Editing features beyond the basics (ED-4 … ED-22, SC-2, SC-6, FI-15, FI-16, IC-4, TO-9, NE-8). */
 
@@ -58,6 +58,7 @@ test("shift-click multi-select, then align left from the inspector (ED-5, ED-6)"
   await clickElement(page, "front_door", ["Shift"]);
   await expect(page.getByRole("region", { name: "Inspector" })).toContainText("2 selected");
   await shot(page, "editor/multi-select");
+  await inspectorTab(page, "Arrange");
   await page.getByRole("button", { name: "Align left" }).click();
   await expect
     .poll(async () => {
@@ -104,7 +105,8 @@ test("bending a connection by hand saves its waypoints (ED-18)", async ({ page }
   await openDraft(page, "web-app");
   const line = await centre(element(page, "shopper_to_door"));
   await page.mouse.click(line.x, line.y);
-  const handle = page.locator('[data-handle="add-waypoint"]').first();
+  // Orthogonal lines bend by sliding a segment sideways (ED-29).
+  const handle = page.locator('[data-handle="segment"]').first();
   await expect(handle).toBeVisible();
   const from = await centre(handle);
   await drag(page, from, { x: from.x, y: from.y + 48 });

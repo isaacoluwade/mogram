@@ -1,5 +1,6 @@
 "use client";
 
+import { useCapacity } from "@/features/canvas/capacity";
 import { useEffect, useMemo, useRef, type PointerEvent as ReactPointerEvent } from "react";
 import type { Point } from "@mogram/core/layout";
 import { centerOn, toWorld, wheelZoomFactor, zoomAt, type Camera } from "@/features/canvas/camera";
@@ -129,6 +130,8 @@ export function ViewerCanvas() {
   // The motion toggle holds every animation still (PR-9); it starts paused for reduced motion,
   // and follows the system setting if that changes mid-session.
   const motionPaused = useViewer((s) => s.motionPaused);
+  // Capacity over time (D-82, D-84): copies boot and drain as scenes or traffic patterns change.
+  const capacity = useCapacity(geometry.diagram, current, () => clock.time(), motionPaused);
   const animating = useViewer((s) => s.animating);
   useEffect(() => {
     if (motionPaused) clock.pause();
@@ -260,6 +263,15 @@ export function ViewerCanvas() {
   const click = async (target: EventTarget | null) => {
     const state = store.getState();
     const hit = elementAt(target);
+    // Text and labels can link somewhere too (a "Runbook" label, a "See the outage" note).
+    const decorationLink =
+      hit?.kind === "decoration"
+        ? (controller.geometry().diagram.decorations.get(hit.name)?.link ?? null)
+        : null;
+    if (decorationLink !== null) {
+      await controller.followElementLink(decorationLink);
+      return;
+    }
     if (hit === null || hit.kind === "decoration" || hit.kind === "group") {
       if (state.openCard !== null && state.tour === null) await controller.closeCard();
       else if (state.inspected !== null) controller.inspect(null);
@@ -285,6 +297,15 @@ export function ViewerCanvas() {
     }
     if (controller.canEnter(hit.name)) {
       await controller.enterLevel(hit.name);
+      return;
+    }
+    const link =
+      component?.link ??
+      diagram.containers.get(hit.name)?.link ??
+      diagram.connections.get(hit.name)?.link ??
+      null;
+    if (link !== null) {
+      await controller.followElementLink(link);
       return;
     }
     controller.inspect(state.inspected === hit.name ? null : hit.name);
@@ -351,6 +372,7 @@ export function ViewerCanvas() {
         {mounted ? (
           <DiagramSvg
             scene={model}
+            capacity={capacity}
             time={{ kind: "live", clock }}
             mode="view"
             interactive

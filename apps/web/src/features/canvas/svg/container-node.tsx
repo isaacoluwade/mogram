@@ -5,6 +5,7 @@ import { CONTAINER_STYLE_INFO } from "@mogram/core/presets";
 import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import { currentTime, useFrame, useTimeSource } from "../clock";
 import { containerFrame, progressAt } from "../frames";
+import { fleetFrame } from "../capacity-frames";
 import { iconHref, iconSource, useIconCacheVersion } from "../icons";
 import type { SceneContainer } from "../scene";
 import { ellipsize } from "../text";
@@ -29,14 +30,32 @@ export const ContainerNode = memo(function ContainerNode({
   const frame = containerFrame(container, colors, theme, progressAt(now, transitionStart));
   const rect = useRef<SVGRectElement | null>(null);
   const transitioning = transitionStart !== null && now - transitionStart < SCENE_TRANSITION + 0.1;
+  // A scale set grows and shrinks with its copies (D-82), inside the room it keeps for its most.
+  const timeline = settings.capacity?.timeline ?? null;
+  const frames = timeline === null ? null : container.frames;
+  const boxAt = (t: number) => {
+    if (frames === null || timeline === null) return container.box;
+    const fleet = fleetFrame(timeline, frames.component, frames.room, frames.max, t).frame;
+    return {
+      ...container.box,
+      w: container.box.w - (frames.room.w - fleet.w),
+      h: container.box.h - (frames.room.h - fleet.h),
+    };
+  };
 
-  useFrame(transitioning, (t) => {
+  useFrame(transitioning || frames !== null, (t) => {
     const next = containerFrame(container, colors, theme, progressAt(t, transitionStart));
     rect.current?.setAttribute("stroke", next.borderColor);
     rect.current?.setAttribute("fill", next.fillColor);
+    if (frames !== null) {
+      const sized = boxAt(t);
+      rect.current?.setAttribute("width", String(sized.w));
+      rect.current?.setAttribute("height", String(sized.h));
+    }
   });
 
-  const { box } = container;
+  const box = boxAt(now);
+  const full = container.box;
   const headerIcon =
     container.icon ?? iconSource(CONTAINER_STYLE_INFO[container.type].icon, {}, "");
   const href = iconHref(headerIcon, { text: colors.icon, mode: theme.mode });
@@ -47,10 +66,25 @@ export const ContainerNode = memo(function ContainerNode({
     <g
       data-element={container.name}
       data-kind="container"
-      {...actionProps(settings, container.label, container.hasCard)}
+      {...actionProps(settings, container.label, container.hasCard || container.link !== null)}
       opacity={focusOpacity(settings, container.name)}
       style={{ transition: "opacity 400ms ease" }}
     >
+      {container.tooltip !== null ? <title>{container.tooltip}</title> : null}
+      {frames !== null ? (
+        <rect
+          data-part="room"
+          x={full.x}
+          y={full.y}
+          width={full.w}
+          height={full.h}
+          rx={RADIUS}
+          fill="none"
+          stroke={colors.border}
+          strokeDasharray="3 5"
+          opacity={0.5}
+        />
+      ) : null}
       <rect
         ref={rect}
         x={box.x}

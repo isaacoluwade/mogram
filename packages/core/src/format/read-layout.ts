@@ -1,17 +1,19 @@
-import type { Decoration, GridPoint, LayoutEntry, TextLook, TextStyle, Tone } from "../model/types";
+import type { Node } from "yaml";
+import type {
+  ConnectionLabelPlace,
+  Decoration,
+  GridPoint,
+  LayoutEntry,
+  TextLook,
+  TextStyle,
+  Tone,
+} from "../model/types";
 import { isValidName } from "../model/names";
 import { parsePaint, solid, type Paint } from "../presets/paint";
-import {
-  FONT_NAMES,
-  MAX_FONT_SIZE,
-  MIN_FONT_SIZE,
-  NOTE_FILL,
-  NOTE_SIZE,
-  TEXT_ALIGNS,
-  type FontName,
-  type TextAlign,
-} from "../presets/text";
+import { NOTE_FILL, NOTE_SIZE } from "../presets/text";
 import { TONE_NAMES } from "../presets/tones";
+import { ANCHOR_NAMES, NAMED_ANCHORS, type Anchor, type AnchorName } from "../presets/connectors";
+import { didYouMean, listOptions } from "./suggest";
 import type { Position } from "./diagnostics";
 import { asString, isMap, isNullish, isSeq, scalarValue, type MapEntry, nodeOf } from "./yaml-read";
 import type { RawDecoration, RawLayout, Mutable } from "./raw";
@@ -20,7 +22,7 @@ import { SectionReader } from "./read-base";
 /** Typography keys, for free text and sticky notes only (ED-25). */
 const LOOK_KEYS = ["font", "font_size", "bold", "italic", "align", "color"] as const;
 
-const DECORATION_KEYS = [
+export const DECORATION_KEYS = [
   "text",
   "label",
   "zone",
@@ -33,6 +35,9 @@ const DECORATION_KEYS = [
   "size",
   "in",
   "z",
+  "locked",
+  "link",
+  "data",
 ] as const;
 
 /** Layout: positions, sizes, z-order and hand-bent paths, plus decorations (ED-11, ED-22). */
@@ -64,7 +69,19 @@ export class LayoutReader extends SectionReader {
     const source = { file: at.file, line: at.line };
     if (isSeq(entry.value)) {
       const point = this.readPoint(entry.value, entry.key);
-      return point === null ? null : { at: point, size: null, z: 0, via: null, source };
+      return point === null
+        ? null
+        : {
+            at: point,
+            size: null,
+            z: 0,
+            via: null,
+            fromAnchor: null,
+            toAnchor: null,
+            label: null,
+            locked: false,
+            source,
+          };
     }
     if (!isMap(entry.value)) {
       this.sink.error(
@@ -73,7 +90,12 @@ export class LayoutReader extends SectionReader {
       );
       return null;
     }
-    const fields = this.body(entry.key, entry.value, ["at", "size", "z", "via"], "layout");
+    const fields = this.body(
+      entry.key,
+      entry.value,
+      ["at", "size", "z", "via", "from_anchor", "to_anchor", "label", "locked"],
+      "layout",
+    );
     const atField = fields.get("at");
     const sizeField = fields.get("size");
     const zField = fields.get("z");
@@ -101,8 +123,63 @@ export class LayoutReader extends SectionReader {
           ? 0
           : (this.readInteger(zField.value, `The z-order of "${entry.key}"`) ?? 0),
       via,
+      fromAnchor: this.readAnchor(fields.get("from_anchor"), entry.key, "start"),
+      toAnchor: this.readAnchor(fields.get("to_anchor"), entry.key, "end"),
+      label: this.readLabelPlace(fields.get("label"), entry.key),
+      locked: this.optionalBoolean(fields.get("locked"), entry.key, "locked") ?? false,
       source,
     };
+  }
+
+  /** `right`, `top-left`… or `[x, y]` fractions of the element's box (ED-29). */
+  private readAnchor(entry: MapEntry | undefined, owner: string, end: string): Anchor | null {
+    if (entry === undefined || isNullish(entry.value)) return null;
+    const text = asString(entry.value);
+    if (text !== null && (ANCHOR_NAMES as readonly string[]).includes(text))
+      return NAMED_ANCHORS[text as AnchorName];
+    if (isSeq(entry.value) && entry.value.items.length === 2) {
+      const [x, y] = entry.value.items.map((item) => scalarValue(nodeOf(item)));
+      if (typeof x === "number" && typeof y === "number" && x >= 0 && x <= 1 && y >= 0 && y <= 1)
+        return { x, y };
+    }
+    this.sink.error(
+      this.pos(entry.value),
+      `The ${end} anchor of "${owner}" should be a side or corner (${listOptions(ANCHOR_NAMES)}), or [x, y] fractions of the box like [1, 0.25].${didYouMean(text ?? "", ANCHOR_NAMES)}`,
+    );
+    return null;
+  }
+
+  /** `label: { at: 0.3, offset: -1 }`, or `label: 0.3` for a place along the path only. */
+  private readLabelPlace(entry: MapEntry | undefined, owner: string): ConnectionLabelPlace | null {
+    if (entry === undefined || isNullish(entry.value)) return null;
+    const along = (node: Node | null): number | null => {
+      const value = scalarValue(node);
+      if (typeof value === "number" && value >= 0 && value <= 1) return value;
+      this.sink.error(
+        this.pos(node),
+        `Where the label of "${owner}" sits along the line should be 0 (start) to 1 (end), like 0.5.`,
+      );
+      return null;
+    };
+    if (!isMap(entry.value)) {
+      const at = along(entry.value);
+      return at === null ? null : { at, offset: 0 };
+    }
+    const fields = this.body(owner, entry.value, ["at", "offset"], "label place");
+    const atField = fields.get("at");
+    const offsetField = fields.get("offset");
+    const at = atField === undefined ? 0.5 : (along(atField.value) ?? 0.5);
+    let offset = 0;
+    if (offsetField !== undefined) {
+      const value = scalarValue(offsetField.value);
+      if (typeof value === "number" && Math.abs(value) <= 100) offset = value;
+      else
+        this.sink.error(
+          this.pos(offsetField.value),
+          `The label offset of "${owner}" should be a number of grid units, like 1 or -1.5.`,
+        );
+    }
+    return { at, offset };
   }
 
   private readDecorations(section: MapEntry, out: RawDecoration[]): void {
@@ -140,7 +217,9 @@ export class LayoutReader extends SectionReader {
           zField === undefined
             ? 0
             : (this.readInteger(zField.value, `The z-order of "${entry.key}"`) ?? 0),
+        locked: this.optionalBoolean(fields.get("locked"), entry.key, "locked") ?? false,
         source: { file: at.file, line: at.line },
+        ...this.readExtras(fields, entry.key),
       };
       const parentRef = this.optionalRef(fields.get("in"));
       const text = fields.get("text");
@@ -215,29 +294,7 @@ export class LayoutReader extends SectionReader {
   }
 
   private readLook(fields: ReadonlyMap<string, MapEntry>, owner: string): TextLook {
-    const sizeEntry = fields.get("font_size");
-    let fontSize: number | null = null;
-    if (sizeEntry !== undefined && !isNullish(sizeEntry.value)) {
-      const value = scalarValue(sizeEntry.value);
-      if (typeof value === "number" && value >= MIN_FONT_SIZE && value <= MAX_FONT_SIZE) {
-        fontSize = value;
-      } else if (value !== "auto") {
-        this.sink.error(
-          this.pos(sizeEntry.value),
-          `The font size of "${owner}" should be a number from ${MIN_FONT_SIZE} to ${MAX_FONT_SIZE}, like 16, or "auto".`,
-        );
-      }
-    }
-    return {
-      font: this.optionalLiteral<FontName>(fields.get("font"), FONT_NAMES, owner, "font"),
-      fontSize,
-      bold: this.optionalBoolean(fields.get("bold"), owner, "bold") ?? false,
-      italic: this.optionalBoolean(fields.get("italic"), owner, "italic") ?? false,
-      align:
-        this.optionalLiteral<TextAlign>(fields.get("align"), TEXT_ALIGNS, owner, "alignment") ??
-        "left",
-      color: this.optionalColor(fields.get("color"), owner),
-    };
+    return this.readTextLook(fields, owner, { colorKey: "color", align: "left" });
   }
 
   /** Typography and fills belong to text and notes; elsewhere they're ignored with a warning. */

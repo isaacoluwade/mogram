@@ -1,4 +1,4 @@
-import type { SceneEntry, TourChoice, TourStep } from "../model/types";
+import type { SceneCapacity, SceneEntry, TourChoice, TourStep } from "../model/types";
 import { humanize, isValidName } from "../model/names";
 import {
   FLOW_PRESETS,
@@ -10,7 +10,7 @@ import {
 } from "../presets/names";
 import type { Position } from "./diagnostics";
 import { didYouMean, listOptions } from "./suggest";
-import { asString, isMap, isNullish, type MapEntry } from "./yaml-read";
+import { asString, isMap, isNullish, scalarValue, type MapEntry } from "./yaml-read";
 import type { RawScene, RawTour, StepPositions } from "./raw";
 import { SectionReader } from "./read-base";
 
@@ -77,6 +77,20 @@ export class StoryReader extends SectionReader {
         return { target: line.key, state: single, flow: null, motion: null, source };
       if (isFlowPreset(single))
         return { target: line.key, state: null, flow: single, motion: null, source };
+      // `users_to_web: 5x` is short for `{ traffic: 5x }`.
+      if (/^\d+(\.\d+)?\s*[x×]$/i.test(single.trim())) {
+        const traffic = this.readMultiple(line.value, `The traffic on "${line.key}"`);
+        return traffic === null
+          ? null
+          : {
+              target: line.key,
+              state: null,
+              flow: null,
+              motion: null,
+              capacity: { traffic },
+              source,
+            };
+      }
       this.sink.error(
         this.pos(line.value),
         `In scene "${scene}", "${single}" isn't a state or flow preset.${didYouMean(single, [...STATE_PRESETS, ...FLOW_PRESETS])} States: ${listOptions(STATE_PRESETS)}. Flows: ${listOptions(FLOW_PRESETS)}.`,
@@ -84,8 +98,15 @@ export class StoryReader extends SectionReader {
       return null;
     }
     if (isMap(line.value)) {
-      const fields = this.body(line.key, line.value, ["state", "flow", "motion"], "scene");
+      const fields = this.body(
+        line.key,
+        line.value,
+        ["state", "flow", "motion", "traffic", "share", "hit", "copies", "size"],
+        "scene",
+      );
+      const capacity = this.readSceneCapacity(fields, line.key);
       return {
+        ...(capacity === null ? {} : { capacity }),
         target: line.key,
         state: this.optionalEnum(
           fields.get("state"),
@@ -110,6 +131,34 @@ export class StoryReader extends SectionReader {
       `In scene "${scene}", give "${line.key}" a preset, like "${line.key}: down".`,
     );
     return null;
+  }
+
+  /** Traffic, shares, hit rates, and copies or a size set by hand, for one scene line. */
+  private readSceneCapacity(
+    fields: ReadonlyMap<string, MapEntry>,
+    target: string,
+  ): SceneCapacity | null {
+    const out: { -readonly [K in keyof SceneCapacity]: SceneCapacity[K] } = {};
+    const traffic = this.optionalMultiple(fields.get("traffic"), `The traffic on "${target}"`);
+    if (traffic !== null) out.traffic = traffic;
+    const share = this.optionalPercent(fields.get("share"), `The share of "${target}"`);
+    if (share !== null) out.share = share;
+    const hit = this.optionalPercent(fields.get("hit"), `The hit rate of "${target}"`);
+    if (hit !== null) out.hit = hit;
+    const copiesEntry = fields.get("copies");
+    if (copiesEntry !== undefined) {
+      const copies = scalarValue(copiesEntry.value);
+      if (typeof copies === "number" && Number.isInteger(copies) && copies >= 1 && copies <= 24)
+        out.copies = copies;
+      else
+        this.sink.error(
+          this.pos(copiesEntry.value),
+          `The copies of "${target}" should be a whole number from 1 to 24.`,
+        );
+    }
+    const size = this.optionalString(fields.get("size"), `The size of "${target}"`);
+    if (size !== null) out.size = size;
+    return Object.keys(out).length === 0 ? null : out;
   }
 
   // ---------------------------------------------------------------------------------------------

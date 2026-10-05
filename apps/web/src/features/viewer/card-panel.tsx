@@ -1,7 +1,16 @@
 "use client";
 
-import { ArrowLeft, ArrowRight, CornerDownRight, Flag, Layers, Undo2, X } from "lucide-react";
-import { humanize } from "@mogram/core/model";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CornerDownRight,
+  ExternalLink,
+  Flag,
+  Layers,
+  Undo2,
+  X,
+} from "lucide-react";
+import { humanize, withPlaceholders, type ElementLink } from "@mogram/core/model";
 import { STATE_INFO, type StatePreset } from "@mogram/core/presets";
 import { exitsOf, stepFor, stepNumber } from "@mogram/core/tours";
 import { Badge, type BadgeProps } from "@/components/ui/badge";
@@ -64,7 +73,11 @@ export function CardPanel({ allowViewerState }: { allowViewerState: boolean }) {
   const connection = diagram.connections.get(name);
   const element = component ?? container ?? connection;
   if (element === undefined) return null;
-  const label = connection !== undefined ? (connection.text ?? connection.label) : element.label;
+  const label = withPlaceholders(
+    diagram,
+    name,
+    connection !== undefined ? (connection.text ?? connection.label) : element.label,
+  );
   const card = element.card;
   const content = card === null ? null : cardContent(card, controller.levels.files, label);
   const resolved = controller.levels.resolve(levelPath, scene, viewerEntries);
@@ -127,6 +140,37 @@ export function CardPanel({ allowViewerState }: { allowViewerState: boolean }) {
           <X />
         </IconButton>
       </header>
+
+      {element.data.size > 0 || element.link !== null ? (
+        <div className="flex flex-col gap-2 px-4 pb-3">
+          {element.data.size > 0 ? (
+            <dl
+              aria-label="Details"
+              className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-caption"
+            >
+              {[...element.data].map(([key, value]) => (
+                <div key={key} className="contents">
+                  <dt className="text-fg-muted">{key}</dt>
+                  <dd className="min-w-0 truncate text-fg-soft">{String(value)}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+          {element.link !== null ? (
+            <Button
+              variant="secondary"
+              size="sm"
+              className="self-start"
+              onClick={() =>
+                element.link !== null && void controller.followElementLink(element.link)
+              }
+            >
+              <ExternalLink />
+              {linkLabel(element.link)}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
 
       {content !== null ? (
         <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-4">
@@ -256,4 +300,18 @@ function TourControls({ wandered, present }: { wandered: boolean; present: boole
       </div>
     </div>
   );
+}
+
+/** What a link button says: where it goes. */
+function linkLabel(link: ElementLink): string {
+  switch (link.kind) {
+    case "url":
+      return link.url.replace(/^https?:\/\//, "").replace(/^mailto:/, "Email ");
+    case "scene":
+      return `Show the ${link.scene.replace(/_/g, " ")} scene`;
+    case "tour":
+      return `Start the ${link.tour.replace(/_/g, " ")} tour`;
+    case "element":
+      return `Go to ${link.element.replace(/_/g, " ")}`;
+  }
 }

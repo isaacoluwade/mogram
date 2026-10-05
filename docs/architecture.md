@@ -13,9 +13,13 @@ mogram/
 ├─ packages/
 │  ├─ core/                @mogram/core: the file format and every diagram rule. Pure TypeScript,
 │  │                       no DOM, no React. Reusable by a future CLI, VS Code extension, GitHub app.
-│  └─ icons/               @mogram/icons: icon catalogue (Azure, AWS, Google Cloud, Kubernetes,
-│                          generic, tool logos), aliases, search, and the build script that
-│                          turns each vendor's pinned download into the SVG assets.
+│  ├─ icons/               @mogram/icons: icon catalogue (Azure, AWS, Google Cloud, Kubernetes,
+│  │                       generic, tool logos), aliases, search, and the build script that
+│  │                       turns each vendor's pinned download into the SVG assets.
+│  └─ concepts/            @mogram/concepts: Mogram's concepts, one `.mogram.yaml` per concept
+│                          under `content/<topic>/`; a generated catalog (what lists, filters
+│                          and searches them without loading any), the diagrams loaded a topic
+│                          at a time, and search (D-85).
 ├─ docs/                   Requirements, architecture, decisions, build log, research, file format
 ├─ sample-app/             Reference app supplied with the brief (not part of the workspace)
 └─ screenshots/            Reference screenshots supplied with the brief
@@ -31,7 +35,8 @@ pnpm workspaces + Turborepo. Each package owns its scripts (`build`, `lint`, `ty
      │  parseProject()        @mogram/core/format
      ▼
  Diagram model (+ diagnostics with file:line)
-     │  resolveState(scene)   @mogram/core/state      cascade, roll-up, backups, nested paths
+     │  resolveState(scene)   @mogram/core/state      cascade, roll-up, backups, nested paths,
+     │                                                 capacity (@mogram/core/capacity)
      │  computeLayout()       @mogram/core/layout     grid units → boxes, auto-size, auto-place
      │  routeConnections()    @mogram/core/routing    orthogonal routing around obstacles
      ▼
@@ -51,19 +56,21 @@ Transient interaction (dragging, resizing, drawing a connection) never touches Y
 
 ## 3. `@mogram/core` modules
 
-| Module        | Responsibility                                                                                                                                                                        |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `format/`     | YAML parsing with source positions, schema validation, plain-language diagnostics, single-file and folder projects, multi-file merge, duplicate-name detection, serialisation helpers |
-| `model/`      | Normalised types: components, containers, groups, connections, ports, scenes, tours, cards, layout, decorations, settings                                                             |
-| `presets/`    | Data for every preset family: state, flow, motion, container style, canvas theme. Durations in the {0.25, 0.5, 1, 2, 4}s set                                                          |
-| `state/`      | Effective state: base → scene override → ancestor cascade → roll-up → backup connections → nested instance paths                                                                      |
-| `layout/`     | Grid units ↔ pixels, component and container geometry, auto-size, auto-placement of unpinned elements, group boundaries, z-order                                                      |
-| `routing/`    | Orthogonal connector routing (sparse visibility grid + A* with bend penalty), manual waypoints, curved/straight styles, path sampling                                                 |
-| `timeline/`   | Shared-clock maths, motion functions `f(t)`, flow dash offsets, scene transitions, story timelines for export                                                                         |
-| `tours/`      | Tour graph, validation, traversal, choices                                                                                                                                            |
-| `nested/`     | Folder graph, `opens:` resolution, loop detection, ports, stubs, instance paths                                                                                                       |
-| `edit/`       | Commands: add/move/reparent/rename/delete elements, presets, scenes, tours, cards, layout, decorations, file moves, paste                                                             |
-| `model/names` | Label ↔ name conversion, unique-name generation (part of `model/`)                                                                                                                    |
+| Module        | Responsibility                                                                                                                                                                                                                                               |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `format/`     | YAML parsing with source positions, schema validation, plain-language diagnostics, single-file and folder projects, multi-file merge, duplicate-name detection, serialisation helpers                                                                        |
+| `model/`      | Normalised types: components, containers, groups, connections, ports, scenes, tours, cards, layout, decorations, settings                                                                                                                                    |
+| `presets/`    | Data for every preset family: state, flow, motion, container style, canvas theme. Durations in the {0.25, 0.5, 1, 2, 4}s set                                                                                                                                 |
+| `state/`      | Effective state: base → scene override → ancestor cascade → roll-up → backup connections → nested instance paths                                                                                                                                             |
+| `layout/`     | Grid units ↔ pixels, component and container geometry, auto-size, auto-placement of unpinned elements, group boundaries, z-order                                                                                                                             |
+| `routing/`    | Orthogonal connector routing (sparse visibility grid + A* with bend penalty), manual waypoints, curved/straight styles, path sampling                                                                                                                        |
+| `timeline/`   | Shared-clock maths, motion functions `f(t)`, flow dash offsets, scene transitions, story timelines for export                                                                                                                                                |
+| `tours/`      | Tour graph, validation, traversal, choices                                                                                                                                                                                                                   |
+| `nested/`     | Folder graph, `opens:` resolution, loop detection, ports, stubs, instance paths                                                                                                                                                                              |
+| `capacity/`   | Traffic through the graph, copies and sizes for each moment (`planCapacity`), traffic patterns (`patterns.ts`), and the deterministic timeline that turns plans into motion, following patterns as time is asked about (`CapacityTimeline`); scaling presets |
+| `concepts/`   | Applying or inserting any concept (`applyConcept`, `insertConcept`, `suggestBindings`) and what one is (`conceptInfo`, `conceptKind`); the concepts themselves are in `@mogram/concepts`                                                                     |
+| `edit/`       | Commands: add/move/reparent/rename/delete elements, presets, scenes, tours, cards, layout, decorations, file moves, paste, scaling and capacity, concepts                                                                                                    |
+| `model/names` | Label ↔ name conversion, unique-name generation (part of `model/`)                                                                                                                                                                                           |
 
 ## 4. `apps/web` structure
 
@@ -92,12 +99,15 @@ src/
 │  │  ├─ canvas/                 Editable canvas, pointer gestures, hit testing, overlays, menu
 │  │  ├─ chrome/                 Top bars, toolbar, scene strip, zoom, breadcrumbs
 │  │  ├─ library/  inspector/    Icon library panel; inspector, card editor, arrange
+│  │  ├─ concepts/               The Concepts tab and the gallery (Browse all)
 │  │  ├─ tours/  panels/         Tour authoring; the code panel
 │  │  ├─ dialogs/                Export, share, history, shortcuts, open files
 │  │  └─ persistence/            Hosts (browser draft / cloud), autosave, thumbnails
 │  ├─ viewer/                    Read-only viewer: controller (cards, tours, nested zoom, deep
 │  │                             links), camera motion, level geometry, chrome, card panel
 │  ├─ drafts/                    Drafts in this browser (IndexedDB), used by editor, viewer, dashboard
+│  ├─ concepts/                  Concepts on offer (Mogram's, your drafts', your account's), recently
+│  │                             used, and browsing them by topic, platform, kind and search
 │  ├─ cards/  code/              Markdown cards; the CodeMirror YAML editor
 │  ├─ export/                    Static render, rasteriser, PNG/JPEG/SVG, GIF worker, WebP muxer
 │  ├─ share/                     The deep-link format
@@ -149,6 +159,11 @@ Rules that keep this clean (enforced by lint and review, see `engineering-standa
   driven by the clock: one attribute per connection per frame.
 - Scene changes tween numeric "visual vectors" (ring colour, desaturation, dimming, glow,
   ghosting, dot opacity) over 600ms, also as a function of `t`.
+- Capacity (D-82): each live canvas follows its resolved state with one `CapacityTimeline`
+  (`features/canvas/capacity.ts`), updated when the plan changes and queried at the clock's `t`.
+  Scale sets and machines (`fleet-node`, `machine-node`) draw from pure frame functions
+  (`capacity-frames.ts`); still pictures use the settled plan, and animated exports run a
+  timeline through the story's scene changes.
 
 ## 6. Persistence
 

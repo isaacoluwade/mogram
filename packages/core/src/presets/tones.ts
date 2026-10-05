@@ -33,6 +33,20 @@ export const TONES: Readonly<Record<Tone, Readonly<Record<ThemeMode, ToneColors>
       border: "rgba(0,0,0,0.14)",
     },
   },
+  blue: {
+    dark: {
+      solid: "#7aa7f0",
+      text: "#a9c6ff",
+      fill: "rgba(122,167,240,0.13)",
+      border: "rgba(122,167,240,0.42)",
+    },
+    light: {
+      solid: "#2f63c4",
+      text: "#1f4d9e",
+      fill: "rgba(47,99,196,0.11)",
+      border: "rgba(47,99,196,0.42)",
+    },
+  },
   green: {
     dark: {
       solid: "#73b490",
@@ -107,6 +121,7 @@ export const TONES: Readonly<Record<Tone, Readonly<Record<ThemeMode, ToneColors>
 
 export const TONE_NAMES: readonly Tone[] = [
   "neutral",
+  "blue",
   "green",
   "amber",
   "orange",

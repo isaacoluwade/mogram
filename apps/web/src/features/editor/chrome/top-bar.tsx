@@ -4,29 +4,33 @@ import Link from "next/link";
 import { useState } from "react";
 import {
   ChevronLeft,
-  Cloud,
+  CircleAlert,
+  CloudCheck,
   Code2,
+  LaptopMinimalCheck,
+  LoaderCircle,
   Download,
   Eye,
-  FileUp,
-  History,
-  Keyboard,
   MoreHorizontal,
   MonitorPlay,
   Route,
   Share2,
+  Sparkles,
 } from "lucide-react";
 import { setSetting } from "@mogram/core/edit";
 import { Button } from "@/components/ui/button";
 import { IconButton, IconLink } from "@/components/ui/icon-button";
 import { LogoMark } from "@/components/ui/logo";
-import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
+import { Menu, MenuContent, MenuTrigger } from "@/components/ui/menu";
 import { Panel, ToolbarDivider } from "@/components/ui/panel";
-import { downloadProject } from "@/features/files/download";
 import { deepLinkQuery } from "@/features/share/deep-link";
 import { useEditor, useEditorShallow, useEditorStore } from "../editor-context";
 import { useEditorHost, useOpenViewer } from "../persistence/host";
-import { shortcutLabel } from "../shortcuts";
+import { useCommandContext, useCommandHost } from "../commands/context";
+import { shortcutLabel } from "../commands/keys";
+import { CommandMenuItems } from "../commands/menu-items";
+import { DIAGRAM_MENU, resolveMenu } from "../commands/menus";
+import type { CommandContext } from "../commands/types";
 import type { SaveStatus } from "../store/editor-store";
 
 function statusText(save: SaveStatus, kind: "local" | "cloud"): string {
@@ -41,6 +45,73 @@ function statusText(save: SaveStatus, kind: "local" | "cloud"): string {
     case "saved":
       return kind === "local" ? "Draft saved in this browser" : "Saved";
   }
+}
+
+/** Phones have room for less. */
+function shortStatusText(save: SaveStatus, kind: "local" | "cloud"): string {
+  switch (save.kind) {
+    case "error":
+      return "Couldn't save";
+    case "saved":
+      return kind === "local" ? "Draft saved" : "Saved";
+    default:
+      return statusText(save, kind);
+  }
+}
+
+/**
+ * How the diagram is saved, as a small icon beside its name (a laptop for a draft in this
+ * browser, a cloud for the account, a spinner while saving), with the words in its tooltip and
+ * for screen readers; a problem shows in words. It opens the version history.
+ */
+function SaveStatusButton({
+  save,
+  kind,
+  onOpen,
+}: {
+  save: SaveStatus;
+  kind: "local" | "cloud";
+  onOpen: () => void;
+}) {
+  const text = statusText(save, kind);
+  const problem = save.kind === "error" || save.kind === "conflict";
+  const live = (
+    <span role="status" className="sr-only">
+      {text}
+    </span>
+  );
+  if (problem)
+    return (
+      <>
+        {live}
+        <button
+          type="button"
+          onClick={onOpen}
+          title={`${text} · Version history`}
+          aria-label={`${text} · Version history`}
+          className="flex h-8 shrink-0 items-center gap-1 rounded-md px-1.5 text-micro text-rose transition-colors hover:bg-fill-hover [&_svg]:size-3.5"
+        >
+          <CircleAlert aria-hidden />
+          {shortStatusText(save, kind)}
+        </button>
+      </>
+    );
+  const saved = save.kind === "saved";
+  const Icon = !saved ? LoaderCircle : kind === "local" ? LaptopMinimalCheck : CloudCheck;
+  return (
+    <>
+      {live}
+      <IconButton
+        label={`${text} · Version history`}
+        tooltipSide="bottom"
+        size="sm"
+        onClick={onOpen}
+        className="text-fg-muted"
+      >
+        <Icon aria-hidden className={saved ? undefined : "motion-safe:animate-spin"} />
+      </IconButton>
+    </>
+  );
 }
 
 /** Top-left: back, logo, diagram name, save status and the diagram menu. */
@@ -73,7 +144,8 @@ export function TopLeftBar() {
       <Link href="/" aria-label="Mogram home" className="hidden shrink-0 sm:block">
         <LogoMark size="sm" />
       </Link>
-      <div className="ml-1.5 flex min-w-0 flex-col justify-center leading-none">
+      {/* One row: the name, then how it's saved (which opens the version history). */}
+      <div className="ml-1 flex min-w-0 flex-1 items-center gap-0.5">
         {editing ? (
           <input
             autoFocus
@@ -85,7 +157,7 @@ export function TopLeftBar() {
               if (event.key === "Enter") commitName();
               if (event.key === "Escape") setEditing(false);
             }}
-            className="h-6 w-32 rounded-sm bg-fill-field px-1.5 text-label font-medium text-fg outline-none focus-visible:ring-1 focus-visible:ring-border-emphasis sm:w-44"
+            className="h-8 min-w-0 flex-1 rounded-md bg-fill-field px-2 text-label font-medium text-fg outline-none focus-visible:ring-1 focus-visible:ring-border-emphasis"
           />
         ) : (
           <button
@@ -94,20 +166,19 @@ export function TopLeftBar() {
               setDraft(name);
               setEditing(true);
             }}
-            className="hit-area flex max-w-32 rounded-sm px-1.5 py-0.5 text-left text-label font-medium text-fg transition-colors hover:bg-fill-hover sm:max-w-56"
+            className="flex h-8 min-w-0 items-center rounded-md px-2 text-left text-label font-medium text-fg transition-colors hover:bg-fill-hover"
             title="Rename diagram"
           >
-            {/* Truncate inside, so the button's larger touch area isn't clipped with the text. */}
             <span className="truncate">{name}</span>
           </button>
         )}
-        <span
-          role="status"
-          title={statusText(save, host.kind)}
-          className={`mt-0.5 truncate px-1.5 text-micro ${save.kind === "error" || save.kind === "conflict" ? "text-rose" : "text-fg-muted"}`}
-        >
-          {statusText(save, host.kind)}
-        </span>
+        {editing ? null : (
+          <SaveStatusButton
+            save={save}
+            kind={host.kind}
+            onOpen={() => store.getState().togglePanel("history", true)}
+          />
+        )}
       </div>
       <DiagramMenu />
     </Panel>
@@ -115,76 +186,23 @@ export function TopLeftBar() {
 }
 
 function DiagramMenu() {
-  const store = useEditorStore();
-  const host = useEditorHost();
+  const contextNow = useCommandContext();
+  const [context, setContext] = useState<CommandContext | null>(null);
   return (
-    <Menu>
+    <Menu onOpenChange={(open) => setContext(open ? contextNow() : null)}>
       <MenuTrigger asChild>
         <IconButton label="Diagram menu" tooltipSide="bottom" className="ml-auto">
           <MoreHorizontal />
         </IconButton>
       </MenuTrigger>
       <MenuContent align="start" className="w-64">
-        {host.kind === "local" && host.saveToCloud !== undefined ? (
-          <MenuItem
-            icon={<Cloud />}
-            description="Keep it in your account and share it"
-            onSelect={() => void host.saveToCloud?.()}
-          >
-            Save to cloud
-          </MenuItem>
-        ) : null}
-        <MenuItem
-          icon={<Download />}
-          description="Mogram YAML, or a zip for folders"
-          onSelect={() => {
-            const state = store.getState();
-            downloadProject(state.files, state.parsed().diagram.settings.name).catch(() =>
-              state.notify("Couldn't prepare the download. Try again.", "error"),
-            );
-          }}
-        >
-          Download files
-        </MenuItem>
-        <MenuItem
-          icon={<FileUp />}
-          description="Replace with .mogram.yaml or a folder"
-          onSelect={() => store.getState().setDialog("open")}
-        >
-          Open files…
-        </MenuItem>
-        {host.kind === "cloud" ? (
-          <MenuItem
-            icon={<History />}
-            description="Earlier saved versions"
-            onSelect={() => store.getState().setDialog("history")}
-          >
-            Version history
-          </MenuItem>
-        ) : null}
-        <MenuSeparator className="md:hidden" />
-        <MenuItem
-          icon={<Code2 />}
-          className="md:hidden"
-          onSelect={() => store.getState().togglePanel("code", true)}
-        >
-          YAML code
-        </MenuItem>
-        <MenuItem
-          icon={<Route />}
-          className="md:hidden"
-          onSelect={() => store.getState().togglePanel("tours", true)}
-        >
-          Tours
-        </MenuItem>
-        <MenuSeparator />
-        <MenuItem
-          icon={<Keyboard />}
-          shortcut="?"
-          onSelect={() => store.getState().setDialog("shortcuts")}
-        >
-          Keyboard shortcuts
-        </MenuItem>
+        {context === null ? null : (
+          <CommandMenuItems
+            entries={resolveMenu(DIAGRAM_MENU, context, true)}
+            context={context}
+            variant="dropdown"
+          />
+        )}
       </MenuContent>
     </Menu>
   );
@@ -194,9 +212,20 @@ function DiagramMenu() {
 export function TopRightBar() {
   const store = useEditorStore();
   const openViewer = useOpenViewer();
+  const commands = useCommandHost();
   const panels = useEditor((s) => s.panels);
+  const assistantShowing = useEditor((s) => s.panels.library && s.leftTab === "assistant");
   return (
     <Panel className="flex h-11 items-center gap-1 px-1.5">
+      <IconButton
+        label="Assistant"
+        shortcut={shortcutLabel("mod+j")}
+        tooltipSide="bottom"
+        active={assistantShowing}
+        onClick={() => commands.assistant?.()}
+      >
+        <Sparkles className="text-violet" />
+      </IconButton>
       <IconButton
         label="YAML code"
         tooltipSide="bottom"
@@ -242,16 +271,17 @@ export function TopRightBar() {
         <MonitorPlay />
       </IconButton>
       <ToolbarDivider className="max-md:hidden" />
-      {/* The label hides on phones, so the name is set explicitly. */}
+      {/* Phones keep it in the diagram menu: both bars have to fit across the screen. */}
       <Button
         variant="outline"
         size="sm"
+        className="max-sm:hidden"
         aria-label="Export"
         onClick={() => store.getState().setDialog("export")}
         aria-keyshortcuts={shortcutLabel("mod+e")}
       >
         <Download />
-        <span className="max-sm:hidden">Export</span>
+        Export
       </Button>
       <Button
         variant="primary"

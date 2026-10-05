@@ -92,7 +92,9 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
 
   /** Creates a diagram (cloud when signed in, otherwise a browser draft) and opens it. */
   const create = useMutation({
-    mutationFn: async (input: { name: string; files: ProjectFiles }) => {
+    mutationFn: async (input: { name: string; files: ProjectFiles; ask?: string }) => {
+      // A description goes to the assistant once the editor opens (`?ask=`).
+      const query = input.ask === undefined ? "" : `?ask=${encodeURIComponent(input.ask)}`;
       if (signedIn) {
         const thumbnail = await renderThumbnail(input.files).catch(() => null);
         const created = await api.createDiagram({
@@ -100,10 +102,10 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
           files: input.files,
           thumbnail,
         });
-        return `/edit/${created.id}`;
+        return `/edit/${created.id}${query}`;
       }
       const draft = await createDraft(input.name, input.files);
-      return `/draft/${draft.id}`;
+      return `/draft/${draft.id}${query}`;
     },
     onSuccess: (href) => router.push(href as Parameters<typeof router.push>[0]),
     onError: (error) => toast.error(message(error, "Couldn't create the diagram.")),
@@ -119,6 +121,12 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
   };
 
   const createFromFiles = (files: ProjectFiles) => create.mutate({ name: nameOf(files), files });
+
+  /** A blank diagram that the assistant builds from a description. */
+  const createFromDescription = (description: string) => {
+    const blank = templateById("blank");
+    create.mutate({ name: "Untitled diagram", files: blank.files, ask: description.trim() });
+  };
 
   const rename = useMutation({
     mutationFn: async ({ item, name }: { item: DashboardItem; name: string }) => {
@@ -208,6 +216,7 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
     creating: create.isPending,
     createFromTemplate,
     createFromFiles,
+    createFromDescription,
     rename: (item: DashboardItem, name: string) => rename.mutate({ item, name }),
     duplicate: (item: DashboardItem) => duplicate.mutate(item),
     remove: (item: DashboardItem) => remove.mutate(item),

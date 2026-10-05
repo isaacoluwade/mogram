@@ -181,7 +181,8 @@ describe("adding elements", () => {
     const text = result.files["mogram.yaml"]!;
     expect(text.indexOf("containers:")).toBeLessThan(text.indexOf("components:"));
     expect(text.indexOf("components:")).toBeLessThan(text.indexOf("layout:"));
-    expect(text).toContain("  east_us:\n    type: region\n    label: East US\n");
+    // The first entry of a new section is one line, as Mogram writes short entries.
+    expect(text).toContain("  east_us: { type: region, label: East US }\n");
   });
 
   it("writes layout to layout.mogram.yaml in folder mode", () => {
@@ -255,7 +256,8 @@ describe("arranging", () => {
     expect(front.files["mogram.yaml"]).toContain("  a: { at: [0, 0], z: 1 }");
     const back = project(front.files);
     const reset = reorderZ(back.files, back.diagram, { names: ["a"], move: "backward" });
-    expect(reset.files["mogram.yaml"]).toContain("  a: { at: [0, 0] }");
+    // Only the position is left, so it's back to the short form it was written in.
+    expect(reset.files["mogram.yaml"]).toContain("  a: [0, 0]");
   });
 
   it("stores hand-bent paths and clears them again (ED-18)", () => {

@@ -8,7 +8,9 @@ import { componentAnimates, componentFrame, progressAt, type ComponentFrame } fr
 import { iconHref, useIconCacheVersion } from "../icons";
 import { measure } from "../text";
 import type { SceneComponent } from "../scene";
-import { Badge, CardMark, NestedMark } from "./glyphs";
+import { Badge, CardMark, ExportLink, LinkMark, NestedMark } from "./glyphs";
+import { loadColor, percent } from "../capacity-frames";
+import { tone } from "../theme";
 import { actionProps, focusOpacity, useRender } from "./render-context";
 
 const ICON = 34;
@@ -37,6 +39,8 @@ interface NodeRefs {
   grey: SVGImageElement | null;
   badgeFrom: SVGGElement | null;
   badgeTo: SVGGElement | null;
+  loadFill: SVGRectElement | null;
+  backlog: SVGRectElement | null;
 }
 
 function motionTransform(component: SceneComponent, frame: ComponentFrame): string {
@@ -125,10 +129,33 @@ export const ComponentNode = memo(function ComponentNode({
     grey: null,
     badgeFrom: null,
     badgeTo: null,
+    loadFill: null,
+    backlog: null,
   }).current;
+  // Capacity (D-82): how loaded it is, and how full a queue is, as traffic changes.
+  const timeline = settings.capacity?.timeline ?? null;
+  const metered = timeline !== null && (component.measured || component.queue);
+  const meterAt = (t: number) => ({
+    load: timeline?.load(component.name, t) ?? 0,
+    backlog: timeline?.backlog(component.name, t) ?? 0,
+  });
+  const meter = meterAt(now);
+  const BAR_INSET = 10;
+  const QUEUE_INSET = 5;
 
-  useFrame(componentAnimates(component, transitioning), (t) => {
+  useFrame(componentAnimates(component, transitioning) || metered, (t) => {
     apply(refs, component, componentFrame(component, theme, t, progressAt(t, transitionStart)));
+    if (!metered) return;
+    const next = meterAt(t);
+    const width = (component.tile.w - BAR_INSET * 2) * Math.min(1, next.load);
+    refs.loadFill?.setAttribute("width", String(width));
+    refs.loadFill?.setAttribute("fill", loadColor(next.load, theme));
+    const height = (component.tile.h - QUEUE_INSET * 2) * next.backlog;
+    refs.backlog?.setAttribute("height", String(height));
+    refs.backlog?.setAttribute(
+      "y",
+      String(component.tile.y + component.tile.h - QUEUE_INSET - height),
+    );
   });
 
   const { tile, box } = component;
@@ -141,186 +168,254 @@ export const ComponentNode = memo(function ComponentNode({
   const stack = stackGeometry(tile, frame.ghostOpacity);
 
   return (
-    <g
-      data-element={component.name}
-      data-kind="component"
-      data-state={component.state.to}
-      {...actionProps(settings, component.label)}
-      opacity={focusOpacity(settings, component.name)}
-      style={{ transition: "opacity 400ms ease" }}
-    >
+    <ExportLink link={component.link} mode={settings.mode}>
       <g
-        ref={(node) => void (refs.motion = node)}
-        transform={motionTransform(component, frame) || undefined}
+        data-element={component.name}
+        data-kind="component"
+        data-state={component.state.to}
+        {...actionProps(settings, component.label)}
+        opacity={focusOpacity(settings, component.name)}
+        style={{ transition: "opacity 400ms ease" }}
       >
-        <circle
-          ref={(node) => void (refs.glow = node)}
-          cx={cx}
-          cy={cy}
-          r={tile.w * 0.72}
-          fill={frame.glowColor}
-          opacity={frame.glowOpacity * 0.55}
-          filter={`url(#${settings.ids.glow})`}
-        />
+        {component.tooltip !== null ? <title>{component.tooltip}</title> : null}
         <g
-          ref={(node) => void (refs.ghosts = node)}
-          opacity={frame.ghostOpacity}
-          stroke={frame.ghostColor}
-          fill={theme.tile}
-          strokeWidth={1.2}
+          ref={(node) => void (refs.motion = node)}
+          transform={motionTransform(component, frame) || undefined}
         >
-          <rect
-            ref={(node) => void (refs.ghostFar = node)}
-            x={stack.far.x}
-            y={stack.far.y}
-            width={tile.w}
-            height={tile.h}
-            rx={TILE_RADIUS}
-            strokeOpacity={0.45}
+          <circle
+            ref={(node) => void (refs.glow = node)}
+            cx={cx}
+            cy={cy}
+            r={tile.w * 0.72}
+            fill={frame.glowColor}
+            opacity={frame.glowOpacity * 0.55}
+            filter={`url(#${settings.ids.glow})`}
           />
-          <rect
-            ref={(node) => void (refs.ghostNear = node)}
-            x={stack.near.x}
-            y={stack.near.y}
-            width={tile.w}
-            height={tile.h}
-            rx={TILE_RADIUS}
-            strokeOpacity={0.7}
-          />
-        </g>
-        <rect
-          ref={(node) => void (refs.ring = node)}
-          x={stack.ring.x}
-          y={stack.ring.y}
-          width={stack.ring.w}
-          height={stack.ring.h}
-          rx={TILE_RADIUS + RING_GAP}
-          fill="none"
-          stroke={frame.ringColor}
-          strokeWidth={2}
-          opacity={frame.ringOpacity}
-        />
-        <rect
-          x={tile.x}
-          y={tile.y}
-          width={tile.w}
-          height={tile.h}
-          rx={TILE_RADIUS}
-          fill={theme.tile}
-          stroke={theme.tileBorder}
-          strokeWidth={1}
-        />
-        <rect
-          x={tile.x + 1}
-          y={tile.y + 1}
-          width={tile.w - 2}
-          height={tile.h / 2}
-          rx={TILE_RADIUS - 1}
-          fill={`url(#${settings.ids.sheen})`}
-        />
-        <g ref={(node) => void (refs.content = node)} opacity={frame.contentOpacity}>
-          {href != null ? (
-            <>
-              <image
-                ref={(node) => void (refs.color = node)}
-                href={href}
-                x={iconX}
-                y={iconY}
-                width={ICON}
-                height={ICON}
-                opacity={frame.colorOpacity}
-                preserveAspectRatio="xMidYMid meet"
-              />
-              <image
-                ref={(node) => void (refs.grey = node)}
-                href={href}
-                x={iconX}
-                y={iconY}
-                width={ICON}
-                height={ICON}
-                opacity={frame.greyOpacity}
-                filter={`url(#${settings.ids.desaturate})`}
-                preserveAspectRatio="xMidYMid meet"
-              />
-            </>
-          ) : (
-            <text
-              x={cx}
-              y={cy + 5}
-              textAnchor="middle"
-              fontSize={14}
-              fontWeight={600}
-              fill={theme.textMuted}
-              style={{ fontFamily }}
-            >
-              {href === undefined ? "" : initials(component.label)}
-            </text>
-          )}
-        </g>
-        <g
-          ref={(node) => void (refs.badgeFrom = node)}
-          opacity={frame.badgeFrom.opacity}
-          transform={stack.badge}
-        >
-          <Badge
-            badge={frame.badgeFrom.badge}
-            color={frame.badgeFrom.color}
-            background={theme.base}
-            opacity={1}
-            x={tile.x + tile.w - 2}
-            y={tile.y + 2}
-          />
-        </g>
-        <g
-          ref={(node) => void (refs.badgeTo = node)}
-          opacity={frame.badgeTo.opacity}
-          transform={stack.badge}
-        >
-          <Badge
-            badge={frame.badgeTo.badge}
-            color={frame.badgeTo.color}
-            background={theme.base}
-            opacity={1}
-            x={tile.x + tile.w - 2}
-            y={tile.y + 2}
-          />
-        </g>
-        {component.hasCard ? (
-          <CardMark x={tile.x + 9} y={tile.y + tile.h - 9} color={theme.textMuted} />
-        ) : null}
-        {component.opens ? (
-          <NestedMark x={tile.x + tile.w - 10} y={tile.y + tile.h - 9} color={theme.textMuted} />
-        ) : null}
-      </g>
-      <rect
-        x={box.x + box.w / 2 - labelWidth / 2 - 5}
-        y={box.y + LABEL.top - 1}
-        width={labelWidth + 10}
-        height={component.lines.length * LABEL.lineHeight + 4}
-        rx={5}
-        fill={theme.base}
-        opacity={0.82}
-      />
-      <text
-        x={box.x + box.w / 2}
-        textAnchor="middle"
-        fontSize={12}
-        fontWeight={500}
-        fill={theme.text}
-        opacity={Math.max(0.55, frame.contentOpacity)}
-        style={{ fontFamily }}
-      >
-        {component.lines.map((line, index) => (
-          <tspan
-            key={index}
-            x={box.x + box.w / 2}
-            y={box.y + LABEL.top + 10 + index * LABEL.lineHeight}
+          <g
+            ref={(node) => void (refs.ghosts = node)}
+            opacity={frame.ghostOpacity}
+            stroke={frame.ghostColor}
+            fill={theme.tile}
+            strokeWidth={1.2}
           >
-            {line}
-          </tspan>
-        ))}
-      </text>
-    </g>
+            <rect
+              ref={(node) => void (refs.ghostFar = node)}
+              x={stack.far.x}
+              y={stack.far.y}
+              width={tile.w}
+              height={tile.h}
+              rx={TILE_RADIUS}
+              strokeOpacity={0.45}
+            />
+            <rect
+              ref={(node) => void (refs.ghostNear = node)}
+              x={stack.near.x}
+              y={stack.near.y}
+              width={tile.w}
+              height={tile.h}
+              rx={TILE_RADIUS}
+              strokeOpacity={0.7}
+            />
+          </g>
+          <rect
+            ref={(node) => void (refs.ring = node)}
+            x={stack.ring.x}
+            y={stack.ring.y}
+            width={stack.ring.w}
+            height={stack.ring.h}
+            rx={TILE_RADIUS + RING_GAP}
+            fill="none"
+            stroke={frame.ringColor}
+            strokeWidth={2}
+            opacity={frame.ringOpacity}
+          />
+          <rect
+            x={tile.x}
+            y={tile.y}
+            width={tile.w}
+            height={tile.h}
+            rx={TILE_RADIUS}
+            fill={theme.tile}
+            stroke={theme.tileBorder}
+            strokeWidth={1}
+          />
+          <rect
+            x={tile.x + 1}
+            y={tile.y + 1}
+            width={tile.w - 2}
+            height={tile.h / 2}
+            rx={TILE_RADIUS - 1}
+            fill={`url(#${settings.ids.sheen})`}
+          />
+          {timeline !== null && component.queue ? (
+            <rect
+              ref={(node) => void (refs.backlog = node)}
+              data-part="backlog"
+              x={tile.x + QUEUE_INSET}
+              y={tile.y + tile.h - QUEUE_INSET - (tile.h - QUEUE_INSET * 2) * meter.backlog}
+              width={tile.w - QUEUE_INSET * 2}
+              height={(tile.h - QUEUE_INSET * 2) * meter.backlog}
+              rx={9}
+              fill={tone("amber", theme.mode).solid}
+              opacity={0.28}
+            />
+          ) : null}
+          <g ref={(node) => void (refs.content = node)} opacity={frame.contentOpacity}>
+            {href != null ? (
+              <>
+                <image
+                  ref={(node) => void (refs.color = node)}
+                  href={href}
+                  x={iconX}
+                  y={iconY}
+                  width={ICON}
+                  height={ICON}
+                  opacity={frame.colorOpacity}
+                  preserveAspectRatio="xMidYMid meet"
+                />
+                <image
+                  ref={(node) => void (refs.grey = node)}
+                  href={href}
+                  x={iconX}
+                  y={iconY}
+                  width={ICON}
+                  height={ICON}
+                  opacity={frame.greyOpacity}
+                  filter={`url(#${settings.ids.desaturate})`}
+                  preserveAspectRatio="xMidYMid meet"
+                />
+              </>
+            ) : (
+              <text
+                x={cx}
+                y={cy + 5}
+                textAnchor="middle"
+                fontSize={14}
+                fontWeight={600}
+                fill={theme.textMuted}
+                style={{ fontFamily }}
+              >
+                {href === undefined ? "" : initials(component.label)}
+              </text>
+            )}
+          </g>
+          <g
+            ref={(node) => void (refs.badgeFrom = node)}
+            opacity={frame.badgeFrom.opacity}
+            transform={stack.badge}
+          >
+            <Badge
+              badge={frame.badgeFrom.badge}
+              color={frame.badgeFrom.color}
+              background={theme.base}
+              opacity={1}
+              x={tile.x + tile.w - 2}
+              y={tile.y + 2}
+            />
+          </g>
+          <g
+            ref={(node) => void (refs.badgeTo = node)}
+            opacity={frame.badgeTo.opacity}
+            transform={stack.badge}
+          >
+            <Badge
+              badge={frame.badgeTo.badge}
+              color={frame.badgeTo.color}
+              background={theme.base}
+              opacity={1}
+              x={tile.x + tile.w - 2}
+              y={tile.y + 2}
+            />
+          </g>
+          {component.hasCard ? (
+            <CardMark x={tile.x + 9} y={tile.y + tile.h - 9} color={theme.textMuted} />
+          ) : null}
+          {component.opens ? (
+            <NestedMark x={tile.x + tile.w - 10} y={tile.y + tile.h - 9} color={theme.textMuted} />
+          ) : null}
+          {component.link !== null ? (
+            <LinkMark x={tile.x + 10} y={tile.y + 10} color={theme.textMuted} />
+          ) : null}
+          {timeline !== null && component.measured ? (
+            <g data-part="load">
+              <rect
+                x={tile.x + BAR_INSET}
+                y={tile.y + tile.h + 3}
+                width={tile.w - BAR_INSET * 2}
+                height={3}
+                rx={1.5}
+                fill={theme.tileBorder}
+              />
+              <rect
+                ref={(node) => void (refs.loadFill = node)}
+                x={tile.x + BAR_INSET}
+                y={tile.y + tile.h + 3}
+                width={(tile.w - BAR_INSET * 2) * Math.min(1, meter.load)}
+                height={3}
+                rx={1.5}
+                fill={loadColor(meter.load, theme)}
+              />
+            </g>
+          ) : null}
+          {timeline !== null && component.hit !== null ? (
+            <g
+              data-part="hit"
+              transform={`translate(${tile.x + tile.w - 6} ${tile.y + tile.h - 8})`}
+            >
+              <rect
+                x={-4}
+                y={-7}
+                width={46}
+                height={14}
+                rx={7}
+                fill={theme.base}
+                stroke={tone("green", theme.mode).solid}
+                strokeOpacity={0.6}
+              />
+              <text
+                x={19}
+                y={3.5}
+                textAnchor="middle"
+                fontSize={9}
+                fontWeight={600}
+                fill={tone("green", theme.mode).solid}
+                style={{ fontFamily }}
+              >
+                {`${percent(component.hit)} hit`}
+              </text>
+            </g>
+          ) : null}
+        </g>
+        <rect
+          x={box.x + box.w / 2 - labelWidth / 2 - 5}
+          y={box.y + LABEL.top - 1}
+          width={labelWidth + 10}
+          height={component.lines.length * LABEL.lineHeight + 4}
+          rx={5}
+          fill={theme.base}
+          opacity={0.82}
+        />
+        <text
+          x={box.x + box.w / 2}
+          textAnchor="middle"
+          fontSize={12}
+          fontWeight={500}
+          fill={theme.text}
+          opacity={Math.max(0.55, frame.contentOpacity)}
+          style={{ fontFamily }}
+        >
+          {component.lines.map((line, index) => (
+            <tspan
+              key={index}
+              x={box.x + box.w / 2}
+              y={box.y + LABEL.top + 10 + index * LABEL.lineHeight}
+            >
+              {line}
+            </tspan>
+          ))}
+        </text>
+      </g>
+    </ExportLink>
   );
 }, sameComponent);
 
@@ -347,6 +442,11 @@ function sameComponent(
       x.speed === y.speed &&
       x.color === y.color &&
       x.hasCard === y.hasCard &&
-      x.opens === y.opens)
+      x.opens === y.opens &&
+      x.link === y.link &&
+      x.tooltip === y.tooltip &&
+      x.measured === y.measured &&
+      x.queue === y.queue &&
+      x.hit === y.hit)
   );
 }

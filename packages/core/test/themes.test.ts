@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   CANVAS_THEMES,
   CANVAS_THEME_INFO,
+  FEATURED_THEMES,
+  THEME_FAMILIES,
   GRID_CONTRAST,
   TEXT_CONTRAST,
   backgroundColors,
@@ -19,6 +21,36 @@ describe("contrast", () => {
     expect(contrast("#ffffff", "#ffffff")).toBeCloseTo(1, 5);
     expect(contrast("rgba(0,0,0,0)", "#777777")).toBeCloseTo(1, 5);
     expect(contrast("rgba(0,0,0,0.5)", "#ffffff")).toBeGreaterThan(3);
+  });
+});
+
+describe("canvas themes (ED-8)", () => {
+  it("keeps labels readable on every colour of every theme's background", () => {
+    for (const name of CANVAS_THEMES) {
+      const theme = CANVAS_THEME_INFO[name];
+      for (const color of backgroundColors(theme.background)) {
+        expect(contrast(theme.text, color), `${name} text on ${color}`).toBeGreaterThanOrEqual(
+          TEXT_CONTRAST,
+        );
+        expect(
+          contrast(theme.textMuted, color),
+          `${name} muted on ${color}`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+      expect(modeForColor(theme.base), name).toBe(theme.mode);
+    }
+  });
+
+  it("puts every theme in exactly one family, and features a mix", () => {
+    const listed = THEME_FAMILIES.flatMap((family) => family.themes);
+    expect([...listed].sort()).toEqual([...CANVAS_THEMES].sort());
+    expect(new Set(FEATURED_THEMES).size).toBe(FEATURED_THEMES.length);
+    const families = new Set(
+      FEATURED_THEMES.map((name) => THEME_FAMILIES.find((f) => f.themes.includes(name))?.name),
+    );
+    expect(families.size).toBe(THEME_FAMILIES.length);
+    const modes = FEATURED_THEMES.map((name) => CANVAS_THEME_INFO[name].mode);
+    expect(modes.filter((mode) => mode === "light").length).toBeGreaterThanOrEqual(3);
   });
 });
 

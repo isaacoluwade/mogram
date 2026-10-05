@@ -1,3 +1,6 @@
+import type { ReactNode } from "react";
+import type { ElementLink } from "@mogram/core/model";
+import type { RenderMode } from "./render-context";
 import type { StateBadge } from "@mogram/core/presets";
 
 /** State badge glyphs, drawn in a 16×16 box centred on (0, 0). */
@@ -99,5 +102,54 @@ export function NestedMark({ x, y, color }: { x: number; y: number; color: strin
         strokeLinecap="round"
       />
     </g>
+  );
+}
+
+/** A small chain link: the element goes somewhere when clicked in the viewer. */
+export function LinkMark({ x, y, color }: { x: number; y: number; color: string }) {
+  return (
+    <g transform={`translate(${x} ${y}) rotate(-45)`} aria-hidden>
+      <rect
+        x={-5.5}
+        y={-2}
+        width={6}
+        height={4}
+        rx={2}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.1}
+      />
+      <rect
+        x={-0.5}
+        y={-2}
+        width={6}
+        height={4}
+        rx={2}
+        fill="none"
+        stroke={color}
+        strokeWidth={1.1}
+      />
+    </g>
+  );
+}
+
+/**
+ * In an exported SVG an element with a web link is a real link (07 §18 P0-3); on the canvas and
+ * in the viewer clicks are handled by the app instead.
+ */
+export function ExportLink({
+  link,
+  mode,
+  children,
+}: {
+  link: ElementLink | null;
+  mode: RenderMode;
+  children: ReactNode;
+}) {
+  if (mode !== "export" || link?.kind !== "url") return <>{children}</>;
+  return (
+    <a href={link.url} target="_blank" rel="noopener noreferrer">
+      {children}
+    </a>
   );
 }

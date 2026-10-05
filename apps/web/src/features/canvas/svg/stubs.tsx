@@ -6,7 +6,7 @@ import type { Stub } from "@mogram/core/nested";
 import type { FlowPreset } from "@mogram/core/presets";
 import { polylinePath } from "@mogram/core/routing";
 import { withAlpha } from "@mogram/core/timeline";
-import type { SceneConnection } from "../scene";
+import { plainLook, type SceneConnection } from "../scene";
 import type { CanvasTheme } from "../theme";
 import { ConnectionNode } from "./connection-node";
 
@@ -48,10 +48,11 @@ export const StubsOverlay = memo(function StubsOverlay({
       const outer = { x: incoming ? edge - REACH : edge + REACH, y };
       const inner = { x: tile === null ? edge : incoming ? tile.x : tile.x + tile.w, y };
       const flow = flows.get(stub.connection) ?? "idle";
+      // Dots travel the way the traffic does: inward for incoming, outward for outgoing.
+      const path = polylinePath(incoming ? [outer, inner] : [inner, outer]);
       const connection: SceneConnection = {
         name: `stub:${stub.connection}`,
-        // Dots travel the way the traffic does: inward for incoming, outward for outgoing.
-        path: polylinePath(incoming ? [outer, inner] : [inner, outer]),
+        path,
         flow: { from: flow, to: flow },
         direction: "forward",
         speed: "normal",
@@ -59,7 +60,12 @@ export const StubsOverlay = memo(function StubsOverlay({
         color: null,
         label: null,
         labelAt: outer,
+        labelPlaced: false,
         hasCard: false,
+        look: plainLook(path),
+        fromElement: "",
+        toElement: "",
+        carries: false,
       };
       return { stub, connection, outer, incoming };
     });

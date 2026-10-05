@@ -9,7 +9,7 @@ containers:
     type: region
     label: East US
   vnet:
-    type: vnet
+    type: network
     label: checkout-vnet
     in: east_us
   web_subnet:

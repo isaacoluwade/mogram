@@ -9,6 +9,7 @@ import type {
   Tone,
 } from "../model/types";
 import { humanize, isValidName, toName } from "../model/names";
+import type { ShapeId } from "../presets/shapes";
 import type { ContainerStyleName, FlowPreset } from "../presets/names";
 import { formatPaint, samePaint, solid, type Paint } from "../presets/paint";
 import { NOTE_FILL } from "../presets/text";
@@ -17,6 +18,7 @@ import {
   EditError,
   flowMap,
   flowSeq,
+  insertSetting,
   pointNode,
   renameKey,
   scalarString,
@@ -48,7 +50,31 @@ export function addComponent(
     map.set("type", args.type);
     if (parent !== null) map.set("in", parent);
     if (args.label !== humanize(name)) map.set("label", args.label);
-    addEntry(ctx.session.section(ctx.homeFor(parent), "components"), name, map);
+    addEntry(ctx.session.section(ctx.homeFor(parent), "components"), name, map, true);
+    if (args.at != null) ctx.setAt(name, args.at);
+    return [name];
+  });
+}
+
+export interface AddShapeArgs {
+  readonly shape: ShapeId;
+  readonly label: string;
+  readonly parent?: string | null;
+  readonly at?: GridPoint | null;
+  readonly look?: Readonly<Record<string, string | number | boolean>>;
+}
+
+/** Adds a shape (03-shapes-styles-library P0-1), written under `shapes:`. */
+export function addShape(files: ProjectFiles, diagram: Diagram, args: AddShapeArgs): EditResult {
+  return edit(files, diagram, (ctx) => {
+    const parent = validParent(ctx, args.parent ?? null);
+    const name = ctx.claimName(toName(args.label, "shape"));
+    const map = new YAMLMap();
+    map.set("shape", args.shape);
+    if (parent !== null) map.set("in", parent);
+    if (args.label !== humanize(name)) map.set("label", args.label);
+    for (const [key, value] of Object.entries(args.look ?? {})) map.set(key, value);
+    addEntry(ctx.session.section(ctx.homeFor(parent), "shapes"), name, map, true);
     if (args.at != null) ctx.setAt(name, args.at);
     return [name];
   });
@@ -57,6 +83,8 @@ export function addComponent(
 export interface AddContainerArgs {
   readonly type: ContainerStyleName;
   readonly label: string;
+  /** A header icon other than the kind's own: a cloud's official group icon. */
+  readonly icon?: string | null;
   readonly parent?: string | null;
   readonly at?: GridPoint | null;
   readonly size?: GridSize | null;
@@ -74,6 +102,7 @@ export function addContainer(
     if (args.type !== "box") map.set("type", args.type);
     if (parent !== null) map.set("in", parent);
     if (args.label !== humanize(name)) map.set("label", args.label);
+    if (args.icon != null) map.set("icon", args.icon);
     addEntry(ctx.session.section(ctx.homeFor(parent), "containers"), name, map);
     if (args.at != null) ctx.setAt(name, args.at);
     if (args.size != null) ctx.setSize(name, args.size);
@@ -253,6 +282,38 @@ export function moveElements(
   });
 }
 
+/**
+ * Puts elements inside a container (or back on the canvas, `null`) and lets automatic placement
+ * find them a spot there: their position is cleared, a size they were given is kept. What the
+ * assistant uses, since it doesn't pick coordinates.
+ */
+export function nestElements(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly names: readonly string[]; readonly parent: string | null },
+): EditResult {
+  return edit(files, diagram, (ctx) => {
+    const parent = validParent(ctx, args.parent);
+    for (const name of args.names) {
+      const kind = ctx.requireKind(name);
+      if (kind === "group" || kind === "connection")
+        throw new EditError(`"${name}" is a ${kind}: only elements go inside containers.`);
+      if (
+        name === parent ||
+        (kind === "container" && parent !== null && isInside(diagram, parent, name))
+      )
+        throw new EditError(
+          `"${name}" can't go inside "${parent}", because "${parent}" is inside it.`,
+        );
+      const map = kind === "decoration" ? ctx.decoration(name) : ctx.definition(name);
+      setKey(map, "in", parent ?? undefined);
+      // Notes and text keep their spot (relative to the new parent): they aren't placed for you.
+      if (kind !== "decoration") ctx.setLayoutField(name, "at", undefined);
+    }
+    return [...args.names];
+  });
+}
+
 function isInside(diagram: Diagram, candidate: string, ancestor: string): boolean {
   let current: string | null = candidate;
   const seen = new Set<string>();
@@ -284,8 +345,10 @@ export function resizeElement(
       if (args.at !== undefined) map.set("at", pointNode(args.at));
       return;
     }
-    if (kind !== "container")
-      throw new EditError("Only containers, highlight zones and sticky notes can be resized.");
+    if (kind !== "container" && !ctx.isShape(args.name))
+      throw new EditError(
+        "Only shapes, containers, highlight zones and sticky notes can be resized.",
+      );
     if (args.at !== undefined) ctx.setAt(args.name, args.at);
     ctx.setSize(args.name, size);
   });
@@ -335,7 +398,30 @@ const DEFAULTS: Readonly<Record<string, string>> = {
   font_size: "auto",
 };
 
-export type PropertyValue = string | number | boolean | readonly string[] | null | undefined;
+/** A shape's defaults: what a key left out of its entry means (03 §5 P0-2). */
+const SHAPE_DEFAULTS: Readonly<Record<string, string | number>> = {
+  state: "healthy",
+  motion: "none",
+  intensity: "normal",
+  speed: "normal",
+  shape: "rectangle",
+  tone: "neutral",
+  dash: "solid",
+  stroke_width: 1.5,
+  opacity: 100,
+  align: "center",
+  font_size: "auto",
+};
+
+export type PropertyValue =
+  | string
+  | number
+  | boolean
+  | readonly string[]
+  /** A small map such as `data:` or `arrows:`, written in flow style. */
+  | Readonly<Record<string, string | number | boolean>>
+  | null
+  | undefined;
 
 /**
  * Sets properties on an element. `null`/`undefined` removes a key; default values are removed
@@ -349,9 +435,12 @@ export function updateElement(
   return edit(files, diagram, (ctx) => {
     const kind = ctx.requireKind(args.name);
     const map = ctx.definition(args.name);
+    const defaults: Readonly<Record<string, string | number>> = ctx.isShape(args.name)
+      ? SHAPE_DEFAULTS
+      : DEFAULTS;
     for (const [key, raw] of Object.entries(args.set)) {
       if (kind === "container" && key === "type") {
-        setKey(map, "type", raw === "box" || raw == null ? undefined : String(raw));
+        setKey(map, "type", typeof raw === "string" && raw !== "box" ? raw : undefined);
         continue;
       }
       if (key === "label") {
@@ -377,13 +466,23 @@ export function updateElement(
         raw === undefined ||
         raw === "" ||
         raw === false ||
-        DEFAULTS[key] === raw
+        defaults[key] === raw
       ) {
         map.delete(key);
         continue;
       }
       if (Array.isArray(raw)) {
         map.set(key, flowSeq(raw as readonly string[]));
+        continue;
+      }
+      if (typeof raw === "object") {
+        const entries = Object.entries(raw as Readonly<Record<string, string | number | boolean>>);
+        if (entries.length === 0) map.delete(key);
+        else
+          map.set(
+            key,
+            flowMap(entries.map(([k, v]) => [k, typeof v === "boolean" ? new Scalar(v) : v])),
+          );
         continue;
       }
       map.set(key, raw);
@@ -467,15 +566,7 @@ export function renameElement(
 
     // The definition itself.
     if (kind === "decoration") renameKey(ctx.decorationsMap(ctx.fileOf(from)), from, to);
-    else {
-      const sectionKey = {
-        component: "components",
-        container: "containers",
-        group: "groups",
-        connection: "connections",
-      }[kind];
-      renameKey(ctx.session.section(ctx.fileOf(from), sectionKey), from, to);
-    }
+    else renameKey(ctx.session.section(ctx.fileOf(from), ctx.sectionOf(from)), from, to);
     const layoutEntry = diagram.layout.get(from);
     if (layoutEntry !== undefined) renameKey(ctx.layoutSection(layoutEntry.source.file), from, to);
 
@@ -508,10 +599,29 @@ function rewriteReferences(
     if (next !== null) map.set(key, next);
   };
 
+  // `link: "#name"` follows a rename too.
+  const rewriteLink = (map: YAMLMap): void => {
+    const value = scalarString(map.get("link", true));
+    if (value === null || !value.startsWith("#")) return;
+    const next = replaceRef(value.slice(1));
+    if (next !== null) map.set("link", `#${next}`);
+  };
+  for (const section of ["containers", "components", "shapes", "connections", "groups"])
+    eachEntry(section, rewriteLink);
+  const layoutNode = root.get("layout", true) as Node | undefined;
+  const decorations = isMap(layoutNode)
+    ? (layoutNode.get("decorations", true) as Node | undefined)
+    : undefined;
+  if (isMap(decorations))
+    for (const pair of decorations.items) if (isMap(pair.value)) rewriteLink(pair.value);
+
   eachEntry("containers", (map) => {
     rewriteKey(map, "in");
   });
   eachEntry("components", (map) => {
+    rewriteKey(map, "in");
+  });
+  eachEntry("shapes", (map) => {
     rewriteKey(map, "in");
   });
   eachEntry("connections", (map) => {
@@ -588,6 +698,19 @@ function rewriteReferences(
       if (isScalar(port.value) && port.value.value === from) port.value.value = replaceRef(from);
     }
   }
+
+  // A concept's roles are keyed by the elements that play them.
+  const roles = conceptRoles(root);
+  const renamed = replaceRef(from);
+  if (roles !== null && renamed !== null) renameKey(roles, from, renamed);
+}
+
+/** The `roles:` map of a concept, if this file has one. */
+function conceptRoles(root: YAMLMap): YAMLMap | null {
+  const concept = root.get("concept", true) as Node | undefined;
+  if (!isMap(concept)) return null;
+  const roles = concept.get("roles", true) as Node | undefined;
+  return isMap(roles) ? roles : null;
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -692,6 +815,9 @@ function pruneReferences(ctx: EditContext, file: string, doomed: ReadonlySet<str
 
   const ports = root.get("ports", true) as Node | undefined;
   if (isMap(ports)) ports.items = ports.items.filter((port) => !gone(scalarString(port.value)));
+
+  const roles = conceptRoles(root);
+  if (roles !== null) roles.items = roles.items.filter((role) => !gone(scalarString(role.key)));
 }
 
 /**
@@ -699,9 +825,102 @@ function pruneReferences(ctx: EditContext, file: string, doomed: ReadonlySet<str
  * is a one-line `{ … }` map (common in hand-written files), the new one is too, so the file keeps
  * one consistent style and the diff stays one line.
  */
-function addEntry(section: YAMLMap, name: string, map: YAMLMap): void {
+export function addEntry(
+  section: YAMLMap,
+  name: string,
+  map: YAMLMap,
+  /** Components and shapes can be written `name: type` when that's all they say. */
+  shorthand = false,
+): void {
   const siblings = section.items.map((pair) => pair.value);
-  if (siblings.length > 0 && siblings.every((value) => isMap(value) && value.flow === true))
+  // `name: generic/service` (or `name: cylinder`) when that's all it says and its neighbours
+  // are written that way too, or it's the first one.
+  const only = map.items.length === 1 ? map.items[0] : undefined;
+  const key = only === undefined ? null : isScalar(only.key) ? only.key.value : only.key;
+  const value: unknown =
+    only === undefined ? null : isScalar(only.value) ? only.value.value : only.value;
+  if (
+    shorthand &&
+    (key === "type" || key === "shape") &&
+    typeof value === "string" &&
+    (siblings.length === 0 ||
+      siblings.some((sibling) => isScalar(sibling) || typeof sibling === "string"))
+  ) {
+    section.set(name, value);
+    return;
+  }
+  // One-line maps like their neighbours; the first entry of a section is one line when it's
+  // short and plain (`a_to_b: { from: a, to: b }`), as Mogram's own files write them.
+  const plain =
+    map.items.length <= 4 && map.items.every((pair) => !isMap(pair.value) && !isSeq(pair.value));
+  if (siblings.length > 0 ? siblings.every((value) => isMap(value) && value.flow === true) : plain)
     map.flow = true;
   section.set(name, map);
+}
+
+/**
+ * Locks or unlocks elements (draw.io's Lock/Unlock): a locked element stays selectable but can't
+ * be moved, resized or deleted by hand until it's unlocked. Stored as `locked: true` in its
+ * layout entry, beside its position.
+ */
+export function setLocked(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly names: readonly string[]; readonly locked: boolean },
+): EditResult {
+  return edit(files, diagram, (ctx) => {
+    for (const name of args.names) {
+      const kind = ctx.requireKind(name);
+      if (kind === "group") continue;
+      if (kind === "decoration") {
+        const map = ctx.decoration(name);
+        if (args.locked) map.set("locked", true);
+        else map.delete("locked");
+        continue;
+      }
+      ctx.setLayoutField(name, "locked", args.locked ? new Scalar(true) : undefined);
+    }
+    return [...args.names];
+  });
+}
+
+/** Whether `name` is locked against moving, resizing and deleting. */
+export function isLocked(diagram: Diagram, name: string): boolean {
+  return diagram.decorations.get(name)?.locked ?? diagram.layout.get(name)?.locked ?? false;
+}
+
+/**
+ * Replaces an element's custom properties (`data:`, 07 §18 P0-5), in the order given. Text that
+ * reads as a number or true/false is written as one; empty keys are skipped; no rows removes it.
+ */
+export function setData(
+  files: ProjectFiles,
+  diagram: Diagram,
+  /** `name: null` sets the diagram's own data, which every placeholder can show (07 §6.2). */
+  args: { readonly name: string | null; readonly rows: readonly (readonly [string, string])[] },
+): EditResult {
+  return edit(files, diagram, (ctx) => {
+    const map =
+      args.name === null ? ctx.session.root(diagram.settingsFile) : ctx.definition(args.name);
+    const data = new YAMLMap();
+    data.flow = true;
+    for (const [rawKey, rawValue] of args.rows) {
+      const key = rawKey.trim();
+      if (key.length === 0) continue;
+      const text = rawValue.trim();
+      const value: string | number | boolean =
+        text === "true"
+          ? true
+          : text === "false"
+            ? false
+            : text !== "" && Number.isFinite(Number(text))
+              ? Number(text)
+              : text;
+      data.set(key, value);
+    }
+    if (data.items.length === 0) map.delete("data");
+    else if (args.name === null && !map.has("data")) insertSetting(map, "data", data);
+    else map.set("data", data);
+    return args.name === null ? [] : [args.name];
+  });
 }

@@ -1,13 +1,18 @@
 "use client";
 
 import { useId, useMemo, type ReactNode, type Ref } from "react";
-import type { Box } from "@mogram/core/layout";
+import { GRID, type Box } from "@mogram/core/layout";
+import { gridLevels, gridLines, type GridStyle } from "../grid";
 import { TimeContext, type TimeSource } from "../clock";
 import type { Camera } from "../camera";
 import type { SceneModel } from "../scene";
 import { TILE_SHEEN } from "@/styles/colors";
 import type { CanvasTheme } from "../theme";
+import type { CapacityRuntime } from "../capacity";
 import { ComponentNode } from "./component-node";
+import { FleetNode } from "./fleet-node";
+import { MachineNode } from "./machine-node";
+import { ShapeNode } from "./shape-node";
 import { ConnectionNode } from "./connection-node";
 import { ContainerNode } from "./container-node";
 import { GroupNode, NoteNode, TextNode, ZoneNode } from "./decoration-nodes";
@@ -34,6 +39,7 @@ export interface DiagramSvgProps {
   readonly frame?: Box;
   readonly focus?: ReadonlySet<string> | null;
   readonly showGrid?: boolean;
+  readonly gridStyle?: GridStyle;
   readonly transparent?: boolean;
   /** Extra SVG drawn in world space above the diagram (selection, handles, previews). */
   readonly overlay?: ReactNode;
@@ -48,6 +54,8 @@ export interface DiagramSvgProps {
   readonly interactive?: boolean;
   /** The text or note being typed into on the canvas (its words are hidden underneath). */
   readonly editingText?: string | null;
+  /** Capacity over time (D-82): copies booting, machines growing, traffic easing. */
+  readonly capacity?: CapacityRuntime | null;
 }
 
 /** Nodes by name, so the paint order can interleave kinds. */
@@ -77,6 +85,7 @@ export function DiagramSvg({
   frame,
   focus = null,
   showGrid = false,
+  gridStyle = "dots",
   transparent,
   overlay,
   underlay,
@@ -86,7 +95,13 @@ export function DiagramSvg({
   title,
   interactive = false,
   editingText = null,
+  capacity: live = null,
 }: DiagramSvgProps) {
+  // Without a live timeline (thumbnails, the minimap), capacity is drawn as it settles.
+  const capacity = useMemo<CapacityRuntime | null>(
+    () => live ?? (scene.settled === null ? null : { timeline: scene.settled, version: 0 }),
+    [live, scene.settled],
+  );
   // useId gives characters like «» that url(#…) would need escaped: keep letters and digits.
   const prefix = `mogram${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const ids = useMemo(() => svgIds(prefix), [prefix]);
@@ -100,8 +115,19 @@ export function DiagramSvg({
       ids,
       interactive,
       editingText,
+      capacity,
     }),
-    [scene.theme, fontFamily, scene.transitionStart, mode, focus, ids, interactive, editingText],
+    [
+      scene.theme,
+      fontFamily,
+      scene.transitionStart,
+      mode,
+      focus,
+      ids,
+      interactive,
+      editingText,
+      capacity,
+    ],
   );
   const nodes = useNodes(scene);
   const isStatic = frame !== undefined;
@@ -131,7 +157,13 @@ export function DiagramSvg({
         <RenderContext value={settings}>
           <g transform={transform}>
             {showGrid && camera !== undefined && size !== undefined ? (
-              <Grid camera={camera} size={size} color={scene.theme.grid} id={ids.grid} />
+              <Grid
+                camera={camera}
+                size={size}
+                color={scene.theme.grid}
+                id={ids.grid}
+                style={gridStyle}
+              />
             ) : null}
             {underlay}
             <g data-layer="diagram">
@@ -160,7 +192,25 @@ export function DiagramSvg({
                   }
                   case "component": {
                     const component = nodes.component.get(name);
-                    return component === undefined ? null : (
+                    if (component === undefined) return null;
+                    // Scaling is drawn only while the diagram models capacity (D-82).
+                    if (component.scaling !== null && capacity !== null)
+                      return component.scaling.kind === "out" ? (
+                        <FleetNode
+                          key={key}
+                          component={component}
+                          spokes={scene.spokes.get(name) ?? null}
+                        />
+                      ) : (
+                        <MachineNode
+                          key={key}
+                          component={component}
+                          spokes={scene.spokes.get(name) ?? null}
+                        />
+                      );
+                    return component.shape !== null ? (
+                      <ShapeNode key={key} component={component} />
+                    ) : (
                       <ComponentNode key={key} component={component} />
                     );
                   }
@@ -222,36 +272,109 @@ function Background({ theme, box, ids }: { theme: CanvasTheme; box: Box; ids: Sv
   );
 }
 
-/** The 8px grid (ED-9), drawn only when turned on, thinned out as you zoom out. */
+/**
+ * The 8px grid (ED-9), drawn only when turned on: every mark a snap point; single cells while
+ * things can be placed cell by cell, and a stronger mark every 10 cells (canvas/grid.ts).
+ * Zoomed out only the 10-cell marks remain, drawn like single cells, and the grid eases
+ * lighter. Lines are fainter than dots, since they cover far more of the canvas.
+ */
 function Grid({
   camera,
   size,
   color,
   id,
+  style,
 }: {
   camera: Camera;
   size: { width: number; height: number };
   color: string;
   id: string;
+  style: GridStyle;
 }) {
-  const step = camera.zoom >= 1 ? 16 : camera.zoom >= 0.5 ? 32 : 64;
+  const levels = gridLevels(camera.zoom);
+  const fine = levels.fine > 0;
+  // The 10-cell marks stand out only while single cells show; alone, they look like them.
+  const emphasis = levels.fine;
+  const px = 1 / camera.zoom;
   const x0 = -camera.x / camera.zoom;
   const y0 = -camera.y / camera.zoom;
-  const w = size.width / camera.zoom;
-  const h = size.height / camera.zoom;
+  const x1 = x0 + size.width / camera.zoom;
+  const y1 = y0 + size.height / camera.zoom;
+  if (style === "lines") {
+    const vertical = gridLines(x0, x1, { fine, coarse: levels.coarse }, (x) => `M${x} ${y0}V${y1}`);
+    const horizontal = gridLines(
+      y0,
+      y1,
+      { fine, coarse: levels.coarse },
+      (y) => `M${x0} ${y}H${x1}`,
+    );
+    // Single-cell lines are faint; the 10-cell ones full while both show, and still clearly
+    // there alone (zoomed out), where fainter lines all but vanish on a dark canvas.
+    const faint = 0.45;
+    const alone = 0.7;
+    return (
+      <g
+        aria-hidden
+        pointerEvents="none"
+        data-grid="lines"
+        stroke={color}
+        strokeWidth={px}
+        fill="none"
+        opacity={levels.strength}
+      >
+        {fine ? (
+          <path
+            data-level="fine"
+            d={vertical.fine + horizontal.fine}
+            opacity={faint * levels.fine}
+            shapeRendering="crispEdges"
+          />
+        ) : null}
+        <path
+          data-level="coarse"
+          d={vertical.coarse + horizontal.coarse}
+          opacity={alone + (1 - alone) * emphasis}
+          shapeRendering="crispEdges"
+        />
+      </g>
+    );
+  }
+  const finePx = GRID;
+  const coarsePx = levels.coarse * GRID;
+  // Each pattern tile is centred on its dot, so dots land exactly on multiples of the step.
+  const dots = (step: number, radius: number, pattern: string) => (
+    <pattern
+      id={pattern}
+      x={-step / 2}
+      y={-step / 2}
+      width={step}
+      height={step}
+      patternUnits="userSpaceOnUse"
+    >
+      <circle cx={step / 2} cy={step / 2} r={radius} fill={color} />
+    </pattern>
+  );
+  const area = {
+    x: Math.floor(x0 / coarsePx) * coarsePx - coarsePx,
+    y: Math.floor(y0 / coarsePx) * coarsePx - coarsePx,
+    width: x1 - x0 + coarsePx * 3,
+    height: y1 - y0 + coarsePx * 3,
+  };
+  const dim = 0.8;
   return (
-    <g aria-hidden>
+    <g aria-hidden pointerEvents="none" data-grid="dots" opacity={levels.strength}>
       <defs>
-        <pattern id={id} width={step} height={step} patternUnits="userSpaceOnUse">
-          <circle cx={0} cy={0} r={1 / Math.max(0.5, camera.zoom)} fill={color} />
-        </pattern>
+        {fine ? dots(finePx, px, `${id}-fine`) : null}
+        {dots(coarsePx, px * (1 + 0.6 * emphasis), `${id}-coarse`)}
       </defs>
+      {fine ? (
+        <rect {...area} data-level="fine" fill={`url(#${id}-fine)`} opacity={dim * levels.fine} />
+      ) : null}
       <rect
-        x={Math.floor(x0 / step) * step - step}
-        y={Math.floor(y0 / step) * step - step}
-        width={w + step * 3}
-        height={h + step * 3}
-        fill={`url(#${id})`}
+        {...area}
+        data-level="coarse"
+        fill={`url(#${id}-coarse)`}
+        opacity={dim + (1 - dim) * emphasis}
       />
     </g>
   );

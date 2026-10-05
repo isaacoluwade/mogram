@@ -4,30 +4,55 @@ import {
   addContainer,
   addDecoration,
   addGroup,
+  addShape,
+  applyStyle,
+  autoSize,
   copySnippet,
   deleteElements,
+  followTerminals,
+  isLocked,
   isMogramSnippet,
   moveElements,
   pasteSnippet,
   planZOrder,
+  readStyle,
   reorderZ,
+  resizeElement,
+  setConcept,
+  setFlowValue,
+  setLocked,
+  setSceneCapacity,
   setSceneEntry,
+  splitConnection,
   updateElement,
+  type CopiedStyle,
+  type EditResult,
   type Move,
   type ZOrderMove,
 } from "@mogram/core/edit";
 import {
   CONTAINER_UNITS,
   GRID,
+  ancestorsOf,
   computeLayout,
   descendantsOf,
+  toPx,
   toUnits,
   type Box,
   type LayoutResult,
   type Point,
 } from "@mogram/core/layout";
-import type { Diagram, SceneEntry, Tone } from "@mogram/core/model";
-import { NOTE_SIZE } from "@mogram/core/presets";
+import type { Diagram, ProjectFiles, SceneEntry, Tone } from "@mogram/core/model";
+import { applyConcept, insertConcept, type ConceptBindings } from "@mogram/core/concepts";
+import { routeConnections } from "@mogram/core/routing";
+import {
+  NOTE_SIZE,
+  SHAPE_INFO,
+  containerIcon,
+  isCloud,
+  isContainerStyle,
+  isShapeId,
+} from "@mogram/core/presets";
 import type {
   ContainerStyleName,
   FlowPreset,
@@ -41,6 +66,7 @@ import {
   PHONE_WIDTH,
   zoomAt,
   type Camera,
+  nextZoomStep,
 } from "@/features/canvas/camera";
 import { STUB_ROOM } from "@/features/canvas/svg/stubs";
 import { clearOf, PANEL } from "./panel-sizes";
@@ -52,6 +78,17 @@ import { parseCached, sceneTarget, storyDiagram, type EditorStore } from "./stor
  */
 
 /** Chrome that floats over the canvas, kept clear when fitting the view. */
+/**
+ * An edit that moves or resizes elements, with connection bends carried along in the same undo
+ * step (ED-29, draw.io's `followTerminals`).
+ */
+export function following(
+  store: EditorStore,
+  run: (files: ProjectFiles, diagram: Diagram) => EditResult,
+): (files: ProjectFiles, diagram: Diagram) => EditResult {
+  return (files, diagram) => followTerminals(diagram, run(files, diagram), store.getState().folder);
+}
+
 /** Room the desktop chrome takes around the canvas: top bars, open side panels, bottom dock. */
 export const CANVAS_INSETS = {
   top: 76,
@@ -60,7 +97,14 @@ export const CANVAS_INSETS = {
   left: clearOf(PANEL.library),
 } as const;
 
-const clipboard = { text: "" };
+/**
+ * What was copied last in this tab, and where it came from, so "Paste in place" can put it back
+ * exactly there (only while the system clipboard still holds the same snippet).
+ */
+const clipboard: { text: string; place: { parent: string | null; at: Point } | null } = {
+  text: "",
+  place: null,
+};
 
 export function layoutOf(store: EditorStore): LayoutResult {
   return computeLayout(store.getState().diagram());
@@ -125,7 +169,15 @@ export function topLevelSelection(layout: LayoutResult, selection: readonly stri
 
 export function deleteSelection(store: EditorStore): void {
   const state = store.getState();
-  const { selection } = state;
+  const diagram = state.diagram();
+  const held = state.selection.filter((name) => isLocked(diagram, name));
+  const selection = state.selection.filter((name) => !isLocked(diagram, name));
+  if (held.length > 0)
+    state.notify(
+      held.length === 1
+        ? `"${held[0] ?? ""}" is locked. Unlock it (⇧⌘L) to delete it.`
+        : `${held.length} locked elements were kept. Unlock them (⇧⌘L) to delete them.`,
+    );
   if (selection.length === 0) return;
   // Deleting a container takes everything inside it too: say so, since undo is the way back.
   const layout = layoutOf(store);
@@ -150,7 +202,21 @@ export async function copySelection(store: EditorStore): Promise<boolean> {
   const positions = new Map([...layout.elements].map(([name, element]) => [name, element.rel]));
   const text = copySnippet(state.diagram(), state.selection, positions);
   if (text.length === 0) return false;
+  const top = topLevelSelection(layout, state.selection)
+    .map((name) => layout.elements.get(name))
+    .filter((element) => element !== undefined);
+  const first = top[0];
   clipboard.text = text;
+  clipboard.place =
+    first === undefined
+      ? null
+      : {
+          parent: first.parent,
+          at: {
+            x: Math.min(...top.map((element) => element.rel.x)),
+            y: Math.min(...top.map((element) => element.rel.y)),
+          },
+        };
   try {
     await navigator.clipboard.writeText(text);
   } catch {
@@ -159,11 +225,75 @@ export async function copySelection(store: EditorStore): Promise<boolean> {
   return true;
 }
 
+/** The style copied last (⌥⌘C), kept in this tab only. */
+let copiedStyle: CopiedStyle | null = null;
+
+export function hasCopiedStyle(): boolean {
+  return copiedStyle !== null;
+}
+
+/** Copies the selected element's look: colours, line, arrowheads, motion, typography. */
+export function copyStyle(store: EditorStore): boolean {
+  const state = store.getState();
+  const name = state.selection[0];
+  if (name === undefined) return false;
+  copiedStyle = readStyle(state.files, state.diagram(), name);
+  if (copiedStyle !== null) state.notify("Style copied. Select elements and paste it.");
+  return copiedStyle !== null;
+}
+
+/** Gives the selection the copied look (only what each kind of element can take). */
+export function pasteStyle(store: EditorStore): void {
+  const style = copiedStyle;
+  const state = store.getState();
+  if (style === null || state.selection.length === 0) return;
+  const names = [...state.selection];
+  state.edit("Paste style", (files, diagram) => applyStyle(files, diagram, { names, style }));
+}
+
+/** Copies the whole diagram, as it shows now, to the clipboard as a PNG or as SVG markup. */
+export async function copyImage(store: EditorStore, format: "png" | "svg"): Promise<void> {
+  const state = store.getState();
+  const request = {
+    files: state.files,
+    folder: state.folder,
+    scene: state.scene,
+    options: {
+      format,
+      scale: 2,
+      transparent: false,
+      area: "fit",
+      animation: "loop",
+      fps: 10,
+      fileName: state.parsed().diagram.settings.name,
+    },
+  } as const;
+  // The clipboard write starts inside the key press or click (Safari needs that); the image
+  // arrives when it's rendered.
+  const rendered = import("@/features/export/export").then(({ runExport }) =>
+    runExport(request, () => undefined).then((result) => result.blob),
+  );
+  try {
+    if (format === "png") {
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": rendered })]);
+    } else {
+      await navigator.clipboard.writeText(await (await rendered).text());
+    }
+    state.notify(format === "png" ? "Copied the diagram as a PNG." : "Copied the diagram as SVG.");
+  } catch {
+    state.notify("Couldn't copy the image here. Export it instead.", "error");
+  }
+}
+
 export async function cutSelection(store: EditorStore): Promise<void> {
   if (await copySelection(store)) deleteSelection(store);
 }
 
-export async function paste(store: EditorStore, at: Point | null): Promise<void> {
+export async function paste(
+  store: EditorStore,
+  at: Point | null,
+  options: { readonly inPlace?: boolean } = {},
+): Promise<void> {
   let text = clipboard.text;
   try {
     const system = await navigator.clipboard.readText();
@@ -172,6 +302,17 @@ export async function paste(store: EditorStore, at: Point | null): Promise<void>
     // Fall back to the in-app clipboard.
   }
   if (text.length === 0) return;
+  const place = options.inPlace === true && text === clipboard.text ? clipboard.place : null;
+  if (place !== null) {
+    store.getState().edit("Paste in place", (files, diagram) =>
+      pasteSnippet(files, diagram, {
+        text,
+        parent: place.parent !== null && diagram.containers.has(place.parent) ? place.parent : null,
+        at: place.at,
+      }),
+    );
+    return;
+  }
   const layout = layoutOf(store);
   const point = at ?? viewportCenter(store);
   const parent = containerAt(layout, point);
@@ -196,11 +337,45 @@ export function duplicateSelection(store: EditorStore): void {
   );
 }
 
+/**
+ * Copies `names` (with what's inside them and the connections between them) to where `moves`
+ * would have put them, leaving the originals: Ctrl/Cmd while dropping a drag.
+ */
+export function cloneTo(
+  store: EditorStore,
+  names: readonly string[],
+  moves: readonly Move[],
+): void {
+  const state = store.getState();
+  const layout = layoutOf(store);
+  const top = topLevelSelection(layout, names);
+  const first = moves.find((move) => move.name === top[0]);
+  const origin = top[0] === undefined ? undefined : layout.elements.get(top[0]);
+  if (first === undefined || origin === undefined) return;
+  const positions = new Map([...layout.elements].map(([name, element]) => [name, element.rel]));
+  const text = copySnippet(state.diagram(), top, positions);
+  if (text.length === 0) return;
+  // The snippet keeps the elements' places relative to its top-left one.
+  const corner = {
+    x: Math.min(...top.map((name) => layout.elements.get(name)?.rel.x ?? 0)),
+    y: Math.min(...top.map((name) => layout.elements.get(name)?.rel.y ?? 0)),
+  };
+  const at = {
+    x: first.at.x - (origin.rel.x - corner.x),
+    y: first.at.y - (origin.rel.y - corner.y),
+  };
+  state.edit("Copy", (files, diagram) =>
+    pasteSnippet(files, diagram, { text, parent: first.parent, at }),
+  );
+}
+
 export function nudge(store: EditorStore, dx: number, dy: number): void {
   const state = store.getState();
   const layout = layoutOf(store);
   const moves: Move[] = [];
+  const diagram = state.diagram();
   for (const name of topLevelSelection(layout, state.selection)) {
+    if (isLocked(diagram, name)) continue;
     const element = layout.elements.get(name);
     if (element === undefined) continue;
     moves.push({
@@ -210,9 +385,119 @@ export function nudge(store: EditorStore, dx: number, dy: number): void {
     });
   }
   if (moves.length > 0)
-    state.edit("Nudge", (files, diagram) => moveElements(files, diagram, moves), {
-      coalesce: true,
-    });
+    state.edit(
+      "Nudge",
+      following(store, (files, diagram) => moveElements(files, diagram, moves)),
+      {
+        coalesce: true,
+      },
+    );
+}
+
+/** Whether `name` can be given a size by hand: shapes, containers, highlight zones and notes. */
+export function isResizable(diagram: Diagram, name: string): boolean {
+  const variant = diagram.decorations.get(name)?.variant;
+  return (
+    diagram.containers.has(name) ||
+    diagram.components.get(name)?.shape != null ||
+    variant === "zone" ||
+    variant === "note"
+  );
+}
+
+/** The smallest a resizable element can be, in grid units: a container still holds its contents. */
+export function minimumSize(diagram: Diagram, name: string): { w: number; h: number } {
+  if (diagram.components.get(name)?.shape != null) return { w: 2, h: 2 };
+  const variant = diagram.decorations.get(name)?.variant;
+  if (variant === "note") return { w: 8, h: 6 };
+  if (variant === "zone") return { w: 4, h: 3 };
+  const fitted = computeLayout(diagram, { sizes: new Map([[name, { w: 0, h: 0 }]]) }).elements.get(
+    name,
+  )?.size;
+  return { w: fitted?.w ?? CONTAINER_UNITS.minW, h: fitted?.h ?? CONTAINER_UNITS.minH };
+}
+
+/**
+ * Resizes the selected containers, zones and notes (locked ones stay as they are): `change`
+ * gives each one's new size from its current one, and nothing shrinks below what it holds.
+ */
+function resizeSelection(
+  store: EditorStore,
+  change: (size: { w: number; h: number }) => { w: number; h: number },
+  options: { readonly label: string; readonly coalesce: boolean },
+): void {
+  const state = store.getState();
+  const layout = layoutOf(store);
+  const names = state.selection.filter(
+    (name) => isResizable(state.diagram(), name) && !isLocked(state.diagram(), name),
+  );
+  if (names.length === 0) return;
+  state.edit(
+    options.label,
+    following(store, (files, diagram) => {
+      let result: EditResult = { files };
+      let current = diagram;
+      for (const name of names) {
+        const element = layout.elements.get(name);
+        if (element === undefined) continue;
+        const min = minimumSize(current, name);
+        const wanted = change(element.size);
+        const size = { w: Math.max(min.w, wanted.w), h: Math.max(min.h, wanted.h) };
+        if (size.w === element.size.w && size.h === element.size.h) continue;
+        result = resizeElement(result.files, current, { name, size });
+        current = reparse(store, result.files);
+      }
+      return { ...result, select: names };
+    }),
+    { coalesce: options.coalesce },
+  );
+}
+
+/** Grows or shrinks the selected containers, zones and notes (⌘ + arrows; ⇧ for 4 units). */
+export function resizeBy(store: EditorStore, dw: number, dh: number): void {
+  resizeSelection(store, (size) => ({ w: size.w + dw, h: size.h + dh }), {
+    label: "Resize",
+    coalesce: true,
+  });
+}
+
+/**
+ * Gives the selected containers, zones and notes one width or height (the inspector); `step`
+ * marks an arrow-key step, which folds into the steps before it.
+ */
+export function resizeTo(store: EditorStore, axis: "w" | "h", value: number, step = false): void {
+  resizeSelection(store, (size) => ({ ...size, [axis]: value }), {
+    label: step ? "Step size" : "Set size",
+    coalesce: step,
+  });
+}
+
+/** Locks the selection, or unlocks it when everything selected is locked already (⇧⌘L). */
+export function toggleLock(store: EditorStore): void {
+  const state = store.getState();
+  const diagram = state.diagram();
+  const names = state.selection.filter((name) => !diagram.groups.has(name));
+  if (names.length === 0) return;
+  const locked = !names.every((name) => isLocked(diagram, name));
+  state.edit(locked ? "Lock" : "Unlock", (files, d) => setLocked(files, d, { names, locked }));
+}
+
+/** Shrinks or grows containers to fit what they hold (draw.io's Autosize). */
+export function fitToContents(store: EditorStore, names: readonly string[]): void {
+  const containers = names.filter((name) => store.getState().diagram().containers.has(name));
+  if (containers.length === 0) return;
+  store.getState().edit(
+    "Fit to contents",
+    following(store, (files, diagram) => {
+      let result: EditResult = { files };
+      let current = diagram;
+      for (const name of containers) {
+        result = autoSize(result.files, current, name);
+        current = reparse(store, result.files);
+      }
+      return result;
+    }),
+  );
 }
 
 export type AlignMode = "left" | "center" | "right" | "top" | "middle" | "bottom";
@@ -245,7 +530,14 @@ export function align(store: EditorStore, mode: AlignMode): void {
       at: relativeTo(layout, element.parent, { x, y }),
     };
   });
-  state.edit(`Align ${mode}`, (files, diagram) => moveElements(files, diagram, moves));
+  // Locked elements still mark the edge to align to; they just don't move.
+  const diagram = state.diagram();
+  const unlocked = moves.filter((move) => !isLocked(diagram, move.name));
+  if (unlocked.length === 0) return;
+  state.edit(
+    `Align ${mode}`,
+    following(store, (files, d) => moveElements(files, d, unlocked)),
+  );
 }
 
 /** Even spacing along an axis (ED-6). */
@@ -280,7 +572,13 @@ export function distribute(store: EditorStore, axis: "horizontal" | "vertical"):
       at: relativeTo(layout, element.parent, point),
     };
   });
-  state.edit(`Distribute ${axis}`, (files, diagram) => moveElements(files, diagram, moves));
+  const diagram = state.diagram();
+  const unlocked = moves.filter((move) => !isLocked(diagram, move.name));
+  if (unlocked.length === 0) return;
+  state.edit(
+    `Distribute ${axis}`,
+    following(store, (files, d) => moveElements(files, d, unlocked)),
+  );
 }
 
 /** Whether a z-order move would change anything for the selection (menus disable it if not). */
@@ -331,19 +629,100 @@ export function addComponentAt(
   type: string,
   label: string,
   at: Point | null,
+  /** A connection to put the new component into (dropped on its line, ED-29). */
+  split: string | null = null,
+  /**
+   * `nest: false` keeps it out of any container under the point (Alt while dropping);
+   * `connectFrom` connects that element to the new one in the same step (quick add).
+   */
+  options: { readonly nest?: boolean; readonly connectFrom?: string | null } = {},
 ): void {
   const state = store.getState();
   const layout = layoutOf(store);
   const point = at ?? viewportCenter(store);
   const selected = state.selection.length === 1 ? state.selection[0] : undefined;
   const parent =
-    at === null && selected !== undefined && layout.elements.get(selected)?.kind === "container"
-      ? selected
-      : containerAt(layout, point);
-  const rel = relativeTo(layout, parent, { x: point.x - 48, y: point.y - 48 });
-  state.edit(`Add ${label}`, (files, diagram) =>
-    addComponent(files, diagram, { type, label, parent, at: rel }),
+    options.nest === false
+      ? null
+      : at === null && selected !== undefined && layout.elements.get(selected)?.kind === "container"
+        ? selected
+        : containerAt(layout, point);
+  // `shape/cylinder` from the library's Shapes section is a shape, centred where it lands.
+  const shape = type.startsWith("shape/") ? type.slice("shape/".length) : null;
+  const size = isShapeId(shape)
+    ? { x: toPx(SHAPE_INFO[shape].size.w) / 2, y: toPx(SHAPE_INFO[shape].size.h) / 2 }
+    : { x: 48, y: 48 };
+  const rel = relativeTo(layout, parent, { x: point.x - size.x, y: point.y - size.y });
+  const added = state.edit(
+    split === null ? `Add ${label}` : `Insert ${label}`,
+    (files, diagram) => {
+      const result = isShapeId(shape)
+        ? addShape(files, diagram, { shape, label, parent, at: rel })
+        : addComponent(files, diagram, { type, label, parent, at: rel });
+      const element = result.select?.[0];
+      if (element === undefined) return result;
+      const from = options.connectFrom ?? null;
+      if (from !== null) {
+        const linked = addConnection(result.files, reparse(store, result.files), {
+          from,
+          to: element,
+          flow: "traffic",
+        });
+        return { ...linked, select: [element] };
+      }
+      if (split === null) return result;
+      return splitConnection(result.files, reparse(store, result.files), { name: split, element });
+    },
   );
+  // A shape added with a click starts with its label open for typing (03 §5 P0-4).
+  const name = store.getState().selection[0];
+  if (added && isShapeId(shape) && at === null && name !== undefined)
+    store.getState().setEditingLabel(name);
+}
+
+/**
+ * Adds what the library offers by its type: `shape/…`, `container/…`, `annotation/…` (text,
+ * label, zone, note) or an icon, centred on `at` (or the middle of the view).
+ */
+export function insertFromLibrary(
+  store: EditorStore,
+  type: string,
+  label: string,
+  at: Point | null,
+  options: {
+    readonly split?: string | null;
+    readonly nest?: boolean;
+    readonly connectFrom?: string | null;
+  } = {},
+): void {
+  const point = at ?? viewportCenter(store);
+  const [kind, value = ""] = type.split("/", 2);
+  // `container/network@aws`: the kind, and the cloud whose official group icon it takes.
+  const [containerKind = "", cloud = null] = value.split("@", 2);
+  if (kind === "container" && isContainerStyle(containerKind)) {
+    const w = toPx(CONTAINER_UNITS.minW + 8);
+    const h = toPx(CONTAINER_UNITS.minH + 4);
+    const icon = isCloud(cloud) ? containerIcon(containerKind, cloud) : null;
+    addContainerBox(
+      store,
+      containerKind,
+      label,
+      { x: point.x - w / 2, y: point.y - h / 2, w, h },
+      icon,
+    );
+    return;
+  }
+  if (kind === "annotation") {
+    if (value === "text" || value === "label") addTextAt(store, value, point);
+    else if (value === "note") addNoteAt(store, point);
+    else if (value === "zone")
+      addZoneBox(store, { x: point.x - 120, y: point.y - 64, w: 240, h: 128 });
+    return;
+  }
+  addComponentAt(store, type, label, at, options.split ?? null, {
+    ...(options.nest === undefined ? {} : { nest: options.nest }),
+    connectFrom: options.connectFrom ?? null,
+  });
 }
 
 export function addContainerBox(
@@ -351,6 +730,7 @@ export function addContainerBox(
   type: ContainerStyleName,
   label: string,
   box: Box,
+  icon: string | null = null,
 ): void {
   const state = store.getState();
   const layout = layoutOf(store);
@@ -361,7 +741,7 @@ export function addContainerBox(
     h: Math.max(CONTAINER_UNITS.minH, toUnits(box.h)),
   };
   state.edit(`Add ${label}`, (files, diagram) =>
-    addContainer(files, diagram, { type, label, parent, at: rel, size }),
+    addContainer(files, diagram, { type, label, parent, at: rel, size, icon }),
   );
 }
 
@@ -423,6 +803,84 @@ export function addNoteAt(store: EditorStore, at: Point): void {
   );
   const created = store.getState().selection[0];
   if (ok && created !== undefined) store.getState().setEditingLabel(created);
+}
+
+export type Direction = "up" | "right" | "down" | "left";
+
+/** The gap a connected copy is placed at, in px (draw.io's default, 10 grid cells). */
+export const CLONE_GAP = 80;
+
+/**
+ * Where something added `direction` of `name` goes: the same size, `CLONE_GAP` away, centred on
+ * the same line (06-canvas-interactions §9).
+ */
+export function spotBeside(layout: LayoutResult, name: string, direction: Direction): Box | null {
+  const box = layout.elements.get(name)?.box;
+  if (box === undefined) return null;
+  const dx =
+    direction === "right" ? box.w + CLONE_GAP : direction === "left" ? -(box.w + CLONE_GAP) : 0;
+  const dy =
+    direction === "down" ? box.h + CLONE_GAP : direction === "up" ? -(box.h + CLONE_GAP) : 0;
+  return { x: box.x + dx, y: box.y + dy, w: box.w, h: box.h };
+}
+
+/** An element already sitting where `spot` would go (not a container holding `name`), or null. */
+function occupant(layout: LayoutResult, name: string, spot: Box): string | null {
+  const holders = new Set(ancestorsOf(layout, name));
+  for (const element of layout.elements.values()) {
+    if (element.name === name || holders.has(element.name) || element.kind === "decoration")
+      continue;
+    const b = element.box;
+    const overlaps =
+      b.x < spot.x + spot.w && b.x + b.w > spot.x && b.y < spot.y + spot.h && b.y + b.h > spot.y;
+    if (overlaps && element.kind !== "container") return element.name;
+  }
+  return null;
+}
+
+/**
+ * Clone and connect (06-canvas-interactions §9, draw.io's hover arrows): a copy of `name` goes
+ * `direction` of it, connected from it, and is selected with its label open; if something is
+ * already there, `name` is connected to that instead. One undo step.
+ */
+export function cloneAndConnect(store: EditorStore, name: string, direction: Direction): void {
+  const state = store.getState();
+  const layout = layoutOf(store);
+  const spot = spotBeside(layout, name, direction);
+  const element = layout.elements.get(name);
+  if (spot === null || element === undefined) return;
+  const existing = occupant(layout, name, spot);
+  if (existing !== null) {
+    connect(store, name, existing);
+    return;
+  }
+  const positions = new Map([...layout.elements].map(([n, e]) => [n, e.rel]));
+  const text = copySnippet(state.diagram(), [name], positions);
+  if (text.length === 0) return;
+  const at = relativeTo(layout, element.parent, spot);
+  const ok = state.edit("Add connected copy", (files, diagram) => {
+    const pasted = pasteSnippet(files, diagram, { text, parent: element.parent, at });
+    const copy = pasted.select?.[0];
+    if (copy === undefined) return pasted;
+    const linked = addConnection(pasted.files, reparse(store, pasted.files), {
+      from: name,
+      to: copy,
+      flow: "traffic",
+    });
+    return { ...linked, select: [copy] };
+  });
+  const copy = store.getState().selection[0];
+  if (ok && copy !== undefined && copy !== name) store.getState().setEditingLabel(copy);
+}
+
+/** Opens the quick-add picker for a spot: beside an element, or where the canvas was clicked. */
+export function openQuickAdd(
+  store: EditorStore,
+  at: Point,
+  from: { readonly name: string; readonly direction: Direction } | null = null,
+): void {
+  store.getState().setQuickAdd({ at, from });
+  store.getState().setDialog("palette");
 }
 
 export function connect(store: EditorStore, from: string, to: string): void {
@@ -534,6 +992,134 @@ export function setMotion(
   });
 }
 
+/**
+ * Traffic on a connection, its share of a split, or a cache's hit rate (D-82). In a scene the
+ * value is that scene's; in Normal it's the element's own. `null` takes it away.
+ */
+export function setCapacityValue(
+  store: EditorStore,
+  name: string,
+  key: "traffic" | "share" | "hit",
+  value: number | null,
+): void {
+  const s = store.getState();
+  const scene = s.scene;
+  const label = { traffic: "Set traffic", share: "Set share", hit: "Set hit rate" }[key];
+  s.edit(scene === null ? label : `${label} in scene`, (files, diagram) => {
+    if (scene === null) {
+      return { files: setFlowValue(files, diagram, { name, key, value }).files, select: [name] };
+    }
+    const { story, target } = sceneSlot(store, files, diagram);
+    const result = setSceneCapacity(files, story, {
+      scene,
+      target: target(name),
+      capacity: { [key]: value },
+    });
+    return { files: result.files, select: [name] };
+  });
+}
+
+/**
+ * Holds an element at a number of copies or a size in the current scene, whatever its traffic
+ * (a failover drill, a cost cut); `null` lets it scale on its own again.
+ */
+export function pinCapacity(
+  store: EditorStore,
+  name: string,
+  pin: { readonly copies: number | null } | { readonly size: string | null },
+): void {
+  const s = store.getState();
+  const scene = s.scene;
+  if (scene === null) return;
+  s.edit("copies" in pin ? "Set copies in scene" : "Set size in scene", (files, diagram) => {
+    const { story, target } = sceneSlot(store, files, diagram);
+    const result = setSceneCapacity(files, story, {
+      scene,
+      target: target(name),
+      capacity: pin,
+    });
+    return { files: result.files, select: [name] };
+  });
+}
+
+/**
+ * Applies a concept to elements of this diagram (D-83): one undo step. Returns what changed, in
+ * plain words, or null if it couldn't (the reason has been shown).
+ */
+export function applyConceptTo(
+  store: EditorStore,
+  concept: Diagram,
+  bindings: ConceptBindings,
+): readonly string[] | null {
+  let report: readonly string[] = [];
+  const ok = store.getState().edit(`Apply ${concept.settings.name}`, (files, diagram) => {
+    const result = applyConcept(files, diagram, { concept, bindings });
+    report = [...result.report, ...result.notes];
+    return result;
+  });
+  return ok ? report : null;
+}
+
+/**
+ * Makes the diagram a concept whose parts are `names` (D-83), keeping any parts it had, and
+ * shows the Concept section, where it's described and its parts named.
+ */
+export function makeConceptFrom(store: EditorStore, names: readonly string[]): void {
+  const s = store.getState();
+  const diagram = s.diagram();
+  const playable = names.filter((n) => diagram.components.has(n) || diagram.containers.has(n));
+  if (playable.length === 0) {
+    s.notify("Select the components or containers that play a part in it first.");
+    return;
+  }
+  const existing = diagram.settings.concept;
+  const roles = [...(existing?.roles ?? [])];
+  for (const name of playable)
+    if (!roles.some((role) => role.element === name))
+      roles.push({
+        element: name,
+        label: diagram.components.get(name)?.label ?? diagram.containers.get(name)?.label ?? name,
+        optional: false,
+      });
+  const ok = s.edit(existing === null ? "Make a concept" : "Add concept parts", (files, d) =>
+    setConcept(files, d, {
+      concept: {
+        summary: existing?.summary ?? d.settings.description,
+        topic: existing?.topic ?? null,
+        platform: existing?.platform ?? "any",
+        tags: existing?.tags ?? [],
+        roles,
+      },
+    }),
+  );
+  if (!ok) return;
+  s.select([]);
+  s.togglePanel("inspector", true);
+  s.notify("It’s a concept now. Describe it and name its parts under Concept in the inspector.");
+}
+
+/** Puts a concept's whole example beside the diagram (D-83), then frames everything. */
+export function insertConceptExample(
+  store: EditorStore,
+  concept: Diagram,
+): readonly string[] | null {
+  const layout = layoutOf(store);
+  const point =
+    layout.bounds.w === 0
+      ? viewportCenter(store)
+      : { x: layout.bounds.x + layout.bounds.w + 96, y: layout.bounds.y };
+  const at = relativeTo(layout, null, point);
+  let report: readonly string[] = [];
+  const ok = store.getState().edit(`Insert ${concept.settings.name}`, (files, diagram) => {
+    const result = insertConcept(files, diagram, { concept, at });
+    report = result.report;
+    return result;
+  });
+  if (!ok) return null;
+  zoomToFit(store);
+  return report;
+}
+
 /** A scene's line for an element (`target` may be a nested path), or undefined. */
 export function sceneEntry(story: Diagram, scene: string, target: string): SceneEntry | undefined {
   return story.scenes.find((s) => s.name === scene)?.entries.find((e) => e.target === target);
@@ -586,29 +1172,84 @@ export function zoomToFit(store: EditorStore): void {
   state.setCamera(fitCamera(store, fitArea(layoutOf(store), state.levelPath.length > 0)));
 }
 
-export function zoomToSelection(store: EditorStore): void {
+/** The selection's world bounds, connections (by their lines) included; null if nothing is drawn. */
+export function selectionBox(store: EditorStore): Box | null {
   const state = store.getState();
+  const diagram = state.diagram();
   const layout = layoutOf(store);
-  const boxes = state.selection
-    .map((name) => layout.elements.get(name)?.box)
-    .filter((b) => b !== undefined);
-  if (boxes.length === 0) return zoomToFit(store);
+  const routes = state.selection.some((name) => diagram.connections.has(name))
+    ? routeConnections(diagram, layout)
+    : null;
+  const boxes = state.selection.flatMap((name): Box[] => {
+    const box = layout.elements.get(name)?.box ?? layout.groups.get(name);
+    if (box !== undefined) return [box];
+    const points = routes?.get(name)?.points ?? [];
+    return points.map((p) => ({ x: p.x, y: p.y, w: 0, h: 0 }));
+  });
+  if (boxes.length === 0) return null;
   const x = Math.min(...boxes.map((b) => b.x));
   const y = Math.min(...boxes.map((b) => b.y));
   const w = Math.max(...boxes.map((b) => b.x + b.w)) - x;
   const h = Math.max(...boxes.map((b) => b.y + b.h)) - y;
+  return { x, y, w, h };
+}
+
+export function zoomToSelection(store: EditorStore): void {
+  const state = store.getState();
+  const box = selectionBox(store);
+  if (box === null) return zoomToFit(store);
   state.setCamera(
-    fitBox({ x, y, w, h }, state.viewport, { padding: 120, maxZoom: 1.5, insets: CANVAS_INSETS }),
+    fitBox(box, state.viewport, { padding: 120, maxZoom: 1.5, insets: CANVAS_INSETS }),
   );
+}
+
+/**
+ * Brings the selection into view without changing the zoom when it already fits (Find, Tab):
+ * nothing moves if it's on screen; otherwise it's centred, or zoomed to if it's too big.
+ */
+export function revealSelection(store: EditorStore): void {
+  const state = store.getState();
+  const box = selectionBox(store);
+  if (box === null) return;
+  const { camera, viewport } = state;
+  const area = {
+    left: CANVAS_INSETS.left,
+    top: CANVAS_INSETS.top,
+    right: viewport.width - CANVAS_INSETS.right,
+    bottom: viewport.height - CANVAS_INSETS.bottom,
+  };
+  const screen = {
+    left: box.x * camera.zoom + camera.x,
+    top: box.y * camera.zoom + camera.y,
+    right: (box.x + box.w) * camera.zoom + camera.x,
+    bottom: (box.y + box.h) * camera.zoom + camera.y,
+  };
+  const inside =
+    screen.left >= area.left &&
+    screen.top >= area.top &&
+    screen.right <= area.right &&
+    screen.bottom <= area.bottom;
+  if (inside) return;
+  const fits =
+    box.w * camera.zoom <= area.right - area.left && box.h * camera.zoom <= area.bottom - area.top;
+  if (!fits) return zoomToSelection(store);
+  const cx = (area.left + area.right) / 2;
+  const cy = (area.top + area.bottom) / 2;
+  state.setCamera({
+    ...camera,
+    x: cx - (box.x + box.w / 2) * camera.zoom,
+    y: cy - (box.y + box.h / 2) * camera.zoom,
+  });
 }
 
 export function zoomBy(store: EditorStore, factor: number): void {
   const { camera, viewport } = store.getState();
+  // Buttons and keys step along the zoom ladder (so 100% is always one press away); pinch and
+  // the wheel zoom smoothly elsewhere.
+  const zoom = nextZoomStep(camera.zoom, factor > 1 ? 1 : -1);
   store
     .getState()
-    .setCamera(
-      zoomAt(camera, { x: viewport.width / 2, y: viewport.height / 2 }, camera.zoom * factor),
-    );
+    .setCamera(zoomAt(camera, { x: viewport.width / 2, y: viewport.height / 2 }, zoom));
 }
 
 export function zoomTo(store: EditorStore, zoom: number): void {

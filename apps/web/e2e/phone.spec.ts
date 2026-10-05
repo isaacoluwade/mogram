@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { element, openDraft, shot } from "./support";
+import { element, expectNoHorizontalOverflow, openDraft, shot } from "./support";
 
 /** The editor on a phone (F-14): everything reachable, nothing hidden under something else. */
 
@@ -48,9 +48,11 @@ test("the toolbar fits: undo and redo are fully on screen, the rest are under Mo
 
 test("buttons that show only an icon still have names", async ({ page }) => {
   await openDraft(page, "web-app");
-  await expect(page.getByRole("button", { name: "Export" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Present" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Share" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Diagram menu" })).toBeVisible();
+  // Both top bars fit: the diagram menu isn't covered (Export is in it on phones).
+  await page.getByRole("button", { name: "Diagram menu" }).click();
+  await expect(page.getByRole("menuitem", { name: /Export/ }).first()).toBeVisible();
 });
 
 /** A point on the canvas with no element under it. */
@@ -94,4 +96,32 @@ test("opening the inspector keeps the selected element in view above the sheet",
     })
     .toBeLessThan(sheet.y);
   await shot(page, "editor/phone-inspector-selection");
+});
+
+test("concepts fit a phone: the tab, and the gallery with its topics in a select (D-85)", async ({
+  page,
+}) => {
+  await openDraft(page, "web-app");
+  await page.getByRole("button", { name: "Library", exact: true }).click();
+  await page
+    .getByRole("tablist", { name: "Left panel" })
+    .getByRole("tab", { name: "Concepts" })
+    .click();
+  const panel = page.getByRole("region", { name: "Concepts" });
+  await expect(panel.getByRole("button", { name: /^Scaling & performance/ })).toBeVisible();
+  await expectNoHorizontalOverflow(page);
+  await shot(page, "editor/phone-concepts");
+
+  await panel.getByRole("button", { name: "Browse all" }).click();
+  const gallery = page.getByRole("dialog", { name: "Concepts" });
+  await expect(gallery.getByRole("navigation", { name: "Concept topics" })).toBeHidden();
+  await gallery.getByRole("combobox", { name: "Topic" }).click();
+  await page.getByRole("option", { name: "Reliability" }).click();
+  await expect(gallery.getByTestId("gallery-count")).toHaveText("1 concept");
+  const card = await box(gallery.getByRole("button", { name: "Concept: Failover" }));
+  const frame = await box(gallery);
+  expect(card.x).toBeGreaterThanOrEqual(frame.x);
+  expect(card.x + card.width).toBeLessThanOrEqual(frame.x + frame.width + 0.5);
+  await expectNoHorizontalOverflow(page);
+  await shot(page, "editor/phone-concept-gallery");
 });

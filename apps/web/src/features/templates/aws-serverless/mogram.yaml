@@ -6,7 +6,7 @@ theme: midnight
 
 containers:
   aws_cloud:
-    type: box
+    type: cloud
     label: AWS Cloud
     icon: aws/aws-cloud
   us_east_1:

@@ -1,4 +1,6 @@
-import type { Diagram, SceneEntry } from "../model/types";
+import type { Diagram, SceneCapacity, SceneEntry } from "../model/types";
+import { planCapacity, type CapacityInput, type CapacityPlan } from "../capacity/plan";
+import { nextPatternChange, patternCycle, type CapacityOverTime } from "../capacity/patterns";
 import { severityOf } from "../presets/state";
 import type { FlowPreset, MotionPreset, StatePreset } from "../presets/names";
 
@@ -15,7 +17,7 @@ import type { FlowPreset, MotionPreset, StatePreset } from "../presets/names";
  *    and `backup_for` connections take over ("rerouted") when the one they back up is blocked.
  */
 
-export type StateReason = "normal" | "base" | "scene" | "viewer" | "cascade" | "rollup";
+export type StateReason = "normal" | "base" | "scene" | "viewer" | "cascade" | "rollup" | "load";
 export type FlowReason = "normal" | "base" | "scene" | "viewer" | "endpoint-down" | "backup";
 
 export interface ElementStatus {
@@ -32,11 +34,44 @@ export interface ConnectionStatus {
 export interface ResolvedState {
   readonly elements: ReadonlyMap<string, ElementStatus>;
   readonly connections: ReadonlyMap<string, ConnectionStatus>;
+  /** Traffic, copies, sizes and load (D-82); with patterns, at the start of a cycle (quiet). */
+  readonly capacity: CapacityPlan;
+  /** When traffic follows patterns (D-84), the plan over time; null when it's steady. */
+  readonly capacityOverTime: CapacityOverTime | null;
   /** Entries for each nested instance, keyed by the owning component, with the prefix removed (SC-10). */
   readonly nested: ReadonlyMap<
     string,
     { readonly scene: readonly SceneEntry[]; readonly viewer: readonly SceneEntry[] }
   >;
+}
+
+/** The plan over time when connections carry patterns, else null. */
+function overTime(
+  input: CapacityInput,
+  overrides: ReadonlyMap<string, SceneCapacity>,
+): CapacityOverTime | null {
+  const patterned = [...input.diagram.connections.values()].filter(
+    (c) => c.pattern !== null && overrides.get(c.name)?.traffic === undefined,
+  );
+  if (patterned.length === 0) return null;
+  const patterns = patterned.flatMap((c) => (c.pattern === null ? [] : [c.pattern]));
+  const at = (level: "low" | "high") => {
+    const held = new Map(overrides);
+    for (const c of patterned)
+      if (c.pattern !== null)
+        held.set(c.name, {
+          ...held.get(c.name),
+          traffic: level === "low" ? c.pattern.low : c.pattern.high,
+        });
+    return planCapacity({ ...input, overrides: held });
+  };
+  return {
+    planAt: (time) => planCapacity({ ...input, time }),
+    nextChange: (after) => Math.min(...patterns.map((p) => nextPatternChange(p, after))),
+    cycle: patternCycle(patterns),
+    quiet: at("low"),
+    busy: at("high"),
+  };
 }
 
 export interface ResolveInput {
@@ -52,6 +87,8 @@ export interface ResolveInput {
    * (NE-12). Provided by `@mogram/core/nested`, which resolves instances recursively.
    */
   readonly nestedWorst?: (component: string, entries: NestedEntries) => StatePreset | null;
+  /** Everything entering the diagram, times this (the traffic slider, D-82). */
+  readonly traffic?: number;
 }
 
 export interface NestedEntries {
@@ -160,38 +197,6 @@ export function resolveState(input: ResolveInput): ResolvedState {
       status.set(component.name, { state: rolled, motion: current.motion, reason: "rollup" });
   }
 
-  // 4. Container roll-up, deepest first.
-  const depth = (name: string): number => {
-    let d = 0;
-    let current = parentOf(name);
-    const seen = new Set<string>();
-    while (current !== null && !seen.has(current)) {
-      seen.add(current);
-      d++;
-      current = parentOf(current);
-    }
-    return d;
-  };
-  const containersDeepestFirst = [...diagram.containers.values()].sort(
-    (a, b) => depth(b.name) - depth(a.name),
-  );
-  for (const container of containersDeepestFirst) {
-    const current = status.get(container.name);
-    if (current === undefined || current.reason !== "normal") continue;
-    const childStates = placeables
-      .filter((element) => element.parent === container.name)
-      .map((element) => status.get(element.name)?.state ?? "healthy");
-    const rolled = rollupState(childStates, container.rollup);
-    if (rolled !== "healthy")
-      status.set(container.name, { state: rolled, motion: "none", reason: "rollup" });
-  }
-
-  // Down things stop moving: motion is about behaviour, and a down component has none.
-  for (const [name, value] of status) {
-    if (value.state === "down" && value.motion !== "none")
-      status.set(name, { ...value, motion: "none" });
-  }
-
   // 5. Connections: explicit layers, then endpoint-down blocking, then backups.
   const connections = new Map<string, ConnectionStatus & { explicit: boolean }>();
   for (const connection of diagram.connections.values()) {
@@ -243,6 +248,61 @@ export function resolveState(input: ResolveInput): ResolvedState {
     if (!changed) break;
   }
 
+  // 6. Capacity: traffic through the diagram, then load (D-82). Something measured that's
+  // over 100% is overloaded, unless a state is set for it.
+  const overrides = new Map<string, SceneCapacity>();
+  for (const layer of [scene.own, viewer.own])
+    for (const [target, entry] of layer)
+      if (entry.capacity !== undefined)
+        overrides.set(target, { ...overrides.get(target), ...entry.capacity });
+  const planInput: CapacityInput = {
+    diagram,
+    states: new Map([...status].map(([name, value]) => [name, value.state])),
+    flows: new Map([...connections].map(([name, value]) => [name, value.flow])),
+    overrides,
+    ...(input.traffic !== undefined ? { traffic: input.traffic } : {}),
+  };
+  const capacity = planCapacity(planInput);
+  const capacityOverTime = overTime(planInput, overrides);
+  for (const [name, planned] of capacity.elements) {
+    const current = status.get(name);
+    if (current?.reason !== "normal" || !planned.measured) continue;
+    if (planned.load > 1 + 1e-9)
+      status.set(name, { state: "overloaded", motion: current.motion, reason: "load" });
+  }
+
+  // 7. Container roll-up, deepest first.
+  const depth = (name: string): number => {
+    let d = 0;
+    let current = parentOf(name);
+    const seen = new Set<string>();
+    while (current !== null && !seen.has(current)) {
+      seen.add(current);
+      d++;
+      current = parentOf(current);
+    }
+    return d;
+  };
+  const containersDeepestFirst = [...diagram.containers.values()].sort(
+    (a, b) => depth(b.name) - depth(a.name),
+  );
+  for (const container of containersDeepestFirst) {
+    const current = status.get(container.name);
+    if (current === undefined || current.reason !== "normal") continue;
+    const childStates = placeables
+      .filter((element) => element.parent === container.name)
+      .map((element) => status.get(element.name)?.state ?? "healthy");
+    const rolled = rollupState(childStates, container.rollup);
+    if (rolled !== "healthy")
+      status.set(container.name, { state: rolled, motion: "none", reason: "rollup" });
+  }
+
+  // Down things stop moving: motion is about behaviour, and a down component has none.
+  for (const [name, value] of status) {
+    if (value.state === "down" && value.motion !== "none")
+      status.set(name, { ...value, motion: "none" });
+  }
+
   const nested = new Map<string, { scene: SceneEntry[]; viewer: SceneEntry[] }>();
   for (const component of diagram.components.values()) {
     if (component.opens === null) continue;
@@ -254,6 +314,8 @@ export function resolveState(input: ResolveInput): ResolvedState {
 
   return {
     elements: status,
+    capacity,
+    capacityOverTime,
     connections: new Map(
       [...connections].map(([name, value]) => [name, { flow: value.flow, reason: value.reason }]),
     ),

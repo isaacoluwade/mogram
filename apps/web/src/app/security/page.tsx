@@ -72,9 +72,27 @@ export default async function SecurityPage() {
             ],
             [
               "Version history",
-              "Saves within five minutes of each other are kept as one version. You can restore any version.",
+              "A working session is kept as one version. Restoring adds a new version on top, so nothing is lost. Named versions are kept for good; others thin out to one an hour after a day and one a day after a month.",
             ],
             ["Deleting", "Deleting a diagram removes it, its versions and its share link."],
+          ]}
+        />
+      </DocSection>
+
+      <DocSection id="assistant" label="The assistant">
+        <p>
+          When you ask the assistant something, your diagram&apos;s files, what you&apos;ve selected
+          and your request go through Mogram&apos;s server to the AI model provider this Mogram is
+          set up with, for that request only. The provider&apos;s key stays on the server.
+        </p>
+        <FactList
+          facts={[
+            ["What's kept", "How much it was used. Never what you asked, or your diagram."],
+            ["Your conversation", "Kept in your browser, for that diagram."],
+            [
+              "Its changes",
+              "Each request is one step you can undo and one version in history. Big removals need your agreement first.",
+            ],
           ]}
         />
       </DocSection>

@@ -1,4 +1,6 @@
 import type { Decoration, Diagram, GridPoint, GridSize, TextStyle } from "../model/types";
+import { SHAPE_INFO } from "../presets/shapes";
+import { capacityFootprint, capacityRoom } from "./capacity";
 import {
   COMPONENT_UNITS,
   CONTAINER_UNITS,
@@ -144,7 +146,18 @@ export function computeLayout(diagram: Diagram, overrides: LayoutOverrides = {})
         const decoration = diagram.decorations.get(kid);
         if (decoration !== undefined) sizes.set(kid, decorationSize(decoration));
       } else {
-        sizes.set(kid, { w: COMPONENT_UNITS.w, h: COMPONENT_UNITS.h });
+        const component = diagram.components.get(kid);
+        const shape = component?.shape ?? null;
+        if (shape === null) {
+          // A component that scales keeps room for its most copies or largest size (D-82).
+          const room = component === undefined ? null : capacityFootprint(component);
+          sizes.set(kid, room ?? { w: COMPONENT_UNITS.w, h: COMPONENT_UNITS.h });
+        } else {
+          // Shapes take their size from the layout (resized by hand) or their kind's default.
+          const manual = overrides.sizes?.get(kid) ?? diagram.layout.get(kid)?.size ?? null;
+          if (manual !== null) sized.add(kid);
+          sizes.set(kid, manual ?? { ...SHAPE_INFO[shape].size });
+        }
       }
     }
 
@@ -245,7 +258,11 @@ export function computeLayout(diagram: Diagram, overrides: LayoutOverrides = {})
         z,
         order: node.order,
       });
-      if (node.kind === "component") tiles.set(name, tileOf(box));
+      // Icon components attach at their tile; a shape's whole outline is what connects; a
+      // scaling component at the room it grows in.
+      const component = node.kind === "component" ? diagram.components.get(name) : undefined;
+      if (component !== undefined && component.shape === null)
+        tiles.set(name, capacityRoom(box, component) ?? tileOf(box));
       if (node.kind === "container") visit(name, box.x, box.y, depth + 1);
     }
   };

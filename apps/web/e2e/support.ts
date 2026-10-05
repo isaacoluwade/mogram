@@ -103,3 +103,47 @@ export async function viewerSettled(page: Page): Promise<void> {
     page.locator('[data-testid="viewer-canvas"][data-ready="true"]:not([data-animating])'),
   ).toBeVisible();
 }
+
+/** A new draft holding exactly `yaml` (opened through "Open files…", as a person would). */
+export async function openYaml(page: Page, yaml: string): Promise<string> {
+  const id = await openDraft(page, "blank");
+  await page.getByRole("button", { name: "Diagram menu" }).click();
+  await page.getByRole("menuitem", { name: /Open files/ }).click();
+  await page
+    .getByRole("dialog", { name: "Open files" })
+    .locator('input[type="file"][multiple]')
+    .setInputFiles({
+      name: "diagram.mogram.yaml",
+      mimeType: "text/yaml",
+      buffer: Buffer.from(yaml),
+    });
+  await expect(page.getByRole("dialog", { name: "Open files" })).toHaveCount(0);
+  await page.waitForFunction(() => {
+    const diagram = document.querySelector('[data-layer="diagram"]');
+    if (diagram === null) return false;
+    // Icon components wait for their icons; shapes have none.
+    const icons = diagram.querySelectorAll('[data-kind="component"]:not([data-shape])').length;
+    const shapes = diagram.querySelectorAll("[data-shape]").length;
+    return icons + shapes > 0 && diagram.querySelectorAll("image").length >= icons;
+  });
+  await page.evaluate(
+    () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
+  );
+  return id;
+}
+
+/** Opens one of the inspector's tabs: Element, Style or Arrange; Diagram or Canvas. */
+export async function inspectorTab(page: Page, name: string): Promise<void> {
+  await page
+    .getByRole("region", { name: "Inspector" })
+    .getByRole("tab", { name, exact: true })
+    .click();
+}
+
+/** Opens a folded inspector section by its title (sections remember being open or closed). */
+export async function openSection(page: Page, title: string): Promise<void> {
+  const header = page
+    .getByRole("region", { name: "Inspector" })
+    .getByRole("button", { name: title, exact: true });
+  if ((await header.getAttribute("aria-expanded")) === "false") await header.click();
+}

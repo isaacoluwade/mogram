@@ -31,14 +31,16 @@ export function useRoutes(
   const [cache] = useState(() => new RouteCache());
   const quick = options?.quick;
   const via = options?.via;
+  const follow = options?.follow;
   return useMemo(
     () =>
       routeConnections(diagram, layout, {
         cache,
         ...(quick ? { quick } : {}),
         ...(via ? { via } : {}),
+        ...(follow ? { follow } : {}),
       }),
-    [diagram, layout, quick, via, cache],
+    [diagram, layout, quick, via, follow, cache],
   );
 }
 
@@ -97,7 +99,7 @@ export function resolveAlong(
 ): ResolvedState | null {
   const top = levels[0];
   if (top === undefined) return null;
-  let resolved = resolveFor(files, top.folder, diagramOf(top.folder), scene, viewer);
+  let resolved = resolveFor(files, top.folder, diagramOf(top.folder), scene, viewer, null);
   for (let i = 1; i < levels.length; i++) {
     const level = levels[i];
     const owner = level?.path.at(-1);
