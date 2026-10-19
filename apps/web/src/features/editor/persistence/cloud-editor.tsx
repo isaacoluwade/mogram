@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import type { ProjectFiles } from "@mogram/core/model";
 import type { Checkpoint } from "@/lib/history/rules";
@@ -13,15 +13,32 @@ import { EditorShell } from "../editor-shell";
 import { useAutosave } from "./autosave";
 import type { HistorySource } from "@/features/history/source";
 import { EditorLoading } from "../../../components/screens";
-import { EditorHostContext, initialPanels, type EditorHost } from "./host";
+import { EditorHostContext, initialPanels, rootIn, type EditorHost } from "./host";
 import { useThumbnails } from "./thumbnails";
+import { addAssetSource } from "@/features/assets/remote";
 
 /** The editor for a diagram in the signed-in person's account (AC-3, AC-4). */
-export function CloudEditor({ initial }: { initial: DiagramDetail }) {
+export function CloudEditor({
+  initial,
+  root = "",
+  slide = null,
+}: {
+  initial: DiagramDetail;
+  root?: string;
+  /** In a deck, the slide to open on, by its number (`?slide=3`). */
+  slide?: number | null;
+}) {
   const mounted = useMounted();
   if (!mounted) return <EditorLoading />;
   return (
-    <EditorProvider init={{ files: initial.files, panels: initialPanels() }}>
+    <EditorProvider
+      init={{
+        files: initial.files,
+        root: rootIn(initial.files, root),
+        ...(slide === null ? {} : { slide }),
+        panels: initialPanels(),
+      }}
+    >
       <CloudHost initial={initial}>
         <EditorShell />
       </CloudHost>
@@ -37,6 +54,8 @@ interface ShareState {
 
 function CloudHost({ initial, children }: { initial: DiagramDetail; children: ReactNode }) {
   const store = useEditorStore();
+  // Pictures this diagram points at come from its own route when this browser hasn't them.
+  useEffect(() => addAssetSource(`/api/diagrams/${initial.id}`), [initial.id]);
   const version = useRef(initial.version);
   const [share, setShare] = useState<ShareState>({
     visibility: initial.visibility,

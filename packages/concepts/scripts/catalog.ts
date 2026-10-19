@@ -1,5 +1,7 @@
 import { conceptKind } from "@mogram/core/concepts";
 import { parseDiagram } from "@mogram/core/format";
+import type { Diagram } from "@mogram/core/model";
+import { beatsOf, cursorAtStep, pictureAt, sceneMoment, type Moment } from "@mogram/core/picture";
 import { CONCEPT_TOPICS } from "@mogram/core/presets";
 import type { ConceptCard } from "../src/types";
 
@@ -8,7 +10,7 @@ import type { ConceptCard } from "../src/types";
  * writes what it returns and a test checks the committed files are what it would write.
  *
  * Every concept must read without a single problem, say what it explains, be filed under its own
- * topic, and tell its story: traffic that changes, or scenes.
+ * topic, and tell its story: a story, scenes, or traffic that changes.
  */
 export interface ConceptSource {
   /** `<topic>/<id>.mogram.yaml`, relative to `content/`. */
@@ -19,6 +21,58 @@ export interface ConceptSource {
 const ID = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const HEADER =
   "// Generated from content/ by scripts/build-catalog.ts. Do not edit: run `pnpm build:catalog`.\n";
+
+/** The longest a caption can be and still be read in the time a beat takes. */
+const CAPTION_LIMIT = 150;
+/** The most beats a concept's story has: past this it's two ideas. */
+const BEAT_LIMIT = 12;
+
+/**
+ * The story check (D-86, plan §8): what a concept's story must hold for it to be worth
+ * watching. Short captions, not too many beats, and nothing written that never appears.
+ */
+export function storyProblems(diagram: Diagram): string[] {
+  const problems: string[] = [];
+  const main = diagram.stories[0];
+  if (main === undefined) return problems;
+  const beats = beatsOf(main);
+  if (beats.length > BEAT_LIMIT)
+    problems.push(
+      `its story has ${beats.length} beats; ${BEAT_LIMIT} is the most one idea should need.`,
+    );
+  for (const story of diagram.stories)
+    for (const step of story.steps)
+      if (step.say !== null && step.say.length > CAPTION_LIMIT)
+        problems.push(
+          `a caption is ${step.say.length} characters ("${step.say.slice(0, 40)}…"); keep it under ${CAPTION_LIMIT}.`,
+        );
+  // Everything written is there at some moment: the opening, a step, or a scene.
+  const seen = new Set<string>();
+  const look = (moment: Moment | null): void => {
+    const picture = pictureAt(diagram, moment);
+    for (const name of [
+      ...picture.diagram.components.keys(),
+      ...picture.diagram.containers.keys(),
+      ...picture.diagram.connections.keys(),
+      ...picture.diagram.decorations.keys(),
+    ])
+      seen.add(name);
+  };
+  look(null);
+  for (const scene of diagram.scenes) look(sceneMoment(scene.name));
+  for (const story of diagram.stories)
+    story.steps.forEach((_, index) => {
+      look({ scene: null, story: cursorAtStep(diagram, { story: story.name, index }) });
+    });
+  for (const name of [
+    ...diagram.components.keys(),
+    ...diagram.containers.keys(),
+    ...diagram.connections.keys(),
+    ...diagram.decorations.keys(),
+  ])
+    if (!seen.has(name)) problems.push(`"${name}" is hidden and no step or scene ever shows it.`);
+  return problems;
+}
 
 export function buildCatalog(sources: readonly ConceptSource[]): {
   readonly cards: readonly ConceptCard[];
@@ -52,8 +106,16 @@ export function buildCatalog(sources: readonly ConceptSource[]): {
         `${source.path}: its topic is ${concept.topic}, so it belongs in content/${concept.topic}/.`,
       );
     const patterned = [...diagram.connections.values()].some((c) => c.pattern !== null);
-    if (!patterned && diagram.scenes.length === 0 && diagram.tours.length === 0)
-      problems.push(`${source.path}: it tells no story (traffic that changes, scenes or a tour).`);
+    if (
+      !patterned &&
+      diagram.scenes.length === 0 &&
+      diagram.tours.length === 0 &&
+      diagram.stories.length === 0
+    )
+      problems.push(
+        `${source.path}: it tells no story (a story, scenes, a tour or traffic that changes).`,
+      );
+    problems.push(...storyProblems(diagram).map((problem) => `${source.path}: ${problem}`));
     if (concept.topic === null || concept.summary === null) continue;
     cards.push({
       id,

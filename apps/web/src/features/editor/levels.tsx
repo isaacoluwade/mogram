@@ -35,14 +35,15 @@ function levelPicture(
   levelPath: readonly string[],
   scene: string | null,
   viewer: readonly SceneEntry[],
+  root: string,
 ): LevelPicture {
-  const folder = levelsAlong(files, levelPath).at(-1)?.folder ?? "";
+  const folder = levelsAlong(files, levelPath, root).at(-1)?.folder ?? root;
   const diagram = parseCached(files, folder).diagram;
   const layout = computeLayout(diagram);
   const routes = routeConnections(diagram, layout);
   const theme = resolveTheme(diagram.settings);
-  const current = resolveLevel(files, levelPath, folder, diagram, scene, viewer);
-  const stubs = nestedStubs(files, levelPath, diagram);
+  const current = resolveLevel(files, levelPath, folder, diagram, scene, viewer, root);
+  const stubs = nestedStubs(files, levelPath, diagram, root);
   return {
     diagram,
     layout,
@@ -60,14 +61,15 @@ export function nestedStubs(
   files: ProjectFiles,
   levelPath: readonly string[],
   diagram: Diagram,
+  root: string,
 ): { readonly stubs: readonly Stub[]; readonly flows: ReadonlyMap<string, FlowPreset> } | null {
   const owner = levelPath.at(-1);
   if (owner === undefined) return null;
   const parentPath = levelPath.slice(0, -1);
-  const folder = levelsAlong(files, parentPath).at(-1)?.folder ?? "";
+  const folder = levelsAlong(files, parentPath, root).at(-1)?.folder ?? root;
   const parent = parseCached(files, folder).diagram;
   const flows = new Map<string, FlowPreset>();
-  for (const [name, status] of resolveLevel(files, parentPath, folder, parent, null, [])
+  for (const [name, status] of resolveLevel(files, parentPath, folder, parent, null, [], root)
     .connections)
     flows.set(name, status.flow);
   return { stubs: stubsFor(parent, owner, diagram), flows };
@@ -106,7 +108,13 @@ export function openNested(store: EditorStore, name: string): boolean {
   const innerPath = [...outerPath, name];
   camerasOf(store).set(outerPath.join("/"), state.camera);
 
-  const inner = levelPicture(shownFiles(state), innerPath, state.scene, state.viewerEntries);
+  const inner = levelPicture(
+    shownFiles(state),
+    innerPath,
+    state.scene,
+    state.viewerEntries,
+    state.root,
+  );
   const area = fitArea(inner.layout, true);
   const enter = () => {
     const s = store.getState();
@@ -121,7 +129,13 @@ export function openNested(store: EditorStore, name: string): boolean {
     enter();
     return true;
   }
-  const outer = levelPicture(shownFiles(state), outerPath, state.scene, state.viewerEntries);
+  const outer = levelPicture(
+    shownFiles(state),
+    outerPath,
+    state.scene,
+    state.viewerEntries,
+    state.root,
+  );
   state.select([]);
   state.setEditingLabel(null);
   state.setLevelZoom({
@@ -160,8 +174,14 @@ export function exitNested(store: EditorStore, depth?: number): boolean {
     leave(back ?? null);
     return true;
   }
-  const outer = levelPicture(shownFiles(state), outerPath, state.scene, state.viewerEntries);
-  const inner = levelPicture(shownFiles(state), path, state.scene, state.viewerEntries);
+  const outer = levelPicture(
+    shownFiles(state),
+    outerPath,
+    state.scene,
+    state.viewerEntries,
+    state.root,
+  );
+  const inner = levelPicture(shownFiles(state), path, state.scene, state.viewerEntries, state.root);
   const tile = outer.layout.tiles.get(component) ?? outer.layout.elements.get(component)?.box;
   const outerCamera = back ?? fitCamera(store, fitArea(outer.layout, outerPath.length > 0));
   if (tile === undefined) {
@@ -193,7 +213,7 @@ export function jumpToLevel(store: EditorStore, path: readonly string[]): boolea
   const same =
     path.length === state.levelPath.length && path.every((name, i) => name === state.levelPath[i]);
   if (same) return true;
-  const levels = levelsAlong(shownFiles(state), path);
+  const levels = levelsAlong(shownFiles(state), path, state.root);
   if (levels.length !== path.length + 1) return false;
   camerasOf(store).set(state.levelPath.join("/"), state.camera);
   state.setEditingLabel(null);

@@ -21,11 +21,13 @@ import {
 } from "@mogram/core/edit";
 import type { LayoutResult } from "@mogram/core/layout";
 import { isValidName, toName, type Diagram, type ProjectFiles } from "@mogram/core/model";
+import type { Moment } from "@mogram/core/picture";
 import type { RoutedPath } from "@mogram/core/routing";
-import { STORY_HOLD, stepScene } from "@mogram/core/timeline";
+import { SCENE_HOLD, stepScene } from "@mogram/core/timeline";
 import { IconButton } from "@/components/ui/icon-button";
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "@/components/ui/menu";
 import { Panel, ToolbarDivider } from "@/components/ui/panel";
+import { SegmentedControl } from "@/components/ui/segmented-control";
 import { cn } from "@/lib/cn";
 import { useScrollFade } from "@/lib/use-scroll-fade";
 import { buildScene } from "@/features/canvas/scene";
@@ -33,8 +35,9 @@ import { useFontsVersion } from "@/features/canvas/text";
 import { DiagramSvg } from "@/features/canvas/svg/diagram-svg";
 import type { CanvasTheme } from "@/features/canvas/theme";
 import { useEditor, useEditorClock, useEditorShallow, useEditorStore } from "../editor-context";
-import { shownFiles, storyDiagram } from "../store/editor-store";
+import { dockOf, scenesOffered, shownFiles, topDiagram } from "../store/editor-store";
 import { resolveLevel } from "../use-editor-scene";
+import { StoryStrip } from "./story-strip";
 
 const THUMB = { width: 112, height: 64 } as const;
 
@@ -45,12 +48,13 @@ interface ThumbProps {
   readonly layout: LayoutResult;
   readonly routes: ReadonlyMap<string, RoutedPath>;
   readonly theme: CanvasTheme;
-  readonly scene: string | null;
+  /** The scene, or the moment of a story, it shows. */
+  readonly scene: Moment | string | null;
   readonly levelPath: readonly string[];
 }
 
-/** A still, miniature render of the level being edited in one scene. */
-const SceneThumb = memo(function SceneThumb({
+/** A still, miniature render of the level being edited in one scene, or at a moment of a story. */
+export const SceneThumb = memo(function SceneThumb({
   files,
   folder,
   diagram,
@@ -61,8 +65,9 @@ const SceneThumb = memo(function SceneThumb({
   levelPath,
 }: ThumbProps) {
   const fonts = useFontsVersion();
+  const root = useEditor((s) => s.root);
   const model = useMemo(() => {
-    const current = resolveLevel(files, levelPath, folder, diagram, scene, []);
+    const current = resolveLevel(files, levelPath, folder, diagram, scene, [], root);
     return buildScene({
       diagram,
       files,
@@ -73,7 +78,7 @@ const SceneThumb = memo(function SceneThumb({
       fontFamily: "Inter",
       fontsVersion: fonts,
     });
-  }, [files, folder, diagram, layout, routes, theme, scene, levelPath, fonts]);
+  }, [files, folder, root, diagram, layout, routes, theme, scene, levelPath, fonts]);
   const pad = 24;
   const bounds = layout.bounds.w === 0 ? { x: 0, y: 0, w: 320, h: 180 } : layout.bounds;
   const ratio = THUMB.width / THUMB.height;
@@ -113,7 +118,7 @@ function usePlayback(scenes: readonly string[]) {
     const timer = window.setInterval(() => {
       const state = store.getState();
       state.setScene(stepScene(scenes, state.scene, 1), clock.time());
-    }, STORY_HOLD * 1000);
+    }, SCENE_HOLD * 1000);
     return () => window.clearInterval(timer);
   }, [playing, scenes, store, clock]);
 }
@@ -124,12 +129,51 @@ export interface SceneStripProps {
   readonly theme: CanvasTheme;
 }
 
+/**
+ * What the dock under the canvas lists (D-86): the scenes, each a state of the whole diagram to
+ * switch to, or a story, which plays step by step with words.
+ */
+export function DockSwitch() {
+  const store = useEditorStore();
+  const clock = useEditorClock();
+  const dock = useEditor(dockOf);
+  const offered = useEditor(scenesOffered);
+  // On a slide with no scenes there's only the story: nothing to switch between (D-109).
+  if (!offered) return null;
+  return (
+    <SegmentedControl
+      label="Scenes or story"
+      size="sm"
+      value={dock}
+      onChange={(value) => {
+        const state = store.getState();
+        state.setPlaying(false);
+        state.setDock(value);
+        // Each has its own picture: leaving one for the other goes back to the diagram itself.
+        if (value === "scenes") state.setStory(null, clock.time());
+        else state.setScene(null, clock.time());
+      }}
+      options={[
+        { value: "scenes", label: "Scenes" },
+        { value: "story", label: "Story" },
+      ]}
+    />
+  );
+}
+
+/** The dock: the scene strip or the story strip, whichever is picked. */
+export function Dock(props: SceneStripProps) {
+  const dock = useEditor(dockOf);
+  return dock === "story" ? <StoryStrip {...props} /> : <SceneStrip {...props} />;
+}
+
 /** Scenes as a strip of thumbnails, like pages in Canva (SC-6). */
 export function SceneStrip({ layout, routes, theme }: SceneStripProps) {
   const store = useEditorStore();
   const clock = useEditorClock();
-  const { files, folder, scene, playing, levelPath } = useEditorShallow((s) => ({
+  const { files, root, folder, scene, playing, levelPath } = useEditorShallow((s) => ({
     files: shownFiles(s),
+    root: s.root,
     folder: s.folder,
     scene: s.scene,
     playing: s.playing,
@@ -139,8 +183,8 @@ export function SceneStrip({ layout, routes, theme }: SceneStripProps) {
   // Scenes belong to the top diagram (NE-14): inside a nested level they are still its scenes,
   // shown as they reach this level, and changing them changes the top diagram's scenes.
   const nested = levelPath.length > 0;
-  const story = nested ? storyDiagram(files) : diagram;
-  const storyOf = (f: ProjectFiles, d: Diagram): Diagram => (nested ? storyDiagram(f) : d);
+  const story = nested ? topDiagram(files, root) : diagram;
+  const storyOf = (f: ProjectFiles, d: Diagram): Diagram => (nested ? topDiagram(f, root) : d);
   // Stable between renders, so scene playback's timer isn't restarted by unrelated updates.
   const names = useMemo(() => story.scenes.map((s) => s.name), [story.scenes]);
   const [renaming, setRenaming] = useState<string | null>(null);
@@ -185,6 +229,7 @@ export function SceneStrip({ layout, routes, theme }: SceneStripProps) {
         nested ? `Scenes of ${story.settings.name}: they reach inside nested diagrams` : undefined
       }
     >
+      <DockSwitch />
       <IconButton
         label={playing ? "Pause scenes" : "Play scenes"}
         shortcut="P"

@@ -1,4 +1,5 @@
 import type { DiagramSettings, Tone } from "@mogram/core/model";
+import type { TokenKind } from "@mogram/core/code";
 import {
   CANVAS_THEME_INFO,
   CONTAINER_STYLE_INFO,
@@ -39,6 +40,27 @@ export function backgroundCss(theme: CanvasThemeInfo): string {
 
 export function tone(name: Tone, mode: ThemeMode): ToneColors {
   return TONES[name][mode];
+}
+
+export function codeTokenColors(theme: CanvasTheme): Readonly<Record<TokenKind, string>> {
+  const colors = (name: Tone) => tone(name, theme.mode).solid;
+  return {
+    keyword: colors("violet"),
+    name: colors("blue"),
+    string: colors("green"),
+    number: colors("amber"),
+    comment: theme.textMuted,
+    punctuation: theme.textMuted,
+    command: colors("blue"),
+    output: theme.text,
+    added: colors("green"),
+    removed: colors("rose"),
+    changed: colors("amber"),
+    replaced: colors("orange"),
+    read: colors("blue"),
+    summary: colors("violet"),
+    plain: theme.text,
+  };
 }
 
 export interface ContainerColors {

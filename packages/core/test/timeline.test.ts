@@ -7,7 +7,7 @@ import {
   motionAt,
   motionPeriod,
   stepScene,
-  storyAt,
+  scenesAt,
   transitionProgress,
 } from "../src/timeline";
 import { FLOW_PRESETS, MOTION_PRESETS, STATE_INFO } from "../src/presets";
@@ -84,11 +84,11 @@ describe("scene transitions (SC-7) and stories (SC-9)", () => {
   });
 
   it("plays scenes in order and loops seamlessly", () => {
-    expect(storyAt(0.1, 3)).toMatchObject({ from: 2, to: 0 });
-    expect(storyAt(5, 3)).toMatchObject({ from: 0, to: 1, progress: 1 });
-    expect(storyAt(8.3, 3)).toMatchObject({ from: 1, to: 2 });
-    expect(storyAt(12.1, 3)).toEqual(storyAt(0.1, 3));
-    expect(storyAt(3, 1)).toEqual({ from: 0, to: 0, progress: 1 });
+    expect(scenesAt(0.1, 3)).toMatchObject({ from: 2, to: 0 });
+    expect(scenesAt(5, 3)).toMatchObject({ from: 0, to: 1, progress: 1 });
+    expect(scenesAt(8.3, 3)).toMatchObject({ from: 1, to: 2 });
+    expect(scenesAt(12.1, 3)).toEqual(scenesAt(0.1, 3));
+    expect(scenesAt(3, 1)).toEqual({ from: 0, to: 0, progress: 1 });
   });
 });
 

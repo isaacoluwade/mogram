@@ -5,3 +5,5 @@
 export * from "./model";
 export * from "./presets";
 export * from "./format";
+export * from "./assets";
+export * from "./code";

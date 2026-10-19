@@ -7,17 +7,22 @@ export {
   addDecoration,
   addGroup,
   addShape,
+  NEW_LISTING,
   autoSize,
   deleteElements,
   isLocked,
   moveElements,
   nestElements,
+  placeElements,
   renameElement,
+  renamePart,
+  removePart,
   resizeElement,
   setCard,
   setConnectionPath,
   setData,
   setLocked,
+  setPart,
   updateElement,
   type AddComponentArgs,
   type AddConnectionArgs,
@@ -26,6 +31,7 @@ export {
   type DecorationArgs,
   type Move,
   type PropertyValue,
+  type PartPatch,
 } from "./elements";
 export { planZOrder, reorderZ, type ZOrderMove } from "./z-order";
 export { followTerminals } from "./follow";
@@ -68,6 +74,7 @@ export {
   removeTourStep,
   renameScene,
   reorderScenes,
+  setEntries,
   setSceneCapacity,
   setSceneEntry,
   setTourChoices,
@@ -76,7 +83,7 @@ export {
   type ChoiceInput,
   type SceneValue,
   type StepPatch,
-} from "./story";
+} from "./scenes";
 export {
   copySnippet,
   isMogramSnippet,
@@ -98,3 +105,39 @@ export {
   setTrafficPattern,
 } from "./capacity";
 export { setConcept } from "./concept";
+export {
+  addStep,
+  addStory,
+  deleteStory,
+  moveSteps,
+  removeSteps,
+  renameStory,
+  setStepChoices,
+  updateStep,
+  type SetRef,
+  type StoryStepPatch,
+} from "./stories";
+export {
+  addSection,
+  addSlide,
+  canJoinSlides,
+  canSplitSlide,
+  createDeck,
+  followIntoDecks,
+  relativeFolder,
+  detachSlide,
+  duplicateSlide,
+  importSlideFiles,
+  newSlideFolder,
+  joinSlides,
+  moveEntries,
+  removeEntries,
+  renameSection,
+  setDeckSetting,
+  renameSlideFolder,
+  splitSlide,
+  updateSlide,
+  type SlideFields,
+  type SlideOrigin,
+  type SlideFolderResult,
+} from "./deck";

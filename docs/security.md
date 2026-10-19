@@ -97,10 +97,31 @@ and returns the not-found page after the owner makes the diagram private.
 
 Every request body is parsed with a strict zod schema (`lib/api/contracts.ts`; unknown keys are
 rejected). Limits: names ≤ 120 characters, ≤ 500 files, paths ≤ 200 characters with a
-conservative character set and no `.`/`..` segments, ≤ 2 MB per file and ≤ 1 MB per YAML or
-markdown file (the most the parser reads), ≤ 5 MB per diagram, thumbnails ≤ 250 KB, request
-bodies ≤ 6 MB. Files are typed by extension: YAML/markdown/text as text, images only as base64
-data URLs, SVG only after sanitising, anything else refused.
+conservative character set and no `.`/`..` segments, ≤ 2 MB per ordinary file and ≤ 1 MB per YAML
+or markdown file (the most the parser reads), ≤ 5 MB of text per diagram, thumbnails ≤ 250 KB,
+JSON request bodies ≤ 6 MB. Files are typed by extension: YAML/markdown/text as text, supported
+code files as inert text ≤ 200 KB of UTF-8, raster images as asset pointers or legacy base64
+data URLs, SVG only after sanitising, and supported audio as asset pointers. Unsupported types
+are refused. HTML source is text, never an executable document.
+
+Binary uploads are streamed with an 8,000,000-byte bound and checked against the SHA-256 in
+the URL. Allowed types are PNG, JPEG, WebP, GIF, WebM audio, MP4 audio, MPEG audio, WAV and Ogg.
+HTML and SVG binary uploads are refused. An owner can store at most 2,000 assets totaling
+500,000,000 bytes; the quota check and insertion serialize on that owner's user row. Project
+pointers are independently bounded by the same count and total. Audio pointers allow at most
+120 seconds of playable duration. Dimensions and duration are validated metadata, not measured
+by the server; browser imports decode media to obtain them before storing it.
+
+Saving files requires every asset pointer to match that owner's stored hash, type and length.
+Owner diagram reads can access referenced historical blobs; public reads require the current
+diagram's pointer and an active share link. Asset responses use `no-store` and `nosniff`, so
+an immutable public cache does not bypass later share revocation. Historical references are
+retained; there is no asset garbage collector yet.
+
+Before a save, the browser asks which of a project's pointers the account lacks
+(`POST /api/assets/missing`, signed in, a JSON body of at most 2,000 well-formed hashes) and
+uploads only those. The answer lists only hashes from the request that this owner doesn't hold,
+so it reveals nothing about other owners' assets; the save itself still checks every pointer.
 
 YAML parsing (`packages/core/src/format/yaml-read.ts`) refuses files over 1 MB and documents that
 use more than 50 aliases, so a "billion laughs" file (aliases of aliases expanding exponentially)
@@ -155,6 +176,19 @@ attributes; style injection can't run code. Other headers (`next.config.ts`): `n
 `X-Frame-Options: DENY`, strict-origin referrer policy, a restrictive Permissions-Policy, COOP
 `same-origin`, HSTS. The end-to-end suite runs against a production build with this policy
 (`E2E_BASE_URL`), including the GIF/WebP export worker.
+
+The Permissions-Policy turns off the camera, geolocation, payment and USB, and allows two things
+for this origin only: `microphone` and `on-device-speech-recognition`. Both are for the Script
+window (D-96, D-105), which opens the microphone when you turn listening or recording on and lets
+go of it when you turn it off. Recognition runs in Chrome with `processLocally` set, so Chrome
+refuses to start rather than send audio to a server. Mogram keeps the last sixteen recognised
+words in memory to find its place in the script, and stores none of them. Recording (the Record
+button, after a count-in, with a red light while it runs) keeps each beat's take as an asset in
+this browser and, through the editor, in the project's files; a cloud diagram uploads it with
+its next save like any picture. Takes pass between the Script window and the editor over a
+`BroadcastChannel`, which only pages of this origin in this browser can join. Chrome downloads its
+language pack once, from Google, the first time. A script pasted into `/prompter` is kept in
+this browser's local storage and sent nowhere.
 
 ## 8. Exports
 

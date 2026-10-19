@@ -1,5 +1,6 @@
-import { mkdirSync, readFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { strToU8, zipSync } from "fflate";
+import { mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, type Locator, type Page } from "@playwright/test";
 import { strFromU8, unzipSync } from "fflate";
@@ -20,7 +21,12 @@ export async function shot(
 /** Console errors and uncaught exceptions; tests assert there are none. */
 export function watchErrors(page: Page): string[] {
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
+  page.on("pageerror", (error) => {
+    // React's development build times server components with performance.measure, which throws
+    // on a page that ends in notFound(). It isn't in a production build, and nothing is broken.
+    if (/Failed to execute 'measure' on 'Performance'/.test(error.message)) return;
+    errors.push(`pageerror: ${error.message}`);
+  });
   page.on("console", (message) => {
     if (message.type() !== "error") return;
     const text = message.text();
@@ -132,6 +138,34 @@ export async function openYaml(page: Page, yaml: string): Promise<string> {
   return id;
 }
 
+/** A new draft holding a whole project: several folders, opened as a zip. */
+export async function openProject(
+  page: Page,
+  files: Record<string, string>,
+  options: { allowEmptyRoot?: boolean } = {},
+): Promise<string> {
+  const id = await openDraft(page, "blank");
+  await page.getByRole("button", { name: "Diagram menu" }).click();
+  await page.getByRole("menuitem", { name: /Open files/ }).click();
+  const zipped = zipSync(
+    Object.fromEntries(Object.entries(files).map(([path, text]) => [path, strToU8(text)])),
+  );
+  await page
+    .getByRole("dialog", { name: "Open files" })
+    .locator('input[type="file"][multiple]')
+    .setInputFiles({
+      name: "project.zip",
+      mimeType: "application/zip",
+      buffer: Buffer.from(zipped),
+    });
+  await expect(page.getByRole("dialog", { name: "Open files" })).toHaveCount(0);
+  if (!options.allowEmptyRoot)
+    await expect(
+      page.locator('[data-layer="diagram"] [data-kind="component"]').first(),
+    ).toBeVisible();
+  return id;
+}
+
 /** Opens one of the inspector's tabs: Element, Style or Arrange; Diagram or Canvas. */
 export async function inspectorTab(page: Page, name: string): Promise<void> {
   await page
@@ -146,4 +180,57 @@ export async function openSection(page: Page, title: string): Promise<void> {
     .getByRole("region", { name: "Inspector" })
     .getByRole("button", { name: title, exact: true });
   if ((await header.getAttribute("aria-expanded")) === "false") await header.click();
+}
+
+/**
+ * The built-in concepts as their files have them, so journeys through the library keep
+ * working as it grows: how many there are, by topic, and which are explainers (no parts).
+ */
+export function conceptLibrary(): {
+  readonly all: number;
+  readonly explainers: number;
+  readonly inTopic: (topic: string) => number;
+} {
+  const root = fileURLToPath(new URL("../../../packages/concepts/content/", import.meta.url));
+  const concepts = readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .flatMap((topic) =>
+      readdirSync(join(root, topic.name))
+        .filter((file) => file.endsWith(".mogram.yaml"))
+        .map((file) => ({
+          topic: topic.name,
+          explainer: !/^\s+roles:/m.test(readFileSync(join(root, topic.name, file), "utf8")),
+        })),
+    );
+  return {
+    all: concepts.length,
+    explainers: concepts.filter((concept) => concept.explainer).length,
+    inTopic: (topic) => concepts.filter((concept) => concept.topic === topic).length,
+  };
+}
+
+/** "1 concept", "12 concepts": how the library counts them. */
+export function conceptCount(count: number): string {
+  return `${count} ${count === 1 ? "concept" : "concepts"}`;
+}
+
+/** Records the first two beats in a Script window: a count-in, read, move on, read, stop. */
+export async function recordTwoBeats(script: Page): Promise<void> {
+  // A window in the background has its timers slowed: the count-in would crawl.
+  await script.bringToFront();
+  await expect(script.locator('[data-beat="0"][data-reading="true"]')).toBeVisible();
+  await script.keyboard.press("r");
+  await expect(script.getByTestId("recording-state")).toHaveText(/each beat is kept/, {
+    timeout: 8_000,
+  });
+  await script.waitForTimeout(1500);
+  await script.keyboard.press("ArrowRight");
+  await expect(script.locator('[data-beat="0"]')).toHaveAttribute("data-voice", "recorded", {
+    timeout: 10_000,
+  });
+  await script.waitForTimeout(1500);
+  await script.keyboard.press("r");
+  await expect(script.locator('[data-beat="1"]')).toHaveAttribute("data-voice", "recorded", {
+    timeout: 10_000,
+  });
 }

@@ -11,6 +11,17 @@ const file = (name: string, text: string | Uint8Array, relative?: string): File 
 };
 
 describe("opening files from the computer (AC-2)", () => {
+  it("opens inert code verbatim and rejects code larger than 200 KB", async () => {
+    const code = "<script>globalThis.executed = true</script>\n  indented\n";
+    const result = await readProject([
+      file("mogram.yaml", "mogram: 1\n"),
+      file("snippet.html", code),
+    ]);
+    expect(result["snippet.html"]).toBe(code);
+    await expect(
+      readProject([file("mogram.yaml", "mogram: 1\n"), file("large.ts", "x".repeat(200_001))]),
+    ).rejects.toThrow("200 KB");
+  });
   it("opens a single .mogram.yaml", async () => {
     const files = await readProject([
       file("checkout.mogram.yaml", "components:\n  web: generic/server\n"),

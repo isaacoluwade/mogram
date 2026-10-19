@@ -3,6 +3,8 @@
 import { createStore, del, entries, get, set, values, type UseStore } from "idb-keyval";
 import { nanoid } from "nanoid";
 import { conceptInfo } from "@mogram/core/concepts";
+import { deckInfo, projectAbout, type ProjectAbout } from "@mogram/core/deck";
+import { DiagramLoader } from "@mogram/core/nested";
 import type { ConceptSummary } from "@/lib/api/contracts";
 import type { ProjectFiles } from "@mogram/core/model";
 import { withName } from "@/features/files/project-name";
@@ -31,6 +33,9 @@ export interface DraftSummary {
   readonly thumbnail: string | null;
   /** Set when the draft is a concept (D-83, D-85), so the library can offer it. */
   readonly concept: ConceptSummary | null;
+  readonly deck: { readonly slides: number } | null;
+  /** What it is and how far along: slides, scenes, beats written and recorded. */
+  readonly about: ProjectAbout;
 }
 
 let stores: { drafts: UseStore; thumbnails: UseStore } | null = null;
@@ -60,6 +65,23 @@ function conceptSummary(files: ProjectFiles): DraftSummary["concept"] {
   }
 }
 
+function deckSummary(files: ProjectFiles): DraftSummary["deck"] {
+  try {
+    const info = deckInfo(files, new DiagramLoader(files));
+    return info === null ? null : { slides: info.slides };
+  } catch {
+    return null;
+  }
+}
+
+function aboutSummary(files: ProjectFiles): ProjectAbout {
+  try {
+    return projectAbout(files, new DiagramLoader(files));
+  } catch {
+    return { kind: "diagram", slides: 0, scenes: 0, beats: 0, scripted: 0, recorded: 0 };
+  }
+}
+
 export async function listDrafts(): Promise<DraftSummary[]> {
   const [drafts, thumbnails] = await Promise.all([
     values<Draft>(db().drafts),
@@ -74,6 +96,8 @@ export async function listDrafts(): Promise<DraftSummary[]> {
       updatedAt: draft.updatedAt,
       thumbnail: thumbnailOf.get(draft.id) ?? null,
       concept: conceptSummary(draft.files),
+      deck: deckSummary(draft.files),
+      about: aboutSummary(draft.files),
     }))
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
 }

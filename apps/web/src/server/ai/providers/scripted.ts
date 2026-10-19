@@ -40,6 +40,33 @@ const DATABASES: Readonly<Record<string, string>> = {
 /** The scripts, tried in order; the first whose words match the request runs. */
 const SCRIPTS: readonly { readonly match: RegExp; readonly script: Script }[] = [
   {
+    // A deck (D-107): a slide for a diagram already in the project, and words for its beat.
+    match: /\bslides?\b/i,
+    script: (step) =>
+      step === 0
+        ? {
+            text: "I'll add a slide for the flow, with words to say over its first beat.",
+            calls: [
+              {
+                name: "add_slide",
+                input: { diagram: "flow", title: "How it flows" },
+              },
+              {
+                name: "set_beat_words",
+                input: {
+                  folder: "flow",
+                  beat: 1,
+                  caption: "A request arrives.",
+                  script: "Everything starts when a request arrives at the front door.",
+                },
+              },
+            ],
+          }
+        : step === 1
+          ? { text: "Added a slide, How it flows, with a script for its first beat." }
+          : null,
+  },
+  {
     match: /\bscal(e|es|ing)\b/i,
     script: (step) =>
       step === 0

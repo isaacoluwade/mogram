@@ -1,7 +1,14 @@
-import type { Node } from "yaml";
+import { visit, type Node } from "yaml";
 import type {
   CardRef,
+  CodeContent,
+  ImageContent,
+  Deck,
+  DeckEntry,
   Component,
+  Part,
+  ContainerLayout,
+  Meter,
   FlowBehaviour,
   Scale,
   ScaleSize,
@@ -19,7 +26,15 @@ import type {
   TrafficPattern,
 } from "../model/types";
 import { humanize, isValidName } from "../model/names";
-import { resolveFromFolder } from "../model/paths";
+import { basename, resolveFromFolder } from "../model/paths";
+import { lineRange, listingOf, type LineRange } from "../code/listing";
+import {
+  CODE_LANGUAGES,
+  CODE_FONT_SIZES,
+  CODE_LANGUAGE_ALIASES,
+  isCodeLanguage,
+  languageForFile,
+} from "../presets/code";
 import {
   CANVAS_THEMES,
   CONTAINER_ALIASES,
@@ -54,7 +69,7 @@ import {
 } from "../presets/connectors";
 import { SHAPES, isShapeId, type ShapeId } from "../presets/shapes";
 import { TONE_NAMES } from "../presets/tones";
-import type { DiagnosticSink, Position } from "./diagnostics";
+import { DiagnosticSink, type Position } from "./diagnostics";
 import { didYouMean, listOptions } from "./suggest";
 import {
   asString,
@@ -81,8 +96,10 @@ import type {
   Mutable,
 } from "./raw";
 import { normalizeHex } from "../presets/color";
+import { PAGES, isPage } from "../presets/pages";
 import { parsePaint } from "../presets/paint";
 import { SectionReader } from "./read-base";
+import { FormulaError, isFormula, parseFormula, readsModel } from "../values/formula";
 import {
   CONCEPT_PLATFORMS,
   CONCEPT_TOPICS,
@@ -97,7 +114,7 @@ const PLATFORM_IDS = CONCEPT_PLATFORMS.map((p) => p.id);
 import { LONGEST_CYCLE, PATTERN_DEFAULTS, SHORTEST_CYCLE } from "../capacity/patterns";
 
 const TRAFFIC_PATTERNS = ["steady", "waves", "bursts"];
-import { STYLE_KEYS, type NamedStyles, type StyleTarget } from "./styles";
+import { STYLE_KEYS, STYLE_SOURCES, type NamedStyles, type StyleTarget } from "./styles";
 import { LayoutReader } from "./read-layout";
 import { StoryReader } from "./read-story";
 import { parseEndpoint } from "./endpoints";
@@ -112,18 +129,25 @@ export type {
   RawConnection,
   RawDecoration,
   RawLayout,
+  RawControl,
   RawScene,
+  RawStory,
   RawTour,
   StepPositions,
   FileContribution,
 } from "./raw";
+
+/** The most slides a deck holds. */
+const MAX_SLIDES = 400;
 
 const SETTINGS_KEYS = [
   "mogram",
   "name",
   "description",
   "concept",
+  "deck",
   "theme",
+  "page",
   "background",
   "grid",
   "libraries",
@@ -138,6 +162,8 @@ const SECTION_KEYS = [
   "groups",
   "connections",
   "scenes",
+  "stories",
+  "controls",
   "tours",
   "layout",
 ] as const;
@@ -162,10 +188,84 @@ export const COMPONENT_KEYS = [
   "opens",
   "link",
   "data",
+  "show",
+  "mark",
+  "on",
+  "along",
+  "cell",
+  "like",
   ...CAPACITY_KEYS,
 ];
+/** The most parts an element can have (D-104). */
+const MAX_PARTS = 64;
+
+/** What only an image takes, and what only code takes. */
+const IMAGE_KEYS: readonly string[] = ["src", "fit"];
+const CODE_KEYS: readonly string[] = ["text", "file", "lines", "language", "title", "numbers"];
+
+/** Keys every other shape ignores: the content of images and code, and their parts. */
+const MEDIA_KEYS = new Set([...IMAGE_KEYS, ...CODE_KEYS, "parts"]);
+
+/** Keys an image ignores (D-102): it has no tone, fill, typography, state or motion. */
+const NOT_FOR_IMAGES = new Set([
+  ...CODE_KEYS,
+  "tone",
+  "fill",
+  "font",
+  "font_size",
+  "bold",
+  "italic",
+  "align",
+  "text_color",
+  "state",
+  "motion",
+  "intensity",
+  "speed",
+  "lid",
+  "slant",
+  "wave",
+  "value",
+  "max",
+  "limit",
+  "as",
+  "unit",
+]);
+
+/** Keys code ignores (D-103): it has no label, tone, state or motion, and its font is mono. */
+const NOT_FOR_CODE = new Set([
+  ...IMAGE_KEYS,
+  "label",
+  "tone",
+  "font",
+  "bold",
+  "italic",
+  "align",
+  "text_color",
+  "state",
+  "motion",
+  "intensity",
+  "speed",
+  "lid",
+  "slant",
+  "wave",
+  "value",
+  "max",
+  "limit",
+  "as",
+  "unit",
+]);
+
 export const SHAPE_KEYS = [
   "shape",
+  "src",
+  "fit",
+  "text",
+  "file",
+  "lines",
+  "language",
+  "title",
+  "numbers",
+  "parts",
   "style",
   "label",
   "in",
@@ -195,6 +295,17 @@ export const SHAPE_KEYS = [
   "text_color",
   "link",
   "data",
+  "show",
+  "mark",
+  "on",
+  "along",
+  "cell",
+  "like",
+  "value",
+  "max",
+  "limit",
+  "as",
+  "unit",
   ...CAPACITY_KEYS,
 ];
 export const CONTAINER_KEYS = [
@@ -209,6 +320,11 @@ export const CONTAINER_KEYS = [
   "icon",
   "link",
   "data",
+  "show",
+  "mark",
+  "layout",
+  "gap",
+  "columns",
 ];
 export const GROUP_KEYS = ["label", "members", "link", "data"];
 export const CONNECTION_KEYS = [
@@ -234,7 +350,108 @@ export const CONNECTION_KEYS = [
   "data",
   "traffic",
   "share",
+  "show",
 ];
+
+/** What a copy (`like:`) takes from the element it copies: what it is and how it looks. */
+const LIKE_KEYS: readonly string[] = [
+  "type",
+  "shape",
+  "style",
+  "label",
+  "color",
+  "icon",
+  "tone",
+  "fill",
+  "stroke",
+  "stroke_width",
+  "dash",
+  "corner",
+  "lid",
+  "slant",
+  "wave",
+  "shadow",
+  "opacity",
+  "font",
+  "font_size",
+  "bold",
+  "italic",
+  "align",
+  "text_color",
+  "data",
+  "like",
+  // What an image or a listing shows, and its parts (D-102 to D-104).
+  "src",
+  "fit",
+  "text",
+  "file",
+  "lines",
+  "language",
+  "title",
+  "numbers",
+  "parts",
+];
+
+export const CONTAINER_LAYOUTS = ["row", "column", "grid"] as const;
+/** Space between the children of a container with a layout, in grid units, when not written. */
+export const DEFAULT_LAYOUT_GAP = 2;
+/** The furthest cell of a grid. */
+export const MAX_CELL = 63;
+
+type LikeSection = "components" | "shapes" | "containers";
+
+interface LikeSource {
+  readonly section: LikeSection;
+  readonly entries: ReadonlyMap<string, MapEntry>;
+}
+
+/** Every component, shape and container as written, by name, for `like:` to copy from. */
+export type Likes = ReadonlyMap<string, LikeSource>;
+
+/**
+ * Reads every file's elements as written, before any is turned into a model, so one can be a
+ * copy of another in any file (as named styles are read first).
+ */
+export function readLikes(files: readonly ParsedFile[]): Likes {
+  const likes = new Map<string, LikeSource>();
+  // What's wrong with a key is said when its file is read; here they're only collected.
+  const quiet = new DiagnosticSink();
+  for (const file of files) {
+    const root = file.doc.contents;
+    if (file.broken || !isMap(root)) continue;
+    for (const section of mapEntries(file, root, quiet)) {
+      if (section.key !== "components" && section.key !== "shapes" && section.key !== "containers")
+        continue;
+      if (!isMap(section.value)) continue;
+      for (const element of mapEntries(file, section.value, quiet)) {
+        if (likes.has(element.key)) continue;
+        const entries = new Map<string, MapEntry>();
+        if (isMap(element.value)) {
+          for (const entry of mapEntries(file, element.value, quiet)) {
+            // Read with each copy, perhaps from another file: its problems are reported
+            // where it's written, once.
+            if (entry.value !== null)
+              visit(entry.value, (_, node) => {
+                if (node !== null && typeof node === "object" && "range" in node)
+                  STYLE_SOURCES.set(node as Node, file);
+              });
+            entries.set(entry.key, entry);
+          }
+        } else if (isScalar(element.value) && typeof element.value.value === "string") {
+          // `web: generic/service` and `tank: cylinder` are short for a type or a shape.
+          STYLE_SOURCES.set(element.value, file);
+          entries.set(section.key === "shapes" ? "shape" : "type", {
+            key: section.key === "shapes" ? "shape" : "type",
+            keyNode: element.keyNode,
+            value: element.value,
+          });
+        }
+        likes.set(element.key, { section: section.key, entries });
+      }
+    }
+  }
+  return likes;
+}
 
 export const CURRENT_FORMAT_VERSION = 1;
 export const DEFAULT_COMPONENT_TYPE = "generic/service";
@@ -245,6 +462,7 @@ export function readFile(
   folder: string,
   sink: DiagnosticSink,
   styles: NamedStyles = new Map(),
+  likes: Likes = new Map(),
 ): FileContribution {
   const out: FileContribution = {
     file: file.path,
@@ -256,13 +474,15 @@ export function readFile(
     decorations: [],
     layout: [],
     scenes: [],
+    stories: [],
+    controls: [],
     tours: [],
     hasLayoutKey: false,
   };
   const root = file.doc.contents;
   if (file.broken || root === null || !isMap(root)) return out;
 
-  const reader = new ElementReader(file, folder, sink, styles);
+  const reader = new ElementReader(file, folder, sink, styles, likes);
   const story = new StoryReader(file, folder, sink);
   const layout = new LayoutReader(file, folder, sink);
   for (const entry of mapEntries(file, root, sink)) {
@@ -306,6 +526,12 @@ export function readFile(
       case "scenes":
         story.readScenes(entry, out.scenes);
         break;
+      case "stories":
+        story.readStories(entry, out.stories);
+        break;
+      case "controls":
+        story.readControls(entry, out.controls);
+        break;
       case "tours":
         story.readTours(entry, out.tours);
         break;
@@ -332,7 +558,9 @@ function emptySettings(at: Position): RawSettings {
     name: null,
     description: null,
     concept: null,
+    deck: null,
     theme: null,
+    page: null,
     background: null,
     grid: null,
     libraries: null,
@@ -348,6 +576,7 @@ class ElementReader extends SectionReader {
     folder: string,
     sink: DiagnosticSink,
     private readonly styles: NamedStyles,
+    private readonly likes: Likes,
   ) {
     super(file, folder, sink);
   }
@@ -418,6 +647,9 @@ class ElementReader extends SectionReader {
       case "concept":
         settings.concept = this.readConcept(entry);
         return;
+      case "deck":
+        settings.deck = this.readDeck(entry);
+        return;
       case "theme": {
         const theme = asString(entry.value);
         if (isCanvasTheme(theme)) settings.theme = theme;
@@ -426,6 +658,14 @@ class ElementReader extends SectionReader {
             at,
             `"${theme ?? ""}" isn't a canvas theme.${didYouMean(theme ?? "", CANVAS_THEMES)} Choose one of ${listOptions(CANVAS_THEMES)}.`,
           );
+        return;
+      }
+      case "page": {
+        // `16:9` is a plain string in YAML 1.2; a number (`1`) or anything else isn't a page.
+        const page = asString(entry.value);
+        if (isPage(page)) settings.page = page;
+        else if (page !== "none")
+          this.sink.error(at, `"page" should be ${PAGES.join(", ")} or none.`);
         return;
       }
       case "background": {
@@ -571,6 +811,288 @@ class ElementReader extends SectionReader {
     return { at, summary, topic, platform, tags, roles };
   }
 
+  /**
+   * `deck:` (D-99): the slides, in order, with sections between them. What needs another folder
+   * (does it hold a diagram, has its story that step) is checked by `checkDeck`, which can look.
+   */
+  private readDeck(entry: MapEntry): Deck | null {
+    const at = this.pos(entry.keyNode);
+    if (!isMap(entry.value)) {
+      this.sink.error(
+        this.pos(entry.value ?? entry.keyNode),
+        `"deck" should have its slides listed below it, like "slides: [title, the_flow]".`,
+      );
+      return null;
+    }
+    const fields = this.body("deck", entry.value, ["frame", "captions", "slides"], "deck");
+    const here = this.folder;
+    const folderOf = (written: string): string | null =>
+      resolveFromFolder(here, written.trim().replace(/\/+$/, ""));
+
+    let frame: string | null = null;
+    const frameEntry = fields.get("frame");
+    const frameWord = this.optionalString(frameEntry, `The deck's frame`);
+    if (frameWord !== null && frameWord.trim() !== "" && frameWord !== "none") {
+      frame = folderOf(frameWord);
+      if (frame === null)
+        this.sink.error(
+          this.pos(frameEntry?.value),
+          `"frame" is "${frameWord}", which is outside the project.`,
+        );
+    }
+
+    let captions = true;
+    const captionsEntry = fields.get("captions");
+    if (captionsEntry !== undefined && !isNullish(captionsEntry.value)) {
+      const word = asString(captionsEntry.value)?.trim().toLowerCase();
+      if (word === "on" || word === "true") captions = true;
+      else if (word === "off" || word === "false") captions = false;
+      else this.sink.error(this.pos(captionsEntry.value), `"captions" should be on or off.`);
+    }
+
+    const entries: DeckEntry[] = [];
+    const slidesEntry = fields.get("slides");
+    if (slidesEntry !== undefined && !isNullish(slidesEntry.value)) {
+      if (!isSeq(slidesEntry.value)) {
+        this.sink.error(
+          this.pos(slidesEntry.value),
+          `A deck's slides should be a list, each a folder that holds a diagram.`,
+        );
+      } else {
+        let number = 0;
+        for (const [item, raw] of slidesEntry.value.items.entries()) {
+          const node = nodeOf(raw);
+          const where = this.pos(node);
+          const source = { file: where.file, line: where.line };
+          const plain = asString(node);
+          let written: string | null = plain;
+          let body: Node | null = null;
+          if (plain === null && isMap(node)) {
+            const pairs = this.entries(node);
+            const first = pairs[0];
+            if (pairs.length === 1 && first !== undefined) {
+              if (first.key === "section") {
+                const title = asString(first.value)?.trim() ?? "";
+                if (title === "") this.sink.error(where, `A section needs a title.`);
+                else entries.push({ kind: "section", item, title, source });
+                continue;
+              }
+              written = first.key;
+              body = first.value;
+            }
+          }
+          if (written === null || written.trim() === "") {
+            this.sink.error(
+              where,
+              `An entry in a deck's slides should be a folder, like "- title", or "- section: Getting started".`,
+            );
+            continue;
+          }
+          number++;
+          if (number > MAX_SLIDES) {
+            this.sink.error(
+              where,
+              `A deck holds up to ${MAX_SLIDES} slides; the rest are left out.`,
+            );
+            break;
+          }
+          const folder = folderOf(written);
+          if (folder === null) {
+            this.sink.error(
+              where,
+              `Slide ${number} is "${written}", which is outside the project.`,
+            );
+            continue;
+          }
+          const keys = isNullish(body)
+            ? new Map<string, MapEntry>()
+            : this.body(
+                written,
+                body,
+                ["story", "from", "to", "scene", "title", "frame", "skip"],
+                "slide",
+              );
+          const word = (key: string) =>
+            this.optionalString(keys.get(key), `The ${key} of slide ${number}`)?.trim() ?? null;
+          entries.push({
+            kind: "slide",
+            item,
+            folder,
+            story: word("story"),
+            from: word("from"),
+            to: word("to"),
+            scene: word("scene"),
+            title: word("title"),
+            frame: this.optionalBoolean(keys.get("frame"), `slide ${number}`, "frame") ?? true,
+            skip: this.optionalBoolean(keys.get("skip"), `slide ${number}`, "skip") ?? false,
+            source,
+          });
+        }
+      }
+    }
+    return { frame, captions, entries, source: { file: at.file, line: at.line } };
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Copies and layouts (D-87)
+
+  /**
+   * `like: other` (D-87): the element is written as a copy of another of its kind. The other's
+   * type or shape, look, label and data lie under this one's own keys; where it is, what it's
+   * connected to and what happens to it are its own.
+   */
+  private withLike(
+    name: string,
+    fields: Map<string, MapEntry>,
+    section: LikeSection,
+  ): { fields: Map<string, MapEntry>; like: string | null } {
+    const entry = fields.get("like");
+    if (entry === undefined || isNullish(entry.value)) return { fields, like: null };
+    const other = asString(entry.value);
+    const source = other === null ? undefined : this.likes.get(other);
+    if (other === null || other === name || source === undefined || source.section !== section) {
+      const known = [...this.likes].filter(([, s]) => s.section === section).map(([n]) => n);
+      this.sink.error(
+        this.pos(entry.value),
+        other === name
+          ? `"${name}" can't be a copy of itself.`
+          : source !== undefined
+            ? `"${name}" is like "${other ?? ""}", but one is under ${section}: and the other under ${source.section}:. A copy is the same kind of thing.`
+            : `"${name}" is like "${other ?? ""}", but there is no such element under ${section}:.${didYouMean(other ?? "", known)}`,
+      );
+      return { fields, like: null };
+    }
+    const merged = new Map(fields);
+    const seen = new Set([name]);
+    for (let from: string | null = other, depth = 0; from !== null && depth < 16; depth++) {
+      if (seen.has(from)) break;
+      seen.add(from);
+      const copy: LikeSource | undefined = this.likes.get(from);
+      if (copy === undefined || copy.section !== section) break;
+      for (const [key, value] of copy.entries)
+        if (LIKE_KEYS.includes(key) && !merged.has(key)) merged.set(key, value);
+      // A copy of a copy takes what that one took.
+      const next: MapEntry | undefined = copy.entries.get("like");
+      from = next === undefined ? null : asString(next.value);
+    }
+    return { fields: merged, like: other };
+  }
+
+  /**
+   * A meter's keys (D-88): `value` and `max` are numbers, names of values or formulas; `as` is
+   * how it's drawn; `limit` where it warns; `unit` what follows the number.
+   */
+  private readMeter(fields: ReadonlyMap<string, MapEntry>, name: string): Meter {
+    const formula = (key: "value" | "max", fallback: string): string => {
+      const entry = fields.get(key);
+      if (entry === undefined || isNullish(entry.value)) return fallback;
+      const raw = scalarValue(entry.value);
+      const text = typeof raw === "number" ? String(raw) : typeof raw === "string" ? raw : "";
+      try {
+        parseFormula(text);
+        return text.trim().replace(/^=/, "").trim();
+      } catch (error) {
+        this.sink.error(
+          this.pos(entry.value),
+          `The ${key} of "${name}" should be a number, the name of a value, or a formula like "= used / total * 100". ${error instanceof FormulaError ? error.message : ""}`.trim(),
+        );
+        return fallback;
+      }
+    };
+    const limitEntry = fields.get("limit");
+    const limit = limitEntry === undefined ? null : scalarValue(limitEntry.value);
+    if (limitEntry !== undefined && typeof limit !== "number")
+      this.sink.error(
+        this.pos(limitEntry.value),
+        `The limit of "${name}" should be a number: the value it turns red at.`,
+      );
+    return {
+      value: formula("value", "0"),
+      max: formula("max", "100"),
+      as:
+        this.optionalLiteral<Meter["as"]>(
+          fields.get("as"),
+          ["bar", "ring", "number"],
+          name,
+          "meter",
+        ) ?? "bar",
+      limit: typeof limit === "number" ? limit : null,
+      unit: this.optionalString(fields.get("unit"), `The unit of "${name}"`) ?? "",
+    };
+  }
+
+  /** `along: 30%` or `0.3`: how far along the connection something rides on. */
+  private readAlong(entry: MapEntry | undefined, owner: string): number | null {
+    return this.optionalPercent(entry, `How far along "${owner}" sits`);
+  }
+
+  /** `cell: [column, row]`, counted from 0. */
+  private readCell(entry: MapEntry | undefined, owner: string): { x: number; y: number } | null {
+    if (entry === undefined || isNullish(entry.value)) return null;
+    const cell = this.readPair(entry.value, owner, "cell");
+    if (cell === null) return null;
+    if (cell[0] < 0 || cell[1] < 0 || cell[0] > MAX_CELL || cell[1] > MAX_CELL) {
+      this.sink.error(
+        this.pos(entry.value),
+        `The cell of "${owner}" is [column, row], each from 0 to ${MAX_CELL}.`,
+      );
+      return null;
+    }
+    return { x: cell[0], y: cell[1] };
+  }
+
+  /** `layout: row | column | grid`, with `gap` (grid units, or `none`) and a grid's `columns`. */
+  private readContainerLayout(
+    fields: ReadonlyMap<string, MapEntry>,
+    name: string,
+  ): ContainerLayout | null {
+    const kind = this.optionalLiteral<ContainerLayout["kind"]>(
+      fields.get("layout"),
+      CONTAINER_LAYOUTS,
+      name,
+      "layout",
+    );
+    const gapEntry = fields.get("gap");
+    const columnsEntry = fields.get("columns");
+    if (kind === null) {
+      for (const entry of [gapEntry, columnsEntry])
+        if (entry !== undefined)
+          this.sink.warning(
+            this.pos(entry.keyNode),
+            `"${entry.key}" is for a container with a layout (row, column or grid), so it is ignored on "${name}".`,
+          );
+      return null;
+    }
+    let gap = DEFAULT_LAYOUT_GAP;
+    if (gapEntry !== undefined && !isNullish(gapEntry.value)) {
+      const value = scalarValue(gapEntry.value);
+      if (value === "none") gap = 0;
+      else if (typeof value === "number" && value >= 0 && value <= 20) gap = value;
+      else
+        this.sink.error(
+          this.pos(gapEntry.value),
+          `The gap of "${name}" should be a number of grid units from 0 to 20, or "none".`,
+        );
+    }
+    let columns: number | null = null;
+    if (columnsEntry !== undefined && !isNullish(columnsEntry.value)) {
+      const value = scalarValue(columnsEntry.value);
+      if (kind !== "grid")
+        this.sink.warning(
+          this.pos(columnsEntry.keyNode),
+          `"columns" is for a grid, so it is ignored on "${name}".`,
+        );
+      else if (typeof value === "number" && Number.isInteger(value) && value >= 1 && value <= 24)
+        columns = value;
+      else
+        this.sink.error(
+          this.pos(columnsEntry.value),
+          `The columns of "${name}" should be a whole number from 1 to 24.`,
+        );
+    }
+    return { kind, gap, columns };
+  }
+
   // ---------------------------------------------------------------------------------------------
   // Elements
 
@@ -602,19 +1124,20 @@ class ElementReader extends SectionReader {
 
   readComponent(name: string, node: Node | null, at: Position): RawComponent {
     const shorthandType = isScalar(node) && typeof node.value === "string" ? node.value : null;
-    const styled = this.withStyle(
+    const copied = this.withLike(
       name,
       shorthandType === null
         ? this.body(name, node, COMPONENT_KEYS, "component")
         : new Map<string, MapEntry>(),
-      "component",
+      "components",
     );
+    const styled = this.withStyle(name, copied.fields, "component");
     const fields = styled.fields;
     const type =
       shorthandType ??
       this.optionalString(fields.get("type"), `The type of "${name}"`) ??
       DEFAULT_COMPONENT_TYPE;
-    return this.componentFrom(name, fields, at, type, null, null, styled.style);
+    return this.componentFrom(name, fields, at, type, null, null, styled.style, copied.like);
   }
 
   /**
@@ -623,12 +1146,13 @@ class ElementReader extends SectionReader {
    */
   readShape(name: string, node: Node | null, at: Position): RawComponent {
     const shorthand = isScalar(node) && typeof node.value === "string" ? node.value : null;
-    const styled = this.withStyle(
+    const copied = this.withLike(
       name,
       shorthand === null ? this.body(name, node, SHAPE_KEYS, "shape") : new Map<string, MapEntry>(),
-      "shape",
+      "shapes",
     );
-    const fields = styled.fields;
+    const styled = this.withStyle(name, copied.fields, "shape");
+    const fields = new Map(styled.fields);
     let shape: ShapeId = "rectangle";
     if (shorthand !== null) {
       if (isShapeId(shorthand)) shape = shorthand;
@@ -641,6 +1165,7 @@ class ElementReader extends SectionReader {
       shape =
         this.optionalEnum(fields.get("shape"), SHAPES, isShapeId, name, "shape") ?? "rectangle";
     }
+    this.dropKeysNotFor(shape, name, fields);
     const widthEntry = fields.get("stroke_width");
     const width = widthEntry === undefined ? null : scalarValue(widthEntry.value);
     if (widthEntry !== undefined && (typeof width !== "number" || width < 0 || width > 8))
@@ -667,7 +1192,7 @@ class ElementReader extends SectionReader {
       );
     const strokeEntry = fields.get("stroke");
     const strokeText = strokeEntry === undefined ? null : asString(strokeEntry.value);
-    const look: ShapeLook = {
+    const look: Mutable<ShapeLook> = {
       tone: this.optionalLiteral<Tone>(fields.get("tone"), TONE_NAMES, name, "tone") ?? "neutral",
       fill: this.optionalPaint(fields.get("fill"), name, "fill"),
       stroke: strokeText === "none" ? "none" : this.optionalColor(strokeEntry, name),
@@ -683,7 +1208,32 @@ class ElementReader extends SectionReader {
       opacity: typeof opacity === "number" && opacity >= 0 && opacity <= 100 ? opacity : 100,
       text: this.readTextLook(fields, name, { colorKey: "text_color", align: "center" }),
     };
-    return this.componentFrom(name, fields, at, `shape/${shape}`, shape, look, styled.style);
+    // Code's text is a listing's: large enough to read on a slide, small enough to fit one.
+    const size = look.text.fontSize;
+    if (
+      shape === "code" &&
+      size !== null &&
+      (size < CODE_FONT_SIZES.min || size > CODE_FONT_SIZES.max)
+    ) {
+      this.sink.warning(
+        this.pos(fields.get("font_size")?.value),
+        `The font size of "${name}" should be from ${CODE_FONT_SIZES.min} to ${CODE_FONT_SIZES.max} for code.`,
+      );
+      look.text = {
+        ...look.text,
+        fontSize: Math.min(CODE_FONT_SIZES.max, Math.max(CODE_FONT_SIZES.min, size)),
+      };
+    }
+    return this.componentFrom(
+      name,
+      fields,
+      at,
+      `shape/${shape}`,
+      shape,
+      look,
+      styled.style,
+      copied.like,
+    );
   }
 
   private componentFrom(
@@ -694,6 +1244,7 @@ class ElementReader extends SectionReader {
     shape: ShapeId | null,
     look: ShapeLook | null,
     style: string | null,
+    liked: string | null,
   ): RawComponent {
     const label = this.optionalString(fields.get("label"), `The label of "${name}"`);
     const state = this.optionalEnum(
@@ -705,6 +1256,12 @@ class ElementReader extends SectionReader {
     );
     const opens = fields.get("opens");
     const opensPath = opens === undefined ? null : this.readOpens(name, opens);
+    const parts = this.readParts(fields.get("parts"), shape, name);
+    if (parts.size > 0 && opensPath !== null)
+      this.sink.error(
+        this.pos(opens?.value),
+        `"${name}" has parts, so it can't also open a nested diagram.`,
+      );
     const model: Mutable<Component> = {
       kind: "component",
       name,
@@ -735,18 +1292,242 @@ class ElementReader extends SectionReader {
         ) ?? "normal",
       color: this.optionalColor(fields.get("color"), name),
       card: this.readCard(name, fields.get("card")),
-      opens: opensPath,
+      opens: parts.size > 0 ? null : opensPath,
       shape,
       look,
+      image: shape === "image" ? this.readImage(fields, name, at) : null,
       style,
+      code: shape === "code" ? this.readCode(fields, name, at) : null,
+      parts,
+      show: this.readShow(fields.get("show"), name),
+      mark: this.readMark(fields.get("mark"), name),
+      on: this.optionalString(fields.get("on"), `What "${name}" rides on`),
+      along: this.readAlong(fields.get("along"), name),
+      cell: this.readCell(fields.get("cell"), name),
+      like: liked,
+      meter: shape === "meter" ? this.readMeter(fields, name) : null,
       ...this.readFlowBehaviour(fields, name, shape),
     };
+    const onEntry = fields.get("on");
     return {
       model,
       at,
       parentRef: this.optionalRef(fields.get("in")),
       opensAt: opens === undefined ? null : this.pos(opens.value),
+      onAt: onEntry === undefined ? null : this.pos(onEntry.value),
     };
+  }
+
+  /**
+   * Keys that mean nothing for this kind of shape (D-102, D-103): an image has no tone or
+   * typography, code has no label or state, and only images and code have their content keys.
+   * Each is dropped with a warning that says so.
+   */
+  private dropKeysNotFor(shape: ShapeId, name: string, fields: Map<string, MapEntry>): void {
+    const notFor =
+      shape === "image" ? NOT_FOR_IMAGES : shape === "code" ? NOT_FOR_CODE : MEDIA_KEYS;
+    for (const key of [...fields.keys()]) {
+      if (!notFor.has(key)) continue;
+      const entry = fields.get(key);
+      fields.delete(key);
+      if (entry === undefined) continue;
+      const what = shape === "image" ? "an image" : shape === "code" ? "code" : `a ${shape}`;
+      this.sink.warning(
+        this.pos(entry.keyNode),
+        IMAGE_KEYS.includes(key) && shape !== "image"
+          ? `"${key}" only applies to an image, so it is ignored on "${name}".`
+          : CODE_KEYS.includes(key) && shape !== "code"
+            ? `"${key}" only applies to code, so it is ignored on "${name}".`
+            : `"${key}" doesn't apply to ${what}, so it is ignored on "${name}".`,
+      );
+    }
+  }
+
+  /**
+   * `src:` and `fit:` (D-102). Whether `src` names a picture in the project is checked once the
+   * whole project is known (`parseDiagram`), since this reader sees one file.
+   */
+  private readImage(
+    fields: ReadonlyMap<string, MapEntry>,
+    name: string,
+    at: Position,
+  ): ImageContent {
+    const src = this.optionalString(fields.get("src"), `The picture "${name}" shows`)?.trim() ?? "";
+    if (src === "")
+      this.sink.error(at, `"${name}" is an image, so it needs "src", like src: images/portal.png.`);
+    const fitEntry = fields.get("fit");
+    let fit: ImageContent["fit"] = "contain";
+    if (fitEntry !== undefined && !isNullish(fitEntry.value)) {
+      const word = asString(fitEntry.value);
+      if (word === "contain" || word === "cover") fit = word;
+      else this.sink.error(this.pos(fitEntry.value), `"fit" should be contain or cover.`);
+    }
+    return { src, path: null, fit, natural: null };
+  }
+
+  /**
+   * `text:` or `file:`, `lines:`, `language:`, `title:` and `numbers:` (D-103). A file's lines
+   * are read once the whole project is known (`parseDiagram`); written text is read here.
+   */
+  private readCode(fields: ReadonlyMap<string, MapEntry>, name: string, at: Position): CodeContent {
+    const text = this.optionalString(fields.get("text"), `The text of "${name}"`);
+    const file =
+      this.optionalString(fields.get("file"), `The file "${name}" shows`)?.trim() ?? null;
+    if (text === null && file === null)
+      this.sink.error(
+        at,
+        `"${name}" is code, so it needs "text" or "file", like file: code/main.tf.`,
+      );
+    if (text !== null && file !== null)
+      this.sink.error(at, `"${name}" has both "text" and "file". Use one.`);
+    if (file !== null && resolveFromFolder(this.folder, file) === null)
+      this.sink.error(
+        this.pos(fields.get("file")?.value),
+        `"${name}" shows "${file}", which is outside the project.`,
+      );
+
+    const sliceEntry = fields.get("lines");
+    let slice: LineRange | null = null;
+    if (sliceEntry !== undefined && !isNullish(sliceEntry.value)) {
+      slice = lineRange(scalarValue(sliceEntry.value));
+      if (slice === null)
+        this.sink.error(
+          this.pos(sliceEntry.value),
+          `"lines" should be a line or a range, like 12 or 12-31.`,
+        );
+    }
+
+    const languageEntry = fields.get("language");
+    let language = languageForFile(text === null ? file : null);
+    if (languageEntry !== undefined && !isNullish(languageEntry.value)) {
+      const word = asString(languageEntry.value)?.trim().toLowerCase() ?? "";
+      if (isCodeLanguage(word)) language = word;
+      else {
+        const alias = CODE_LANGUAGE_ALIASES[word];
+        language = "plain";
+        this.sink.warning(
+          this.pos(languageEntry.value),
+          `"language" is "${word}", which isn't one Mogram colours, so it is shown plain.${
+            alias === undefined ? didYouMean(word, CODE_LANGUAGES) : ` Did you mean "${alias}"?`
+          }`,
+        );
+      }
+    }
+
+    // A file's name is its header unless the title says otherwise; `none` is no header.
+    const titleWord = this.optionalString(fields.get("title"), `The title of "${name}"`);
+    const title =
+      titleWord === null
+        ? file === null || text !== null
+          ? null
+          : basename(file)
+        : titleWord.trim() === "none" || titleWord.trim() === ""
+          ? null
+          : titleWord;
+
+    return {
+      text,
+      file: text === null ? file : null,
+      path: null,
+      slice,
+      language,
+      title,
+      numbers: this.optionalBoolean(fields.get("numbers"), name, "numbers") ?? false,
+      listing: listingOf(text, language, slice),
+    };
+  }
+
+  /**
+   * `parts:` (D-104): named lines of a listing (`name: 2`, `required: 2-6`) or regions of a
+   * picture (`field: [x, y, w, h]`), each with how it starts.
+   */
+  private readParts(
+    entry: MapEntry | undefined,
+    shape: ShapeId | null,
+    owner: string,
+  ): ReadonlyMap<string, Part> {
+    const parts = new Map<string, Part>();
+    if (entry === undefined || isNullish(entry.value)) return parts;
+    if (shape !== "image" && shape !== "code") {
+      this.sink.error(
+        this.pos(entry.keyNode),
+        `"${owner}" can't have parts: only images and code do.`,
+      );
+      return parts;
+    }
+    if (!isMap(entry.value)) {
+      this.sink.error(
+        this.pos(entry.value),
+        shape === "code"
+          ? `The parts of "${owner}" should be named lines, like "name: 2" or "required: 2-6".`
+          : `The parts of "${owner}" should be named regions, like "name_field: [0.36, 0.42, 0.5, 0.08]".`,
+      );
+      return parts;
+    }
+    const where = shape === "code" ? "lines" : "area";
+    for (const item of this.entries(entry.value)) {
+      const at = this.pos(item.keyNode);
+      if (parts.size >= MAX_PARTS) {
+        this.sink.error(at, `"${owner}" can have up to ${MAX_PARTS} parts; the rest are left out.`);
+        break;
+      }
+      if (!isValidName(item.key)) {
+        this.sink.error(
+          at,
+          `"${item.key}" isn't a valid part name. Use letters, numbers and "_", starting with a letter.`,
+        );
+        continue;
+      }
+      const target = `${owner}.${item.key}`;
+      const long = isMap(item.value);
+      const fields = long
+        ? this.body(target, item.value, [where, "show", "tone", "mark"], "part")
+        : new Map<string, MapEntry>();
+      const value = long ? (fields.get(where)?.value ?? null) : item.value;
+      const look = {
+        name: item.key,
+        show: this.readShow(fields.get("show"), target),
+        tone: this.optionalLiteral<Tone>(fields.get("tone"), TONE_NAMES, target, "tone"),
+        mark: this.readMark(fields.get("mark"), target),
+        source: { file: at.file, line: at.line },
+      };
+      if (shape === "code") {
+        const lines = lineRange(scalarValue(value));
+        if (lines === null) {
+          this.sink.error(
+            this.pos(value ?? item.keyNode),
+            `Part "${item.key}" of "${owner}" should be a line or a range, like 12 or 12-31.`,
+          );
+          continue;
+        }
+        parts.set(item.key, { ...look, kind: "lines", first: lines[0], last: lines[1] });
+        continue;
+      }
+      const area = this.readArea(value);
+      if (area === null) {
+        this.sink.error(
+          this.pos(value ?? item.keyNode),
+          `Part "${item.key}" of "${owner}" should be four numbers from 0 to 1: x, y, width, height.`,
+        );
+        continue;
+      }
+      parts.set(item.key, { ...look, kind: "area", ...area });
+    }
+    return parts;
+  }
+
+  /** `[x, y, w, h]`, each a share of the picture, inside it. Null when it isn't one. */
+  private readArea(
+    node: Node | null,
+  ): { readonly x: number; readonly y: number; readonly w: number; readonly h: number } | null {
+    if (!isSeq(node) || node.items.length !== 4) return null;
+    const [x, y, w, h] = node.items.map((item) => scalarValue(nodeOf(item)));
+    if (typeof x !== "number" || typeof y !== "number") return null;
+    if (typeof w !== "number" || typeof h !== "number") return null;
+    // A region drawn to the picture's edge can come out a hair over 1: allow for it.
+    const near = 1e-6;
+    if (x < 0 || y < 0 || w <= 0 || h <= 0 || x + w > 1 + near || y + h > 1 + near) return null;
+    return { x, y, w: Math.min(w, 1 - x), h: Math.min(h, 1 - y) };
   }
 
   /** What a component does to traffic passing through it (capacity, D-82). */
@@ -1002,6 +1783,9 @@ class ElementReader extends SectionReader {
         ) ?? "worst",
       color: this.optionalColor(fields.get("color"), name),
       card: this.readCard(name, fields.get("card")),
+      show: this.readShow(fields.get("show"), name),
+      mark: this.readMark(fields.get("mark"), name),
+      layout: this.readContainerLayout(fields, name),
     };
     return { model, at, parentRef: this.optionalRef(fields.get("in")) };
   }
@@ -1073,6 +1857,26 @@ class ElementReader extends SectionReader {
         name,
         "direction",
       ) ?? "forward";
+    // `traffic: "= rps"` (D-88): worked out for each picture, so a dial can drive the model.
+    const trafficEntry = fields.get("traffic");
+    const trafficText = trafficEntry === undefined ? null : asString(trafficEntry.value);
+    let trafficFormula: string | null = null;
+    if (isFormula(trafficText)) {
+      try {
+        const parsed = parseFormula(trafficText);
+        if (readsModel(parsed))
+          this.sink.error(
+            this.pos(trafficEntry?.value),
+            `The traffic on "${name}" feeds the model, so its formula can't read the model back (load, copies, traffic or count).`,
+          );
+        else trafficFormula = trafficText.trim().replace(/^=/, "").trim();
+      } catch (error) {
+        this.sink.error(
+          this.pos(trafficEntry?.value),
+          `The traffic on "${name}" isn't a formula Mogram can read. ${error instanceof FormulaError ? error.message : ""}`.trim(),
+        );
+      }
+    }
     const model: Mutable<Connection> = {
       kind: "connection",
       style: styled.style,
@@ -1112,8 +1916,10 @@ class ElementReader extends SectionReader {
       text,
       backupFor: backup === undefined ? null : asString(backup.value),
       card: this.readCard(name, fields.get("card")),
-      ...this.readTraffic(fields.get("traffic"), name),
+      ...this.readTraffic(isFormula(trafficText) ? undefined : fields.get("traffic"), name),
       share: this.optionalPercent(fields.get("share"), `The share of "${name}"`),
+      show: this.readShow(fields.get("show"), name),
+      trafficFormula,
     };
     return {
       model,

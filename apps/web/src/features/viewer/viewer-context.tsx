@@ -1,5 +1,7 @@
 "use client";
 
+import type { ViewerDeck } from "@/features/deck/viewer-deck";
+import { VoicePlayer } from "@/features/assets/voice-player";
 import { createContext, use, useEffect, useState, type ReactNode } from "react";
 import { useStore } from "zustand";
 import { useShallow } from "zustand/react/shallow";
@@ -24,20 +26,32 @@ const ViewerContext = createContext<ViewerContextValue | null>(null);
 export function ViewerProvider({
   files,
   present,
+  root = "",
+  record = false,
+  deck = null,
   children,
 }: {
   files: ProjectFiles;
   present: boolean;
+  root?: string;
+  /** Starts in Record mode (D-99). */
+  record?: boolean;
+  /** The deck this diagram is a slide of, when it is one (D-99). */
+  deck?: ViewerDeck | null;
   children: ReactNode;
 }) {
   const [value] = useState<ViewerContextValue>(() => {
-    const store = createViewerStore(files, present);
+    const store = createViewerStore(files, present, root, record);
     const clock = new Clock();
-    return { store, clock, controller: new ViewerController(store, clock) };
+    const controller = new ViewerController(store, clock, deck);
+    // A deck or story playing by itself plays each beat's recording (D-105).
+    if (typeof window !== "undefined") controller.sound = new VoicePlayer();
+    return { store, clock, controller };
   });
   useEffect(
     () => () => {
-      value.controller.animator.cancel();
+      // Nothing this viewer started may outlive it: not a camera move, not a story's next beat.
+      value.controller.dispose();
       value.clock.dispose();
     },
     [value],

@@ -14,7 +14,16 @@ import { setState } from "../actions";
 import { NamedStyleSection } from "./named-style";
 import { AllProperties } from "./all-properties";
 import { CardEditor } from "./card-editor";
-import { ColorField, CommitInput, FieldRow, InspectorSection, StatePicker } from "./fields";
+import { PresenceSection } from "./presence-section";
+import {
+  ColorField,
+  CommitInput,
+  FieldRow,
+  FieldStack,
+  InspectorSection,
+  NumberField,
+  StatePicker,
+} from "./fields";
 import {
   NameAndFile,
   StyleClipboard,
@@ -60,6 +69,7 @@ export function ContainerInspector({
     );
   }
   if (tab !== "element") return null;
+  const arranged = container.layout !== null;
   return (
     <>
       <InspectorSection title="Label">
@@ -68,6 +78,61 @@ export function ContainerInspector({
           value={container.label}
           onCommit={(label) => set(container.name, { label }, "Rename label")}
         />
+      </InspectorSection>
+      <PresenceSection diagram={diagram} name={container.name} />
+      <InspectorSection id="arranges" title="Arranges what's in it" defaultOpen={arranged}>
+        <FieldStack>
+          <SegmentedControl
+            label="Layout"
+            size="sm"
+            className="w-full [&>button]:flex-1"
+            value={container.layout?.kind ?? "free"}
+            onChange={(layout) =>
+              set(container.name, { layout: layout === "free" ? null : layout }, "Change layout")
+            }
+            options={[
+              { value: "free", label: "Freely" },
+              { value: "row", label: "Row" },
+              { value: "column", label: "Column" },
+              { value: "grid", label: "Grid" },
+            ]}
+          />
+          {container.layout !== null ? (
+            <FieldRow label="Gap">
+              <NumberField
+                label="Gap between them"
+                value={container.layout.gap}
+                min={0}
+                max={20}
+                onCommit={(gap) =>
+                  set(
+                    container.name,
+                    { gap: gap === 2 ? null : gap === 0 ? "none" : gap },
+                    "Change gap",
+                  )
+                }
+              />
+            </FieldRow>
+          ) : null}
+          {container.layout?.kind === "grid" ? (
+            <FieldRow label="Columns">
+              <NumberField
+                label="Columns"
+                value={container.layout.columns}
+                placeholder="Auto"
+                min={1}
+                max={24}
+                onCommit={(columns) => set(container.name, { columns }, "Change columns")}
+                onClear={() => set(container.name, { columns: null }, "Change columns")}
+              />
+            </FieldRow>
+          ) : null}
+        </FieldStack>
+        <p className="mt-2 text-caption text-fg-muted">
+          {container.layout === null
+            ? "What's inside is placed by hand. A row, column or grid places it for you, keeps room for the most it ever holds, and lets a story move things in and out."
+            : "It places what's inside, in the order written, and keeps room for the most it ever holds. Drag something in or out, with a step showing, to move it at that step."}
+        </p>
       </InspectorSection>
       <InspectorSection id="type" title="Type">
         <Select

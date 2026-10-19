@@ -1,5 +1,11 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
-import { diagramFileSet, parseDiagram, type ParseResult } from "@mogram/core/format";
+import { checkDeck, deckSlides, slideDiagram, type DeckSlide } from "@mogram/core/deck";
+import {
+  diagramFileSet,
+  parseDiagram,
+  sortDiagnostics,
+  type ParseResult,
+} from "@mogram/core/format";
 import type { Guide } from "../canvas/guides";
 import type { Box, Point } from "@mogram/core/layout";
 import type {
@@ -13,6 +19,16 @@ import type {
 import type { Anchor } from "@mogram/core/presets";
 import { EditError, type EditResult } from "@mogram/core/edit";
 import { followLevels, type Level } from "@mogram/core/nested";
+import { loaderFor } from "@/features/canvas/use-diagram";
+import {
+  cursorAtStep,
+  stepAt,
+  stepChange,
+  type Moment,
+  type StepRef,
+  type StoryCursor,
+} from "@mogram/core/picture";
+import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import type { TourCursor } from "@mogram/core/tours";
 import type { Camera } from "@/features/canvas/camera";
 import { preference, setPreference } from "@/lib/preferences";
@@ -32,7 +48,7 @@ export type Tool = "select" | "hand" | "connect" | "container" | "zone" | "text"
 export type PanelId = "library" | "inspector" | "code" | "tours" | "history";
 
 /** What the left column shows: the library, or the assistant beside it. */
-export type LeftTab = "library" | "concepts" | "assistant";
+export type LeftTab = "deck" | "library" | "concepts" | "assistant";
 
 /** An earlier version on the canvas, read-only (version history). */
 export interface Viewing {
@@ -130,6 +146,9 @@ export interface PathEdit {
 interface Snapshot {
   readonly files: ProjectFiles;
   readonly selection: readonly string[];
+  readonly root: string;
+  readonly deckRoot: string | null;
+  readonly slide: number | null;
   /** The nested level the step was made at: undo and redo go back there (07 §18 P1-14). */
   readonly folder: string;
   readonly levelPath: readonly string[];
@@ -144,6 +163,15 @@ interface Snapshot {
 export interface EditorState {
   // Document
   readonly files: ProjectFiles;
+  /**
+   * Root of the diagram being edited. For a deck slide this is the slide folder, so its stories,
+   * scenes and nested diagrams work as they do for any other diagram.
+   */
+  readonly root: string;
+  /** The deck folder when editing a slide, otherwise null. */
+  readonly deckRoot: string | null;
+  /** The zero-based entry index in the deck YAML, including section entries. */
+  readonly slide: number | null;
   /** Folder of the diagram being edited (nested levels open sub-folders, NE-1). */
   readonly folder: string;
   /** Components opened from the top, for breadcrumbs (NE-8). */
@@ -158,10 +186,24 @@ export interface EditorState {
   readonly camera: Camera;
   readonly viewport: { readonly width: number; readonly height: number };
 
-  // Scenes and motion (SC-6 … SC-9, PR-9)
+  // Scenes, stories and motion (SC-6 … SC-9, D-86, PR-9)
   readonly scene: string | null;
-  readonly previousScene: string | null;
+  /**
+   * The step shown and edited (D-86): the canvas shows the picture once it has played, and
+   * what's changed about an element there belongs to that step. Index -1 is the story's
+   * opening, before any step. Null outside a story.
+   */
+  readonly story: StepRef | null;
+  /**
+   * Whether the dock under the canvas lists the scenes or a story's beats, when both are on
+   * offer. What it shows is `dockOf`: a slide with no scenes only has a story.
+   */
+  readonly dock: "scenes" | "story";
+  /** The moment being left while a change of scene or step animates. */
+  readonly previous: Moment | null;
   readonly transitionStart: number | null;
+  /** How long that change takes, in seconds. */
+  readonly transitionSeconds: number;
   readonly playing: boolean;
   readonly motionPaused: boolean;
   /** The minimap overlay is shown (bottom left, above the zoom controls). */
@@ -249,6 +291,9 @@ export interface EditorActions {
   setCamera(camera: Camera): void;
   setViewport(viewport: { width: number; height: number }): void;
   setScene(scene: string | null, now: number): void;
+  /** Shows a step of a story (index -1: its opening), or leaves the story with null. */
+  setStory(story: StepRef | null, now: number): void;
+  setDock(dock: "scenes" | "story"): void;
   settleTransition(): void;
   setPlaying(playing: boolean): void;
   setMotionPaused(paused: boolean): void;
@@ -292,6 +337,10 @@ export interface EditorActions {
   closeLevel(depth?: number): void;
   /** Straight to any level, however far from this one (Find across nested diagrams). */
   showLevel(levelPath: readonly string[], folder: string): void;
+  /** Shows a slide by its deck-entry index, or the deck itself when index is null. */
+  showSlide(index: number | null): void;
+  /** Opens the deck's shared frame diagram for editing, if one is configured. */
+  showDeckFrame(): boolean;
   setOpenCard(name: string | null): void;
   setTour(cursor: TourCursor | null): void;
   setTourAuthoring(tour: string | null): void;
@@ -319,16 +368,18 @@ const COALESCE_MS = 600;
 
 const parseCache = new WeakMap<ProjectFiles, Map<string, ParseResult>>();
 const shownCache = new WeakMap<ProjectFiles, Map<string, ParseResult>>();
+const editorCache = new WeakMap<ProjectFiles, Map<string, ParseResult>>();
+const slidesCache = new WeakMap<ProjectFiles, Map<string, readonly DeckSlide[]>>();
 /** Which files each set was typed from, so a half-typed edit can show the last one that parsed. */
 const typedFrom = new WeakMap<ProjectFiles, ProjectFiles>();
 const LINEAGE_LIMIT = 200;
 
-function cached(
-  cache: WeakMap<ProjectFiles, Map<string, ParseResult>>,
+function cached<T>(
+  cache: WeakMap<ProjectFiles, Map<string, T>>,
   files: ProjectFiles,
   folder: string,
-  compute: () => ParseResult,
-): ParseResult {
+  compute: () => T,
+): T {
   let byFolder = cache.get(files);
   if (byFolder === undefined) {
     byFolder = new Map();
@@ -344,7 +395,14 @@ function cached(
 
 /** Exactly what the files say (an unreadable file contributes nothing). */
 export function parseExact(files: ProjectFiles, folder: string): ParseResult {
-  return cached(parseCache, files, folder, () => parseDiagram(files, folder));
+  return cached(parseCache, files, folder, () => {
+    const exact = parseDiagram(files, folder);
+    if (exact.diagram.settings.deck === null) return exact;
+    const deckDiagnostics = checkDeck(files, loaderFor(files), folder);
+    return deckDiagnostics.length === 0
+      ? exact
+      : { ...exact, diagnostics: sortDiagnostics([...exact.diagnostics, ...deckDiagnostics]) };
+  });
 }
 
 /**
@@ -366,10 +424,157 @@ export function parseCached(files: ProjectFiles, folder: string): ParseResult {
   });
 }
 
+/**
+ * The diagram being edited, as its files say. On a slide, the deck's problems are listed with
+ * the slide's own (D-100), but the diagram is the slide's: edits go to its files, and what it
+ * takes from its deck is shown, not written. (Its built-in values, like `%slide%`, are filled
+ * in for the canvas by `slideShown`.)
+ */
+export function parseEditor(
+  files: ProjectFiles,
+  folder: string,
+  deckRoot: string | null,
+): ParseResult {
+  const raw = parseCached(files, folder);
+  if (deckRoot === null || deckRoot === folder) return raw;
+  return cached(editorCache, files, JSON.stringify([folder, deckRoot]), () => {
+    const deck = parseExact(files, deckRoot);
+    return deck.diagnostics.length === 0
+      ? raw
+      : { ...raw, diagnostics: sortDiagnostics([...raw.diagnostics, ...deck.diagnostics]) };
+  });
+}
+
+/** The slides of the deck being edited, worked out once for a set of files. */
+export function slidesOf(files: ProjectFiles, deckRoot: string): readonly DeckSlide[] {
+  return cached(slidesCache, files, deckRoot, () => deckSlides(loaderFor(files), deckRoot));
+}
+
+/** The slide showing, as it plays: its number, section and stretch. Null off a slide. */
+export function currentSlide(state: {
+  readonly files: ProjectFiles;
+  readonly deckRoot: string | null;
+  readonly slide: number | null;
+}): DeckSlide | null {
+  if (state.deckRoot === null || state.slide === null) return null;
+  return slidesOf(state.files, state.deckRoot).find((slide) => slide.item === state.slide) ?? null;
+}
+
+/**
+ * A slide's diagram as its deck shows it (D-99), for the canvas: its built-in values (`%slide%`,
+ * `%section%`, `%deck%`, `%slides%`) filled in. Never what's edited.
+ */
+export function slideShown(
+  files: ProjectFiles,
+  diagram: Diagram,
+  deckRoot: string | null,
+  slide: DeckSlide | null,
+): Diagram {
+  if (deckRoot === null || slide === null) return diagram;
+  return slideDiagram(
+    parseCached(files, deckRoot).diagram,
+    diagram,
+    slide,
+    slidesOf(files, deckRoot).length,
+  );
+}
+
+/**
+ * Which deck entry is showing once the files change (D-100): the same one when it still shows
+ * this folder, else the first entry that does. A command that moves entries (the rail, the code
+ * view, the assistant) never leaves the editor pointing at the wrong one.
+ */
+function slideAfter(
+  files: ProjectFiles,
+  state: { readonly deckRoot: string | null; readonly slide: number | null; readonly root: string },
+): number | null {
+  if (state.deckRoot === null || state.slide === null) return state.slide;
+  const entries = parseCached(files, state.deckRoot).diagram.settings.deck?.entries ?? [];
+  const same = entries.find((entry) => entry.item === state.slide);
+  if (same?.kind === "slide" && same.folder === state.root) return state.slide;
+  return (
+    entries.find((entry) => entry.kind === "slide" && entry.folder === state.root)?.item ?? null
+  );
+}
+
+/**
+ * Whether the Scenes strip is on offer (D-109). Always for a diagram on its own. On a deck's
+ * slide only when its diagram has scenes: a deck is told with stories, and an empty strip of
+ * scenes beside one is a second way to do the same thing.
+ */
+export function scenesOffered(state: {
+  readonly viewing: Viewing | null;
+  readonly files: ProjectFiles;
+  readonly root: string;
+  readonly deckRoot: string | null;
+  readonly slide: number | null;
+}): boolean {
+  if (state.deckRoot === null || state.slide === null) return true;
+  return topDiagram(shownFiles(state), state.root).scenes.length > 0;
+}
+
+/** What the dock shows: the strip that was picked, or the story when scenes aren't on offer. */
+export function dockOf(
+  state: Parameters<typeof scenesOffered>[0] & { readonly dock: "scenes" | "story" },
+): "scenes" | "story" {
+  return scenesOffered(state) ? state.dock : "story";
+}
+
 /** The nested levels along `path` (NE-8), read through the parse cache above. */
 /** The diagram whose scenes tell the story at every level: the top one (NE-14, D-23). */
-export function storyDiagram(files: ProjectFiles): Diagram {
-  return parseCached(files, "").diagram;
+export function topDiagram(files: ProjectFiles, root: string): Diagram {
+  return parseCached(files, root).diagram;
+}
+
+const cursors = new WeakMap<Diagram, Map<string, StoryCursor | null>>();
+
+/** The cursor once a step has played (the opening for index -1), remembered per diagram. */
+export function storyCursor(top: Diagram, story: StepRef | null): StoryCursor | null {
+  if (story === null) return null;
+  let known = cursors.get(top);
+  if (known === undefined) {
+    known = new Map();
+    cursors.set(top, known);
+  }
+  const key = `${story.story}:${story.index}`;
+  let cursor = known.get(key);
+  if (cursor === undefined) {
+    cursor = cursorAtStep(top, story);
+    known.set(key, cursor);
+  }
+  return cursor;
+}
+
+const moments = new WeakMap<StoryCursor, Map<string | null, Moment>>();
+const sceneMoments = new Map<string | null, Moment>();
+
+/**
+ * The moment of a scene and a place in a story: the same object for the same two, so whatever
+ * is worked out from it (the picture, the resolved state) is worked out once.
+ */
+export function momentOf(scene: string | null, story: StoryCursor | null): Moment {
+  let known = story === null ? sceneMoments : moments.get(story);
+  if (known === undefined) {
+    known = new Map();
+    if (story !== null) moments.set(story, known);
+  }
+  let moment = known.get(scene);
+  if (moment === undefined) {
+    moment = { scene, story };
+    known.set(scene, moment);
+  }
+  return moment;
+}
+
+/** Where the editor is: its scene, and the step of the story being shown (D-86). */
+export function editorMoment(state: {
+  readonly viewing: Viewing | null;
+  readonly files: ProjectFiles;
+  readonly root: string;
+  readonly scene: string | null;
+  readonly story: StepRef | null;
+}): Moment {
+  return momentOf(state.scene, storyCursor(topDiagram(shownFiles(state), state.root), state.story));
 }
 
 /** How a scene names an element at a level: `aks.checkout` for `checkout` inside `aks` (SC-10). */
@@ -377,14 +582,32 @@ export function sceneTarget(levelPath: readonly string[], name: string): string 
   return [...levelPath, name].join(".");
 }
 
-export function levelsAlong(files: ProjectFiles, path: readonly string[]): Level[] {
+export function levelsAlong(files: ProjectFiles, path: readonly string[], root: string): Level[] {
   return followLevels(
     {
       has: (folder) => diagramFileSet(files, folder) !== null,
       load: (folder) => parseCached(files, folder),
     },
     path,
+    root,
   );
+}
+
+function editorLocation(
+  files: ProjectFiles,
+  requestedRoot: string,
+  slide: number | null = null,
+): { readonly root: string; readonly deckRoot: string | null; readonly slide: number | null } {
+  const diagram = parseCached(files, requestedRoot).diagram;
+  if (diagram.settings.deck === null) return { root: requestedRoot, deckRoot: null, slide: null };
+  const slides = slidesOf(files, requestedRoot);
+  // A link can ask for a slide by its number (`?slide=3`); the first otherwise.
+  const chosen = slides[(slide ?? 1) - 1] ?? slides[0];
+  return {
+    root: chosen?.folder ?? requestedRoot,
+    deckRoot: requestedRoot,
+    slide: chosen?.item ?? null,
+  };
 }
 
 /** A nested zoom under way, and what to do when it lands (switch level, set the camera). */
@@ -392,6 +615,10 @@ export type EditorLevelZoom = LevelZoomPlan & { readonly finish: () => void };
 
 export interface EditorInit {
   readonly files: ProjectFiles;
+  /** A folder of the project to edit by itself (D-97); the project's own diagram when left out. */
+  readonly root?: string;
+  /** In a deck, the slide to open on, by its number (D-100); the first when left out. */
+  readonly slide?: number;
   readonly panels?: Partial<Record<PanelId, boolean>>;
   readonly save?: SaveStatus;
 }
@@ -399,9 +626,15 @@ export interface EditorInit {
 let messageId = 0;
 
 export function createEditorStore(init: EditorInit): EditorStore {
+  const requestedRoot = init.root ?? "";
+  const location = editorLocation(init.files, requestedRoot, init.slide ?? null);
+  const { deckRoot, slide: initialSlide, root: initialRoot } = location;
   return createStore<EditorState & EditorActions>()((set, get) => ({
     files: init.files,
-    folder: "",
+    root: initialRoot,
+    deckRoot,
+    slide: initialSlide,
+    folder: initialRoot,
     levelPath: [],
     past: [],
     future: [],
@@ -411,14 +644,18 @@ export function createEditorStore(init: EditorInit): EditorStore {
     camera: { x: 0, y: 0, zoom: 1 },
     viewport: { width: 1200, height: 800 },
     scene: null,
-    previousScene: null,
+    story: null,
+    // A deck is told with stories; a diagram on its own opens on its scenes.
+    dock: deckRoot === null ? "scenes" : "story",
+    previous: null,
     transitionStart: null,
+    transitionSeconds: SCENE_TRANSITION,
     playing: false,
     // Reduced-motion users start paused; the motion button plays it if they want (PR-9).
     motionPaused: prefersReducedMotion(),
     showMinimap: false,
     panels: {
-      library: true,
+      library: deckRoot === null,
       inspector: true,
       code: false,
       tours: false,
@@ -451,7 +688,10 @@ export function createEditorStore(init: EditorInit): EditorStore {
     typing: null,
     message: null,
 
-    parsed: () => parseCached(shownFiles(get()), get().folder),
+    parsed: () => {
+      const state = get();
+      return parseEditor(shownFiles(state), state.folder, state.deckRoot);
+    },
     diagram: () => get().parsed().diagram,
 
     edit: (label, run, options) => {
@@ -499,6 +739,9 @@ export function createEditorStore(init: EditorInit): EditorStore {
       const snapshot: Snapshot = {
         files: state.files,
         selection: state.selection,
+        root: state.root,
+        deckRoot: state.deckRoot,
+        slide: state.slide,
         folder: state.folder,
         levelPath: state.levelPath,
         label,
@@ -512,6 +755,7 @@ export function createEditorStore(init: EditorInit): EditorStore {
         files: result.files,
         past,
         future: [],
+        slide: slideAfter(result.files, state),
         selection:
           result.select ??
           state.selection.filter((name) => existsIn(result.files, state.folder, name)),
@@ -525,6 +769,11 @@ export function createEditorStore(init: EditorInit): EditorStore {
       if (state.busy !== null || state.viewing !== null || state.assistant !== null) return;
       if (files === state.files) return;
       if (options?.typed === true && !typedFrom.has(files)) typedFrom.set(files, state.files);
+      const requestedRoot = state.deckRoot ?? state.root;
+      const replacementRoot = diagramFileSet(files, requestedRoot) === null ? "" : requestedRoot;
+      const location = options?.typed === true ? null : editorLocation(files, replacementRoot);
+      const sameLocation =
+        location === null || (location.root === state.root && location.deckRoot === state.deckRoot);
       set({
         files,
         past: [
@@ -532,6 +781,9 @@ export function createEditorStore(init: EditorInit): EditorStore {
           {
             files: state.files,
             selection: state.selection,
+            root: state.root,
+            deckRoot: state.deckRoot,
+            slide: state.slide,
             folder: state.folder,
             levelPath: state.levelPath,
             label,
@@ -539,7 +791,32 @@ export function createEditorStore(init: EditorInit): EditorStore {
           },
         ].slice(-HISTORY_LIMIT),
         future: [],
-        selection: state.selection.filter((name) => existsIn(files, state.folder, name)),
+        ...(location === null
+          ? { slide: slideAfter(files, state) }
+          : {
+              root: location.root,
+              deckRoot: location.deckRoot,
+              slide: location.slide,
+              folder: location.root,
+              levelPath: [],
+              scene: null,
+              story: null,
+              // Files that turn out to be a deck open on a slide's story.
+              ...(location.deckRoot !== null && state.deckRoot === null
+                ? { dock: "story" as const }
+                : {}),
+              playing: false,
+              previous: null,
+              transitionStart: null,
+              fitRequest: state.fitRequest + 1,
+              panels: {
+                ...state.panels,
+                library: location.deckRoot === null ? state.panels.library : false,
+              },
+            }),
+        selection: sameLocation
+          ? state.selection.filter((name) => existsIn(files, location?.root ?? state.folder, name))
+          : [],
         save: dirty(state.save),
       });
     },
@@ -558,6 +835,9 @@ export function createEditorStore(init: EditorInit): EditorStore {
           {
             files: state.files,
             selection: state.selection,
+            root: previous.root,
+            deckRoot: previous.deckRoot,
+            slide: previous.slide,
             folder: previous.folder,
             levelPath: previous.levelPath,
             label: previous.label,
@@ -584,6 +864,9 @@ export function createEditorStore(init: EditorInit): EditorStore {
           {
             files: state.files,
             selection: state.selection,
+            root: next.root,
+            deckRoot: next.deckRoot,
+            slide: next.slide,
             folder: next.folder,
             levelPath: next.levelPath,
             label: next.label,
@@ -612,13 +895,42 @@ export function createEditorStore(init: EditorInit): EditorStore {
     },
     setTool: (tool) => set({ tool, connect: null }),
     setCamera: (camera) => set({ camera }),
-    setViewport: (viewport) => set({ viewport }),
+    setViewport: (viewport) => {
+      const { panels, viewport: was } = get();
+      // Narrowed past the point where two side panels leave the canvas room: one at a time, as
+      // when a panel is opened on a narrow screen. The one on the right is the one in use.
+      const narrowed = viewport.width < NARROW_WIDTH && was.width >= NARROW_WIDTH;
+      const right = panels.inspector || panels.code || panels.tours || panels.history;
+      if (narrowed && panels.library && right)
+        set({ viewport, panels: { ...panels, library: false } });
+      else set({ viewport });
+    },
     setScene: (scene, now) => {
       const state = get();
       if (scene === state.scene) return;
-      set({ previousScene: state.scene, scene, transitionStart: now, viewerEntries: [] });
+      set({
+        previous: editorMoment(state),
+        scene,
+        transitionStart: now,
+        transitionSeconds: SCENE_TRANSITION,
+        viewerEntries: [],
+      });
     },
-    settleTransition: () => set({ previousScene: null, transitionStart: null }),
+    setStory: (story, now) => {
+      const state = get();
+      if (story?.story === state.story?.story && story?.index === state.story?.index) return;
+      const top = topDiagram(shownFiles(state), state.root);
+      const step = story === null ? null : stepAt(top, story);
+      set({
+        previous: editorMoment(state),
+        story,
+        transitionStart: now,
+        transitionSeconds: step === null ? SCENE_TRANSITION : stepChange(step),
+        viewerEntries: [],
+      });
+    },
+    setDock: (dock) => set({ dock }),
+    settleTransition: () => set({ previous: null, transitionStart: null }),
     setPlaying: (playing) => set({ playing }),
     setMotionPaused: (motionPaused) => set({ motionPaused }),
     toggleMinimap: () => set((state) => ({ showMinimap: !state.showMinimap })),
@@ -681,6 +993,9 @@ export function createEditorStore(init: EditorInit): EditorStore {
               {
                 files: state.files,
                 selection: state.selection,
+                root: state.root,
+                deckRoot: state.deckRoot,
+                slide: state.slide,
                 folder: state.folder,
                 levelPath: state.levelPath,
                 label: options.label,
@@ -696,6 +1011,7 @@ export function createEditorStore(init: EditorInit): EditorStore {
         files,
         past,
         future: [],
+        slide: slideAfter(files, state),
         selection:
           options.follow && here.length > 0
             ? here
@@ -724,7 +1040,7 @@ export function createEditorStore(init: EditorInit): EditorStore {
       // A nested level that isn't in that version: show its top level.
       const levelGone =
         state.levelPath.length > 0 &&
-        levelsAlong(shown, state.levelPath).length !== state.levelPath.length + 1;
+        levelsAlong(shown, state.levelPath, state.root).length !== state.levelPath.length + 1;
       set({
         viewing,
         selection: [],
@@ -732,7 +1048,9 @@ export function createEditorStore(init: EditorInit): EditorStore {
         drag: null,
         resize: null,
         pathEdit: null,
-        ...(levelGone ? { folder: "", levelPath: [], fitRequest: state.fitRequest + 1 } : {}),
+        ...(levelGone
+          ? { folder: state.root, levelPath: [], fitRequest: state.fitRequest + 1 }
+          : {}),
       });
     },
     revealInCode: (file, line) => {
@@ -758,7 +1076,7 @@ export function createEditorStore(init: EditorInit): EditorStore {
         selection: [],
         openCard: null,
         drag: null,
-        previousScene: null,
+        previous: null,
         transitionStart: null,
       }),
     showLevel: (levelPath, folder) =>
@@ -768,7 +1086,7 @@ export function createEditorStore(init: EditorInit): EditorStore {
         selection: [],
         openCard: null,
         drag: null,
-        previousScene: null,
+        previous: null,
         transitionStart: null,
       }),
     closeLevel: (depth) => {
@@ -776,15 +1094,94 @@ export function createEditorStore(init: EditorInit): EditorStore {
       const target = depth ?? state.levelPath.length - 1;
       if (target < 0 || target >= state.levelPath.length) return;
       const path = state.levelPath.slice(0, target);
-      const folder = levelsAlong(state.files, path).at(-1)?.folder ?? "";
+      const folder = levelsAlong(state.files, path, state.root).at(-1)?.folder ?? state.root;
       set({
         folder,
         levelPath: path,
         selection: [state.levelPath[target] ?? ""].filter((n) => n.length > 0),
         openCard: null,
-        previousScene: null,
+        previous: null,
         transitionStart: null,
       });
+    },
+    showSlide: (index) => {
+      const state = get();
+      if (state.deckRoot === null) return;
+      const files = shownFiles(state);
+      const deck = parseCached(files, state.deckRoot).diagram.settings.deck;
+      if (deck === null) return;
+      const current = index === null ? null : deck.entries.find((entry) => entry.item === index);
+      if (
+        index === state.slide &&
+        (index === null
+          ? state.root === state.deckRoot && state.folder === state.deckRoot
+          : current?.kind === "slide" &&
+            current.folder === state.root &&
+            current.folder === state.folder)
+      )
+        return;
+      if (index === null) {
+        set({
+          root: state.deckRoot,
+          folder: state.deckRoot,
+          slide: null,
+          levelPath: [],
+          selection: [],
+          scene: null,
+          story: null,
+          playing: false,
+          previous: null,
+          transitionStart: null,
+          fitRequest: state.fitRequest + 1,
+        });
+        return;
+      }
+      const entry = deck.entries.find((each) => each.item === index);
+      if (entry?.kind !== "slide" || diagramFileSet(files, entry.folder) === null) return;
+      set({
+        root: entry.folder,
+        folder: entry.folder,
+        slide: index,
+        levelPath: [],
+        selection: [],
+        scene: null,
+        story: null,
+        // A slide opens on its story: that's what a deck is told with (D-109).
+        dock: "story",
+        playing: false,
+        previous: null,
+        transitionStart: null,
+        fitRequest: state.fitRequest + 1,
+      });
+    },
+    showDeckFrame: () => {
+      const state = get();
+      if (state.deckRoot === null) return false;
+      const files = shownFiles(state);
+      const deck = parseCached(files, state.deckRoot).diagram.settings.deck;
+      if (deck === null) return false;
+      if (deck?.frame === null || deck?.frame === undefined) {
+        state.notify("Choose a frame diagram before editing it.");
+        return false;
+      }
+      if (diagramFileSet(files, deck.frame) === null) {
+        state.notify("The deck frame folder doesn't contain a diagram.", "error");
+        return false;
+      }
+      set({
+        root: deck.frame,
+        folder: deck.frame,
+        slide: null,
+        levelPath: [],
+        selection: [],
+        scene: null,
+        story: null,
+        playing: false,
+        previous: null,
+        transitionStart: null,
+        fitRequest: state.fitRequest + 1,
+      });
+      return true;
     },
     setOpenCard: (openCard) => set({ openCard }),
     setTour: (tour) => set({ tour }),
@@ -821,18 +1218,50 @@ function dirty(save: SaveStatus): SaveStatus {
 function levelOf(
   state: EditorState,
   step: Snapshot,
-): Partial<Pick<EditorState, "folder" | "levelPath" | "fitRequest" | "openCard">> {
+): Partial<
+  Pick<
+    EditorState,
+    "root" | "deckRoot" | "slide" | "folder" | "levelPath" | "fitRequest" | "openCard"
+  >
+> {
+  const slide = slideIndexFor(step.files, step.deckRoot, step.root, step.slide);
   const same =
+    step.root === state.root &&
+    step.deckRoot === state.deckRoot &&
+    slide === state.slide &&
     step.folder === state.folder &&
     step.levelPath.length === state.levelPath.length &&
     step.levelPath.every((name, i) => name === state.levelPath[i]);
   if (same) return {};
   return {
+    root: step.root,
+    deckRoot: step.deckRoot,
+    slide,
     folder: step.folder,
     levelPath: step.levelPath,
     openCard: null,
     fitRequest: state.fitRequest + 1,
   };
+}
+
+function slideIndexFor(
+  files: ProjectFiles,
+  deckRoot: string | null,
+  folder: string,
+  preferred: number | null,
+): number | null {
+  if (deckRoot === null || preferred === null) return preferred;
+  const entries = parseCached(files, deckRoot).diagram.settings.deck?.entries;
+  if (entries === undefined) return null;
+  const original = entries[preferred];
+  if (original?.kind === "slide" && original.folder === folder) return preferred;
+  let best: { index: number; distance: number } | null = null;
+  for (const [index, entry] of entries.entries()) {
+    if (entry.kind !== "slide" || entry.folder !== folder) continue;
+    const distance = Math.abs(index - preferred);
+    if (best === null || distance < best.distance) best = { index, distance };
+  }
+  return best?.index ?? null;
 }
 
 function existsIn(files: ProjectFiles, folder: string, name: string): boolean {

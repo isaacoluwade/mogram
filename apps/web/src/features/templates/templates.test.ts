@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { parseDiagram } from "@mogram/core/format";
+import { deckInfo } from "@mogram/core/deck";
 import { lintDiagram } from "@mogram/core/lint";
+import { DiagramLoader } from "@mogram/core/nested";
 import { CONTAINER_STYLE_INFO } from "@mogram/core/presets";
 import { isCatalogIcon } from "@mogram/icons";
 import { TEMPLATES } from "./index";
@@ -32,4 +34,15 @@ describe("templates", () => {
       }
     });
   }
+
+  it("the web app tour resolves to three slides in its linked diagram", () => {
+    const template = TEMPLATES.find((candidate) => candidate.id === "web-app-tour");
+    expect(template).toBeDefined();
+    if (template === undefined) return;
+
+    expect(deckInfo(template.files, new DiagramLoader(template.files))).toMatchObject({
+      slides: 3,
+      first: "architecture",
+    });
+  });
 });

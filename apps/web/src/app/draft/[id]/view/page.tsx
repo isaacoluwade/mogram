@@ -8,6 +8,11 @@ export const metadata: Metadata = { title: "Preview", robots: { index: false, fo
 export default async function DraftPreviewPage(props: PageProps<"/draft/[id]/view">) {
   const [{ id }, search] = await Promise.all([props.params, props.searchParams]);
   return (
-    <LocalViewer id={id} initialLink={parseDeepLink(search)} present={search.present === "1"} />
+    <LocalViewer
+      id={id}
+      initialLink={parseDeepLink(search)}
+      present={search.present === "1"}
+      record={search.record === "1"}
+    />
   );
 }

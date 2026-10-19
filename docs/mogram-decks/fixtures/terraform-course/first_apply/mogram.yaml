@@ -1,0 +1,35 @@
+# A terminal session revealed a part at a time: the real captured output, never typed out.
+# (P5: language console, parts that start hidden)
+mogram: 1
+name: The first apply
+shapes:
+  terminal:
+    shape: code
+    file: ../code/apply-resource-group.txt
+    language: console
+    title: none
+    font_size: 22
+    parts:
+      command: 1
+      plan: { lines: 3-17, show: hidden }
+      question: { lines: 19-23, show: hidden }
+      answer: { lines: 25-28, show: hidden }
+stories:
+  main:
+    - say: One command.
+      script: So this is the moment. One command, terraform apply.
+      focus: [terminal.command]
+    - say: It shows the plan first.
+      script: And the first thing it does is show you the plan again. One to add.
+      set: { terminal.plan: shown }
+    - say: Then it asks.
+      script: And then it stops, and it asks. Only yes will be accepted.
+      set: { terminal.question: shown }
+      focus: [terminal.question]
+    - say: Created.
+      script: You type yes, and a few seconds later the resource group exists.
+      set: { terminal.answer: { show: shown, mark: check } }
+layout:
+  terminal: { at: [20, 26], size: [200, 92] }
+  decorations:
+    title: { text: The first apply, style: title, font_size: 56, at: [20, 9] }

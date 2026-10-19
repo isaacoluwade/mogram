@@ -32,7 +32,15 @@ export interface Preferences {
   readonly gridStyle: GridStyle;
   /** What an earlier version shows changes against (version history, Show changes). */
   readonly historyChanges: HistoryChanges;
+  /** Diagrams pinned to the top of the home page, as `draft:<id>` or `cloud:<id>`. */
+  readonly homePinned: readonly string[];
+  /** The home page's list of everything: as cards or rows, and in what order. */
+  readonly homeView: HomeView;
+  readonly homeSort: HomeSort;
 }
+
+export type HomeView = "grid" | "list";
+export type HomeSort = "recent" | "name";
 
 /** The library's Basics tabs. */
 export type LibraryTab = "shapes" | "containers" | "notes" | "generic";
@@ -60,6 +68,9 @@ const DEFAULTS: Preferences = {
   showGrid: true,
   gridStyle: "dots",
   historyChanges: "previous",
+  homePinned: [],
+  homeView: "grid",
+  homeSort: "recent",
 };
 
 const strings = (value: unknown): string[] | null =>
@@ -91,6 +102,9 @@ function sanitise(value: unknown): Preferences {
     gridStyle: v.gridStyle === "lines" ? "lines" : "dots",
     historyChanges:
       HISTORY_CHANGES.find((mode) => mode === v.historyChanges) ?? DEFAULTS.historyChanges,
+    homePinned: (strings(v.homePinned) ?? []).slice(0, 200),
+    homeView: v.homeView === "list" ? "list" : "grid",
+    homeSort: v.homeSort === "name" ? "name" : "recent",
   };
 }
 

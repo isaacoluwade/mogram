@@ -2,8 +2,10 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { conceptInfo } from "@mogram/core/concepts";
+import { deckInfo, projectAbout, type ProjectAbout } from "@mogram/core/deck";
 import { setSetting } from "@mogram/core/edit";
 import { parseDiagram } from "@mogram/core/format";
+import { DiagramLoader } from "@mogram/core/nested";
 import type {
   DiagramDetail,
   DiagramSummary,
@@ -20,6 +22,7 @@ import {
 import { getDb, type Database } from "../db/client";
 import { diagram, revision, user, type StoredFiles } from "../db/schema";
 import { isThumbnailDataUrl, sanitizeProjectFiles } from "./sanitize";
+import { ownedAssetMetadata, recordAssetUses } from "../assets/service";
 
 /**
  * Cloud diagrams (AC-3, AC-4). Every query is scoped to the owner, so a private diagram is
@@ -77,7 +80,18 @@ function toSummary(row: DiagramRow): DiagramSummary {
     visibility: row.visibility,
     thumbnail: row.thumbnail,
     concept: conceptOf(row.files),
+    deck: deckOf(row.files),
+    about: aboutOf(row.files),
   };
+}
+
+/** What the diagram is and how far along, for its card. A project that can't be read is empty. */
+function aboutOf(files: StoredFiles): ProjectAbout {
+  try {
+    return projectAbout(files, new DiagramLoader(files));
+  } catch {
+    return { kind: "diagram", slides: 0, scenes: 0, beats: 0, scripted: 0, recorded: 0 };
+  }
 }
 
 /** Whether the diagram is a concept (D-83), read from its files as they're listed. */
@@ -86,6 +100,11 @@ function conceptOf(files: StoredFiles): DiagramSummary["concept"] {
   if (info === null) return null;
   const { summary, topic, platform, tags, kind } = info;
   return { summary, topic, platform, tags, kind };
+}
+
+function deckOf(files: StoredFiles): DiagramSummary["deck"] {
+  const info = deckInfo(files, new DiagramLoader(files));
+  return info === null ? null : { slides: info.slides };
 }
 
 function toDetail(row: DiagramRow): DiagramDetail {
@@ -149,7 +168,7 @@ export async function createDiagram(
     source?: VersionSource | undefined;
   },
 ): Promise<ServiceResult<DiagramDetail>> {
-  const cleaned = sanitizeProjectFiles(input.files);
+  const cleaned = sanitizeProjectFiles(input.files, await ownedAssetMetadata(ownerId, input.files));
   if ("error" in cleaned) return { ok: false, code: "invalid", message: cleaned.error };
   const db = await getDb();
   // The diagram and its first revision exist together or not at all.
@@ -164,6 +183,7 @@ export async function createDiagram(
       })
       .returning();
     if (inserted === undefined) throw new Error("Insert returned no row");
+    await recordAssetUses(tx, ownerId, inserted.id, inserted.files);
     await tx.insert(revision).values({
       diagramId: inserted.id,
       authorId: ownerId,
@@ -199,7 +219,7 @@ export async function saveDiagram(
       | undefined;
   },
 ): Promise<ServiceResult<{ version: number; updatedAt: string }>> {
-  const cleaned = sanitizeProjectFiles(input.files);
+  const cleaned = sanitizeProjectFiles(input.files, await ownedAssetMetadata(ownerId, input.files));
   if ("error" in cleaned) return { ok: false, code: "invalid", message: cleaned.error };
   const db = await getDb();
   return db.transaction(async (tx) => {
@@ -232,6 +252,7 @@ export async function saveDiagram(
       .where(eq(diagram.id, id))
       .returning();
     if (updated === undefined) throw new Error("Update returned no row");
+    await recordAssetUses(tx, ownerId, id, cleaned.files);
 
     const [latest, previous] = await tx
       .select()
@@ -587,7 +608,10 @@ export async function importRevisions(
   const rows: (typeof revision.$inferInsert)[] = [];
   let previous: StoredFiles | undefined;
   for (const version of versions) {
-    const cleaned = sanitizeProjectFiles(version.files);
+    const cleaned = sanitizeProjectFiles(
+      version.files,
+      await ownedAssetMetadata(ownerId, version.files),
+    );
     if ("error" in cleaned) return { ok: false, code: "invalid", message: cleaned.error };
     const createdAt = new Date(version.createdAt);
     // Only the past: an upload can't put versions after the ones made since.
@@ -610,6 +634,7 @@ export async function importRevisions(
   const db = await getDb();
   await db.transaction(async (tx) => {
     if (rows.length > 0) await tx.insert(revision).values(rows);
+    for (const row of rows) await recordAssetUses(tx, ownerId, id, row.files);
     await pruneRevisions(tx, id, now);
   });
   return ok({ imported: rows.length });

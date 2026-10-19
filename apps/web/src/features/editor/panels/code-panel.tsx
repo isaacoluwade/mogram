@@ -42,20 +42,34 @@ export function CodePanel({ onClose }: { onClose: () => void }) {
     codeReveal: s.codeReveal,
   }));
   const parsed = parseCached(files, folder);
+  // The files a code element shows (D-103) are edited here too, after the diagram's own.
+  const listings = useMemo(
+    () =>
+      new Set(
+        [...parsed.diagram.components.values()].flatMap((component) =>
+          component.code?.path != null && files[component.code.path] !== undefined
+            ? [component.code.path]
+            : [],
+        ),
+      ),
+    [parsed.diagram.components, files],
+  );
   const paths = useMemo(() => {
     const local = Object.keys(files).filter((path) => {
       const dir = dirname(path);
       return dir === folder || dir === joinPath(folder, "docs");
     });
-    return local
-      .filter((path) => isMogramFile(path) || path.endsWith(".md"))
-      .sort(
-        (a, b) =>
-          Number(!isMogramFile(a)) - Number(!isMogramFile(b)) ||
-          parsed.diagram.files.indexOf(a) - parsed.diagram.files.indexOf(b) ||
-          a.localeCompare(b),
-      );
-  }, [files, folder, parsed.diagram.files]);
+    const kind = (path: string) => (isMogramFile(path) ? 0 : path.endsWith(".md") ? 1 : 2);
+    return [
+      ...local.filter((path) => isMogramFile(path) || path.endsWith(".md")),
+      ...[...listings].filter((path) => !local.includes(path)),
+    ].sort(
+      (a, b) =>
+        kind(a) - kind(b) ||
+        parsed.diagram.files.indexOf(a) - parsed.diagram.files.indexOf(b) ||
+        a.localeCompare(b),
+    );
+  }, [files, folder, parsed.diagram.files, listings]);
   const active = codeFile !== null && files[codeFile] !== undefined ? codeFile : (paths[0] ?? null);
   const [creating, setCreating] = useState(false);
   const pending = useRef<{ readonly timer: number; readonly apply: () => void } | null>(null);
@@ -80,9 +94,14 @@ export function CodePanel({ onClose }: { onClose: () => void }) {
   const onChange = (text: string) => {
     if (active === null) return;
     if (pending.current !== null) window.clearTimeout(pending.current.timer);
+    const label = isMogramFile(active)
+      ? "Edit YAML"
+      : active.endsWith(".md")
+        ? "Edit card"
+        : "Edit code";
     const apply = () => {
       const state = store.getState();
-      state.replaceFiles({ ...state.files, [active]: text }, "Edit YAML", { typed: true });
+      state.replaceFiles({ ...state.files, [active]: text }, label, { typed: true });
     };
     const timer = window.setTimeout(() => {
       pending.current = null;
@@ -119,7 +138,7 @@ export function CodePanel({ onClose }: { onClose: () => void }) {
         >
           {paths.map((path) => (
             <TabsTrigger key={path} value={path} variant="pill" className="font-mono">
-              {path.slice(prefix.length)}
+              {path.startsWith(prefix) ? path.slice(prefix.length) : path}
               {(counts.get(path) ?? 0) > 0 ? (
                 <Badge tone="rose" size="sm">
                   {counts.get(path)}
@@ -176,7 +195,9 @@ export function CodePanel({ onClose }: { onClose: () => void }) {
               value={files[active] ?? ""}
               onChange={onChange}
               diagnostics={diagnostics}
-              language={active.endsWith(".md") ? "markdown" : "yaml"}
+              language={
+                isMogramFile(active) ? "yaml" : active.endsWith(".md") ? "markdown" : "plain"
+              }
               reveal={codeReveal?.file === active ? codeReveal : null}
             />
           </TabsContent>

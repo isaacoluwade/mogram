@@ -8,7 +8,7 @@ import { cn } from "@/lib/cn";
 import { OpenError, readProject } from "@/features/files/open";
 import { useEditor, useEditorStore } from "../editor-context";
 
-const ACCEPT = ".yaml,.yml,.mogram,.zip,.md,.svg,.png,.jpg,.jpeg,.gif,.webp";
+import { PROJECT_ACCEPT as ACCEPT } from "@/lib/api/contracts";
 
 /** Replaces the diagram with files from the computer (AC-2). One undo step brings it back. */
 export function OpenDialog() {

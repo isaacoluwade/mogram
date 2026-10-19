@@ -1,18 +1,25 @@
+import type { YAMLSeq } from "yaml";
 import { Scalar, YAMLMap, isMap, isScalar, isSeq, type Node } from "yaml";
+import { parseDiagram } from "../format/parse";
 import type {
   CardRef,
+  Connection,
   Diagram,
   GridPoint,
   GridSize,
   ProjectFiles,
   TextStyle,
   Tone,
+  Place,
 } from "../model/types";
 import { humanize, isValidName, toName } from "../model/names";
 import type { ShapeId } from "../presets/shapes";
 import type { ContainerStyleName, FlowPreset } from "../presets/names";
+import type { Mark, Presence } from "../presets/marks";
 import { formatPaint, samePaint, solid, type Paint } from "../presets/paint";
 import { NOTE_FILL } from "../presets/text";
+import { arranges } from "../layout/place";
+import { formatPercent } from "./capacity";
 import { edit, type EditContext, type EditResult } from "./context";
 import {
   EditError,
@@ -57,6 +64,10 @@ export function addComponent(
 }
 
 export interface AddShapeArgs {
+  readonly text?: string;
+  readonly file?: string;
+  readonly src?: string;
+  readonly fit?: "contain" | "cover";
   readonly shape: ShapeId;
   readonly label: string;
   readonly parent?: string | null;
@@ -64,15 +75,25 @@ export interface AddShapeArgs {
   readonly look?: Readonly<Record<string, string | number | boolean>>;
 }
 
+/** What a code element added with nothing in it shows (D-103). */
+export const NEW_LISTING = "# Write or paste code here";
+
 /** Adds a shape (03-shapes-styles-library P0-1), written under `shapes:`. */
 export function addShape(files: ProjectFiles, diagram: Diagram, args: AddShapeArgs): EditResult {
   return edit(files, diagram, (ctx) => {
     const parent = validParent(ctx, args.parent ?? null);
-    const name = ctx.claimName(toName(args.label, "shape"));
+    const name = ctx.claimName(toName(args.label.trim() === "" ? args.shape : args.label, "shape"));
     const map = new YAMLMap();
     map.set("shape", args.shape);
+    // A new listing says what it's for until it's given code of its own.
+    if (args.shape === "code")
+      map.set(args.file === undefined ? "text" : "file", args.file ?? args.text ?? NEW_LISTING);
+    if (args.shape === "image" && args.src !== undefined) map.set("src", args.src);
+    if (args.shape === "image" && args.fit === "cover") map.set("fit", args.fit);
     if (parent !== null) map.set("in", parent);
-    if (args.label !== humanize(name)) map.set("label", args.label);
+    // A picture or a listing has no label unless one is given (D-102, D-103).
+    const quiet = (args.shape === "image" || args.shape === "code") && args.label.trim() === "";
+    if (!quiet && args.label !== humanize(name)) map.set("label", args.label);
     for (const [key, value] of Object.entries(args.look ?? {})) map.set(key, value);
     addEntry(ctx.session.section(ctx.homeFor(parent), "shapes"), name, map, true);
     if (args.at != null) ctx.setAt(name, args.at);
@@ -271,14 +292,67 @@ export function moveElements(
         continue;
       }
       if (kind !== "component" && kind !== "container") continue;
+      const component = diagram.components.get(move.name);
+      // Into a container that arranges its contents (D-87): it's placed there, not at a point.
+      if (component !== undefined && parent !== null && arranges(diagram.containers.get(parent))) {
+        const map = ctx.definition(move.name);
+        setKey(map, "in", parent);
+        map.delete("on");
+        ctx.setLayoutField(move.name, "at", undefined);
+        continue;
+      }
+      // Something riding on another thing goes where that goes: it has no place of its own.
+      if (component !== undefined && component.on !== null) continue;
       const current =
-        kind === "component"
-          ? diagram.components.get(move.name)?.parent
-          : diagram.containers.get(move.name)?.parent;
+        kind === "component" ? component?.parent : diagram.containers.get(move.name)?.parent;
       if ((current ?? null) !== parent)
         setKey(ctx.definition(move.name), "in", parent ?? undefined);
       ctx.setAt(move.name, at);
     }
+  });
+}
+
+/**
+ * Puts things a layout places somewhere else (D-87), as they're written: `in` a container that
+ * arranges its contents, or `on` an element or connection. `null` for both takes a rider off
+ * what it rode on.
+ */
+export function placeElements(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly names: readonly string[]; readonly place: Place | null },
+): EditResult {
+  return edit(files, diagram, (ctx) => {
+    for (const name of args.names) {
+      const kind = ctx.requireKind(name);
+      if (kind !== "component" && kind !== "decoration")
+        throw new EditError(`"${name}" is a ${kind}: components, shapes and text can be placed.`);
+      const map = ctx.definition(name);
+      const place = args.place;
+      if (place?.on !== undefined) {
+        if (place.on === name) throw new EditError(`"${name}" can't ride on itself.`);
+        if (ctx.kindOf(place.on) === null)
+          throw new EditError(`There is no element called "${place.on}".`);
+        map.set("on", place.on);
+        ctx.setLayoutField(name, "at", undefined);
+      } else if (place?.in !== undefined) {
+        if (!arranges(diagram.containers.get(place.in)))
+          throw new EditError(`"${place.in}" doesn't arrange what's in it.`);
+        // Text goes in too (D-102), and is placed like any other child.
+        if (kind === "decoration" && diagram.decorations.get(name)?.variant !== "text")
+          throw new EditError(`Only text, components and shapes can go in "${place.in}".`);
+        map.set("in", place.in);
+        map.delete("on");
+        ctx.setLayoutField(name, "at", undefined);
+      } else {
+        map.delete("on");
+        map.delete("along");
+      }
+      if (place?.along !== undefined) map.set("along", formatPercent(place.along));
+      if (place?.cell !== undefined) map.set("cell", pointNode(place.cell));
+      else if (place?.in !== undefined) map.delete("cell");
+    }
+    return args.names;
   });
 }
 
@@ -339,9 +413,10 @@ export function resizeElement(
     };
     if (kind === "decoration") {
       const map = ctx.decoration(args.name);
-      if (!map.has("zone") && !map.has("note"))
-        throw new EditError("Only highlight zones and sticky notes can be resized.");
-      map.set("size", sizeNode(size));
+      if (!map.has("zone") && !map.has("note") && !map.has("text"))
+        throw new EditError("Only text, highlight zones and sticky notes can be resized.");
+      if (map.has("text")) map.set("width", size.w);
+      else map.set("size", sizeNode(size));
       if (args.at !== undefined) map.set("at", pointNode(args.at));
       return;
     }
@@ -396,6 +471,7 @@ const DEFAULTS: Readonly<Record<string, string>> = {
   align: "left",
   fill: NOTE_FILL,
   font_size: "auto",
+  show: "shown",
 };
 
 /** A shape's defaults: what a key left out of its entry means (03 §5 P0-2). */
@@ -411,6 +487,7 @@ const SHAPE_DEFAULTS: Readonly<Record<string, string | number>> = {
   opacity: 100,
   align: "center",
   font_size: "auto",
+  show: "shown",
 };
 
 export type PropertyValue =
@@ -485,6 +562,14 @@ export function updateElement(
           );
         continue;
       }
+      // Several lines (a listing's text) are written as a block, one line to a line.
+      if (typeof raw === "string" && raw.includes("\n")) {
+        const block = new Scalar(raw.endsWith("\n") ? raw : `${raw}\n`);
+        block.type = Scalar.BLOCK_LITERAL;
+        map.flow = false;
+        map.set(key, block);
+        continue;
+      }
       map.set(key, raw);
     }
   });
@@ -540,6 +625,159 @@ export function setCard(
       if (isScalar(body) && typeof body.value === "string" && body.value.includes("\n"))
         body.type = Scalar.BLOCK_LITERAL;
     }
+  });
+}
+
+/** What a part covers and how it starts (D-104): lines of a listing, or a region of a picture. */
+export interface PartPatch {
+  /** For code: the first and last line, in the file's own numbers. */
+  readonly lines?: readonly [number, number];
+  /** For an image: x, y, width and height, each a share of the picture. */
+  readonly area?: {
+    readonly x: number;
+    readonly y: number;
+    readonly w: number;
+    readonly h: number;
+  };
+  readonly show?: Presence;
+  /** Null takes it away. */
+  readonly tone?: Tone | null;
+  readonly mark?: Mark | null;
+}
+
+/** A share of a picture, to four places: a region drawn by hand doesn't need more. */
+const share = (value: number): number =>
+  Math.round(Math.min(1, Math.max(0, value)) * 10000) / 10000;
+
+/**
+ * Adds a part to an image or code element, or changes one. A part that only says where it is
+ * is written short (`name: 2-6`, `field: [x, y, w, h]`); one that also says how it starts is
+ * written long.
+ */
+export function setPart(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly element: string; readonly name: string; readonly set: PartPatch },
+): EditResult {
+  const component = diagram.components.get(args.element);
+  if (component === undefined || (component.image === null && component.code === null))
+    throw new EditError("Only images and code have parts.");
+  if (component.opens !== null)
+    throw new EditError(`"${args.element}" opens a nested diagram, so it can't have parts.`);
+  if (!isValidName(args.name))
+    throw new EditError(
+      `"${args.name}" isn't a valid part name. Use letters, numbers and "_", starting with a letter.`,
+    );
+  const previous = component.parts.get(args.name);
+  if (previous === undefined && component.parts.size >= 64)
+    throw new EditError(`"${args.element}" has 64 parts, which is as many as an element can have.`);
+
+  // Where it is: what the patch says, else where it was.
+  let where: YAMLSeq | Scalar;
+  if (component.code !== null) {
+    const lines =
+      args.set.lines ??
+      (previous?.kind === "lines" ? ([previous.first, previous.last] as const) : null);
+    if (lines === null)
+      throw new EditError("A part of code needs a line or a range, like 12 or 12-31.");
+    const [first, last] = lines;
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 1 || last < first)
+      throw new EditError("A part of code needs a line or a range, like 12 or 12-31.");
+    where = new Scalar(first === last ? first : `${first}-${last}`);
+  } else {
+    const area = args.set.area ?? (previous?.kind === "area" ? previous : null);
+    if (area === null)
+      throw new EditError("A part of a picture needs a region: x, y, width, height.");
+    const x = share(area.x);
+    const y = share(area.y);
+    const w = share(Math.min(area.w, 1 - x));
+    const h = share(Math.min(area.h, 1 - y));
+    if (w <= 0 || h <= 0) throw new EditError("A part of a picture needs a width and a height.");
+    where = flowSeq([x, y, w, h]);
+  }
+
+  // How it starts: what the patch says, else what it said.
+  const show = args.set.show ?? previous?.show ?? "shown";
+  const tone = args.set.tone === undefined ? (previous?.tone ?? null) : args.set.tone;
+  const mark = args.set.mark === undefined ? (previous?.mark ?? null) : args.set.mark;
+
+  return edit(files, diagram, (ctx) => {
+    const definition = ctx.definition(args.element);
+    let parts = definition.get("parts", true) as Node | undefined;
+    if (!isMap(parts)) {
+      parts = new YAMLMap();
+      definition.set("parts", parts);
+    }
+    if (show === "shown" && tone === null && mark === null) {
+      parts.set(args.name, where);
+      return [args.element];
+    }
+    const long = new YAMLMap();
+    long.flow = true;
+    long.set(component.code !== null ? "lines" : "area", where);
+    if (show !== "shown") long.set("show", show);
+    if (tone !== null) long.set("tone", tone);
+    if (mark !== null) long.set("mark", mark);
+    parts.set(args.name, long);
+    return [args.element];
+  });
+}
+
+/** Renames a part, and every `element.part` that names it. */
+export function renamePart(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly element: string; readonly from: string; readonly to: string },
+): EditResult {
+  const component = diagram.components.get(args.element);
+  if (component?.parts.has(args.from) !== true)
+    throw new EditError(`"${args.element}" has no part called "${args.from}".`);
+  if (!isValidName(args.to))
+    throw new EditError(
+      `"${args.to}" isn't a valid part name. Use letters, numbers and "_", starting with a letter.`,
+    );
+  if (args.from !== args.to && component.parts.has(args.to))
+    throw new EditError(`"${args.element}" already has a part called "${args.to}".`);
+  return edit(files, diagram, (ctx) => {
+    if (args.from === args.to) return [args.element];
+    const parts = ctx.definition(args.element).get("parts", true);
+    if (!isMap(parts)) throw new EditError(`"${args.element}" has no parts written.`);
+    renameKey(parts, args.from, args.to);
+    const from = `${args.element}.${args.from}`;
+    const to = `${args.element}.${args.to}`;
+    for (const file of diagram.files)
+      rewriteReferences(ctx, file, from, (value) => (value === from ? to : null));
+    return [args.element];
+  });
+}
+
+/** Removes a part, the connections that end on it, and every line that names it. */
+export function removePart(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly element: string; readonly name: string },
+): EditResult {
+  if (diagram.components.get(args.element)?.parts.has(args.name) !== true)
+    throw new EditError(`"${args.element}" has no part called "${args.name}".`);
+  const endsHere = (end: Connection["from"]) =>
+    end.element === args.element && end.part === args.name;
+  const attached = [...diagram.connections.values()]
+    .filter((connection) => endsHere(connection.from) || endsHere(connection.to))
+    .map((connection) => connection.name);
+  // The connections go first; the part is then removed from the diagram as it is after that.
+  const cleared = attached.length === 0 ? null : deleteElements(files, diagram, attached);
+  const current = cleared === null ? files : cleared.files;
+  const after = cleared === null ? diagram : parseDiagram(current, diagram.folder).diagram;
+  return edit(current, after, (ctx) => {
+    const definition = ctx.definition(args.element);
+    const parts = definition.get("parts", true);
+    if (isMap(parts)) {
+      parts.delete(args.name);
+      if (parts.items.length === 0) definition.delete("parts");
+    }
+    const doomed = new Set([`${args.element}.${args.name}`]);
+    for (const file of after.files) pruneReferences(ctx, file, doomed);
+    return [args.element];
   });
 }
 
@@ -654,6 +892,46 @@ function rewriteReferences(
     }
   }
 
+  // Stories (D-86): each step's set keys, what a line puts something in or on, focus and zoom.
+  const stories = root.get("stories", true) as Node | undefined;
+  if (isMap(stories)) {
+    for (const story of stories.items) {
+      if (!isSeq(story.value)) continue;
+      for (const step of story.value.items) {
+        if (!isMap(step)) continue;
+        rewriteKey(step, "zoom");
+        const focus = step.get("focus", true);
+        if (isSeq(focus)) {
+          for (const item of focus.items)
+            if (isScalar(item) && typeof item.value === "string") {
+              const next = replaceRef(item.value);
+              if (next !== null) item.value = next;
+            }
+        } else rewriteKey(step, "focus");
+        const set = step.get("set", true);
+        if (!isMap(set)) continue;
+        for (const entry of set.items) {
+          if (isScalar(entry.key) && typeof entry.key.value === "string") {
+            const next = replaceRef(entry.key.value);
+            if (next !== null) entry.key.value = next;
+          }
+          if (isMap(entry.value)) {
+            rewriteKey(entry.value, "in");
+            rewriteKey(entry.value, "on");
+          }
+        }
+      }
+    }
+  }
+  // What rides on it, and what's a copy of it, follow too.
+  for (const section of ["components", "shapes", "containers"])
+    eachEntry(section, (map) => {
+      rewriteKey(map, "on");
+      rewriteKey(map, "like");
+    });
+  if (isMap(decorations))
+    for (const pair of decorations.items) if (isMap(pair.value)) rewriteKey(pair.value, "on");
+
   // Tours: start, step keys, next and choices.
   const tours = root.get("tours", true) as Node | undefined;
   if (isMap(tours)) {
@@ -735,7 +1013,9 @@ export function deleteElements(
         ...diagram.components.values(),
         ...diagram.decorations.values(),
       ]) {
+        // What's inside it goes with it, and so does what rides on it (D-87).
         if (child.parent === name) add(child.name);
+        else if (child.kind !== "container" && child.on === name) add(child.name);
       }
     };
     for (const name of names) add(name);
@@ -743,6 +1023,9 @@ export function deleteElements(
       if (doomed.has(connection.from.element) || doomed.has(connection.to.element))
         doomed.add(connection.name);
     }
+    // Riders on an arrow that's going go too.
+    for (const rider of [...diagram.components.values(), ...diagram.decorations.values()])
+      if (rider.on !== null && doomed.has(rider.on)) add(rider.name);
     if (doomed.size === 0) return [];
 
     for (const name of doomed) {
@@ -786,6 +1069,37 @@ function pruneReferences(ctx: EditContext, file: string, doomed: ReadonlySet<str
     for (const scene of scenes.items) {
       if (!isMap(scene.value)) continue;
       scene.value.items = scene.value.items.filter((entry) => !gone(scalarString(entry.key)));
+    }
+  }
+
+  // Stories (D-86): lines about what's gone, and its place in focus and zoom, go with it.
+  const stories = root.get("stories", true) as Node | undefined;
+  if (isMap(stories)) {
+    for (const story of stories.items) {
+      if (!isSeq(story.value)) continue;
+      for (const step of story.value.items) {
+        if (!isMap(step)) continue;
+        if (gone(scalarString(step.get("zoom", true)))) step.delete("zoom");
+        const focus = step.get("focus", true);
+        if (isSeq(focus)) {
+          focus.items = focus.items.filter((item) => !gone(scalarString(item)));
+          if (focus.items.length === 0) step.delete("focus");
+        } else if (gone(scalarString(focus))) step.delete("focus");
+        const set = step.get("set", true);
+        if (!isMap(set)) continue;
+        set.items = set.items.filter(
+          (entry) =>
+            !gone(scalarString(entry.key)) &&
+            !(
+              isMap(entry.value) &&
+              (gone(scalarString(entry.value.get("in", true))) ||
+                gone(scalarString(entry.value.get("on", true))))
+            ),
+        );
+        if (set.items.length === 0) step.delete("set");
+      }
+      // A wordless step left changing nothing would be dropped on reading: take it out.
+      story.value.items = story.value.items.filter((step) => !isMap(step) || step.items.length > 0);
     }
   }
 

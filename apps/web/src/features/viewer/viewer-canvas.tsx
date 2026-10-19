@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, type PointerEvent as ReactPointerEvent } fr
 import type { Point } from "@mogram/core/layout";
 import { centerOn, toWorld, wheelZoomFactor, zoomAt, type Camera } from "@/features/canvas/camera";
 import { buildScene } from "@/features/canvas/scene";
+import { resolveFor } from "@/features/canvas/use-diagram";
 import { useFontsVersion } from "@/features/canvas/text";
 import { DiagramSvg } from "@/features/canvas/svg/diagram-svg";
 import { LevelTransition } from "@/features/canvas/level-transition";
@@ -20,7 +21,8 @@ import {
 } from "./viewer-context";
 
 const CLICK_SLOP = 5;
-const SETTLE_MS = 700;
+/** How long after a change of picture ends its "from" side is kept, in ms. */
+const SETTLE_MARGIN = 100;
 
 type Gesture =
   | {
@@ -53,27 +55,37 @@ export function ViewerCanvas() {
   const view = useViewerShallow((s) => ({
     levelPath: s.levelPath,
     scene: s.scene,
-    previousScene: s.previousScene,
+    story: s.story,
+    previous: s.previous,
     transitionStart: s.transitionStart,
+    transitionSeconds: s.transitionSeconds,
+    controls: s.controls,
+    ramp: s.ramp,
     viewerEntries: s.viewerEntries,
     camera: s.camera,
     viewport: s.viewport,
     focus: s.focus,
     levelZoom: s.levelZoom,
     ready: s.ready,
+    slide: s.slide,
   }));
 
   const geometry = controller.geometry(view.levelPath);
   const current = useMemo(
-    () => controller.levels.resolve(view.levelPath, view.scene, view.viewerEntries),
-    [controller, view.levelPath, view.scene, view.viewerEntries],
+    () =>
+      controller.levels.resolve(
+        view.levelPath,
+        { scene: view.scene, story: view.story, controls: view.controls },
+        view.viewerEntries,
+      ),
+    [controller, view.levelPath, view.scene, view.story, view.controls, view.viewerEntries],
   );
   const previous = useMemo(
     () =>
-      view.transitionStart === null
+      view.transitionStart === null || view.previous === null
         ? null
-        : controller.levels.resolve(view.levelPath, view.previousScene, view.viewerEntries),
-    [controller, view.levelPath, view.previousScene, view.transitionStart, view.viewerEntries],
+        : controller.levels.resolve(view.levelPath, view.previous, view.viewerEntries),
+    [controller, view.levelPath, view.previous, view.transitionStart, view.viewerEntries],
   );
   const stubs = useMemo(
     () => controller.levels.stubs(view.levelPath),
@@ -83,7 +95,7 @@ export function ViewerCanvas() {
     () => controller.parentFlows(view.levelPath),
     // The flows follow the scene and "what if" changes, which the controller reads from the store.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [controller, view.levelPath, view.scene, view.viewerEntries],
+    [controller, view.levelPath, view.scene, view.story, view.controls, view.viewerEntries],
   );
   const fonts = useFontsVersion();
   const model = useMemo(
@@ -98,12 +110,46 @@ export function ViewerCanvas() {
             current,
             previous,
             transitionStart: view.transitionStart,
+            transitionSeconds: view.transitionSeconds,
+            ramp: view.ramp,
             theme: geometry.theme,
             fontFamily: "Inter",
             fontsVersion: fonts,
           }),
-    [controller, geometry, current, previous, view.transitionStart, fonts],
+    [
+      controller,
+      geometry,
+      current,
+      previous,
+      view.transitionStart,
+      view.transitionSeconds,
+      view.ramp,
+      fonts,
+    ],
   );
+
+  // A deck's frame (D-99): one diagram drawn under every slide's own, with the slide's number
+  // and section in whatever labels ask for them. It isn't part of the slide: nothing in it
+  // can be clicked, and it doesn't play.
+  const frameFolder = view.levelPath.length === 0 ? controller.frameFolder : null;
+  const frame = useMemo(() => {
+    if (frameFolder === null) return null;
+    const under = controller.levels.geometry(frameFolder);
+    return buildScene({
+      diagram: under.diagram,
+      files: controller.levels.files,
+      layout: under.layout,
+      routes: under.routes,
+      current: resolveFor(controller.levels.files, frameFolder, under.diagram, null),
+      previous: null,
+      transitionStart: null,
+      theme: under.theme,
+      fontFamily: "Inter",
+      fontsVersion: fonts,
+    });
+    // The frame is dressed for the slide showing, which `view.slide` says has changed.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [controller, frameFolder, view.slide, fonts]);
 
   // Size tracking; the first size known also frames the diagram (deep links override this).
   useEffect(() => {
@@ -119,13 +165,14 @@ export function ViewerCanvas() {
     return () => observer.disconnect();
   }, [store]);
 
-  // A scene change animates for 600ms; then the "from" state is dropped so nothing keeps ticking.
+  // A change of scene or step animates; then the "from" state is dropped so nothing keeps ticking.
   useEffect(() => {
     if (view.transitionStart === null) return;
-    const remaining = Math.max(0, SETTLE_MS - (clock.time() - view.transitionStart) * 1000);
+    const settle = view.transitionSeconds * 1000 + SETTLE_MARGIN;
+    const remaining = Math.max(0, settle - (clock.time() - view.transitionStart) * 1000);
     const timer = window.setTimeout(() => store.getState().settleTransition(), remaining);
     return () => window.clearTimeout(timer);
-  }, [view.transitionStart, clock, store]);
+  }, [view.transitionStart, view.transitionSeconds, clock, store]);
 
   // The motion toggle holds every animation still (PR-9); it starts paused for reduced motion,
   // and follows the system setting if that changes mid-session.
@@ -320,6 +367,7 @@ export function ViewerCanvas() {
       // State a test (or anything else outside) can wait on instead of guessing durations.
       data-ready={view.ready ? "true" : undefined}
       data-animating={animating ? "true" : undefined}
+      data-zoom={view.camera.zoom.toFixed(3)}
       className="absolute inset-0 touch-none select-none overflow-hidden"
       style={{ background: geometry.theme.css }}
       onPointerDown={onPointerDown}
@@ -369,6 +417,18 @@ export function ViewerCanvas() {
         className="absolute inset-0 transition-opacity duration-500 ease-out"
         style={{ opacity: view.ready ? 1 : 0 }}
       >
+        {mounted && frame !== null ? (
+          <div className="pointer-events-none absolute inset-0" data-testid="deck-frame">
+            <DiagramSvg
+              scene={frame}
+              time={{ kind: "live", clock }}
+              mode="view"
+              fontFamily="var(--font-sans)"
+              camera={view.camera}
+              size={view.viewport}
+            />
+          </div>
+        ) : null}
         {mounted ? (
           <DiagramSvg
             scene={model}

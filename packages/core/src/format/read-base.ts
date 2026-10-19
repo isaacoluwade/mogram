@@ -9,6 +9,7 @@ import type {
 } from "../model/types";
 import { isValidName } from "../model/names";
 import { HEX_COLOR, normalizeHex } from "../presets/color";
+import { MARKS, PRESENCES, isMark, isPresence, type Mark, type Presence } from "../presets/marks";
 import { parsePaint, type Paint } from "../presets/paint";
 import {
   FONT_NAMES,
@@ -33,6 +34,7 @@ import {
   nodeOf,
 } from "./yaml-read";
 import type { Ref } from "./raw";
+import { FormulaError, isFormula, parseFormula } from "../values/formula";
 import { STYLE_SOURCES } from "./styles";
 
 /** Hex colours, with or without alpha (`#5c9776`, `#5c977680`). */
@@ -301,6 +303,16 @@ export abstract class SectionReader {
     };
   }
 
+  /** `show:` on an element (D-86): whether it's there before a story or scene says otherwise. */
+  protected readShow(entry: MapEntry | undefined, owner: string): Presence {
+    return this.optionalEnum(entry, PRESENCES, isPresence, owner, "show") ?? "shown";
+  }
+
+  /** `mark:` on an element: the small sign at its corner. */
+  protected readMark(entry: MapEntry | undefined, owner: string): Mark | null {
+    return this.optionalEnum(entry, MARKS, isMark, owner, "mark");
+  }
+
   /** `link:` and `data:`, which every element can carry (07 §18 P0-3, P0-5). */
   protected readExtras(fields: ReadonlyMap<string, MapEntry>, owner: string): ElementExtras {
     return {
@@ -342,7 +354,22 @@ export abstract class SectionReader {
     }
     for (const item of this.entries(entry.value)) {
       const value = scalarValue(item.value);
-      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean")
+      if (isFormula(value)) {
+        // A formula (D-88) is kept as written and worked out for each picture.
+        try {
+          parseFormula(value);
+          data.set(item.key, value.trim());
+        } catch (error) {
+          this.sink.error(
+            this.pos(item.value),
+            `"${item.key}" in the data of "${owner}" isn't a formula Mogram can read. ${error instanceof FormulaError ? error.message : ""}`.trim(),
+          );
+        }
+      } else if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      )
         data.set(item.key, value);
       else
         this.sink.error(

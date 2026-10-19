@@ -48,6 +48,17 @@ describe("drafts in this browser (AC-1, AC-2)", () => {
     expect(await getDraftThumbnail(draft.id)).toBeNull();
   });
 
+  it("summarizes decks with their visible slide count", async () => {
+    const deck = await createDraft("Course", {
+      "mogram.yaml":
+        "mogram: 1\nname: Course\ndeck:\n  slides:\n    - slides/intro\n    - slides/lesson\n",
+      "slides/intro/mogram.yaml": "mogram: 1\nname: Introduction\n",
+      "slides/lesson/mogram.yaml": "mogram: 1\nname: Lesson\n",
+    });
+
+    expect((await listDrafts()).find((item) => item.id === deck.id)?.deck).toEqual({ slides: 2 });
+  });
+
   it("duplicates a draft with its thumbnail, renaming the copy in its files too", async () => {
     const draft = await createDraft("Checkout", FILES);
     await setDraftThumbnail(draft.id, "data:image/jpeg;base64,BBBB");

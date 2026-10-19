@@ -247,6 +247,72 @@ that proves it (e2e = `apps/web/e2e`, core = `packages/core/test`).
 | CO-7 | A Concepts tab (search, platform, yours, recently used, topics) and a gallery with previews, for hundreds | ☑      | browse tests; e2e concepts, phone; screenshots editor/concepts-\*, editor/concept-gallery, editor/phone-concept\* |
 | CO-8 | The assistant finds concepts by search and applies them by id, without the library in the editor          | ☑      | tools tests (find_concepts, unknown ids, replay from what's sent)                                                 |
 
+## ST — Stories and what a set can change (agreed 2026-10-09, D-86)
+
+| ID   | Requirement                                                                                         | Status | Evidence                                                                           |
+| ---- | --------------------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------- |
+| ST-1 | An element can start hidden or faded; a scene or step can show, fade or hide it                     | ☑      | core picture tests (cascade, model doesn't see it); e2e stories                    |
+| ST-2 | A scene or step can change what an element says, a shape's or text's tone, and its mark             | ☑      | core picture and stories-edit tests; e2e stories; screenshot editor/scene-presence |
+| ST-3 | A story is steps with words; beats; changes add up; rewind to the start or a named step             | ☑      | core picture tests (beats, rewind, timeline)                                       |
+| ST-4 | The viewer plays a story: caption, back, play, next, a mark per beat, choices, keys, links          | ☑      | e2e stories (viewer); screenshots viewer/story-\*                                  |
+| ST-5 | One definition of the picture at a moment, used by the editor, viewer, previews and exports         | ☑      | core picture tests (`pictureAt`); web unit tests                                   |
+| ST-6 | Things appear, leave and change with an animation; nothing else shifts                              | ☑      | presence and crossfade in the renderer; e2e stories                                |
+| ST-7 | The Story dock: beats as tiles, captions, steps, and the list of what a step changes, each undoable | ☑      | e2e stories (dock); core stories-edit tests; screenshot editor/story-dock          |
+| ST-8 | With a step showing, what happens to an element is recorded in that step, only where it differs     | ☑      | core stories-edit tests (base before a step); e2e stories (YAML written)           |
+| ST-9 | Exports follow the story: a still of the step showing with its words, every beat zipped, animations | ☑      | e2e stories (export); screenshot export/story                                      |
+
+| ST-10 | A container can arrange its contents (row, column, grid) and keeps room for the most it ever holds | ☑ | core place tests (rooms, slots, grids) |
+| ST-11 | Things ride on elements and connections; copies (`like:`); only placed things move, and they travel | ☑ | core place tests; e2e stories (a message rides on its consumer); viewer/story-token |
+| ST-12 | Formulas in `data:`, read by labels, meters and steps; a set can change a value or run it | ☑ | core values tests (formulas, ramps, loops) |
+| ST-13 | Meters: a bar, a ring or a number against a most, with a limit | ☑ | core values tests; e2e stories (controls); concept visibility-timeout |
+| ST-14 | Controls for the viewer: dial, toggle, pick; a dial drives the capacity model; steps with `when` | ☑ | core values tests (copies follow the dial; steps passed over); e2e stories (controls) |
+| ST-15 | A step carries a spoken `script`, written in the Story strip; a prompter window shows it by beat and the viewer follows it | ☑ | core prompter tests; e2e prompter; screenshot prompter/reading |
+| ST-16 | The prompter follows the speaker's voice: carries on, skips, goes back, waits through ad-libs and silences | ☑ | `pnpm bench:prompter` (12 synthetic readings and 2 of a person, in Chrome); core prompter tests replaying what it heard; screenshot prompter/following |
+| ST-17 | Any pasted script can be read in the prompter; it and the prompter's settings are kept in the browser | ☑ | e2e prompter; screenshots prompter/script, prompter/mirrored |
+| ST-18 | A diagram in any folder of a project can be opened by itself (`?root=`), in the viewer and the editor: its own story plays, exports and links | ☑ | core picture tests (a story in a folder); deep-link tests; e2e nested (a folder by itself) |
+| PG-1 | A diagram can have a page (16:9, 4:3, 1:1, 9:16) with its corner at the origin | ☑ | core page tests; e2e page |
+| PG-2 | With a page, the viewer, present mode, thumbnails and exports frame the page; what's outside isn't drawn | ☑ | core page tests (`frameOf`); e2e page (PNG is 1920 × 1080; presenting fills the screen); screenshots viewer/page, viewer/page-present |
+| PG-3 | The editor draws the page, dims what's off stage, fits it and snaps to its edges and centre | ☑ | e2e page; screenshot editor/page |
+| DK-1 | A folder whose settings have `deck:` is a deck: slides in order, in sections | ☑ | `test/deck.test.ts` |
+| DK-2 | A slide shows a diagram and plays its story, or a stretch of it between named steps | ☑ | `test/deck.test.ts`; `deck-player.spec.ts` |
+| DK-3 | The same diagram on neighbouring slides carries on with no cut; elsewhere a slide change is one cut | ☑ | `deck-player.spec.ts` (carried viewer stays mounted) |
+| DK-4 | Slides inherit the deck's page, theme, background, grid, styles and data; one frame diagram sits under every slide | ☑ | `test/deck.test.ts`; `deck-player.spec.ts` (frame footer) |
+| DK-5 | `%deck%`, `%section%`, `%slide%`, `%slides%` in any label | ☑ | `deck-player.spec.ts` (`%slide% / %slides%`) |
+| DK-6 | A story plays in any folder, not only the root | ☑ | P0, D-97 |
+| DK-7 | The player: beats then slides, back, slide jumps, overview, captions on or off, links to a slide and beat | ☑ | `deck-player.spec.ts` |
+| DK-8 | Record mode shows the page and nothing else | ☑ | `deck-player.spec.ts` (record from the button, across cuts, Esc) |
+| DK-9 | The dashboard lists decks and makes new ones | ☑ | `deck-editor.spec.ts` |
+| DK-10 | The slide rail: tiles, sections, add, reorder, duplicate, detach, skip, delete | ☑ | `deck-editor.spec.ts` |
+| DK-11 | "Start a new slide here" and "Join with the slide before" on a beat | ☑ | `deck-editor.spec.ts` |
+| DK-12 | A diagram added from the same project is linked; one from elsewhere is brought in and remembers its origin | ☑ | `deck-editor.spec.ts`; `test/deck-edit.test.ts` |
+| PA-1 | An element can name parts; a set can show, fade, hide, tone and mark one | ☑ | `test/media.test.ts`; `media.spec.ts` |
+| PA-2 | `focus`, `zoom` and connection ends can name a part | ☑ | `media.spec.ts` (focus and zoom on lines) |
+| PA-3 | Parts are made and named on the canvas | ☑ | `media.spec.ts` (draw a region) |
+| ME-1 | `shape: image`: PNG, JPEG, WebP, GIF, SVG; fit; the shape's look; parts as regions | ☑ | `media.spec.ts` |
+| ME-2 | `shape: code`: inline or from a file, a slice, exact whitespace, a header, line numbers, parts as lines | ☑ | `media.spec.ts`; `test/code.test.ts` |
+| ME-3 | Code is coloured for hcl, console, plan, yaml, json, shell and diff from the theme | ☑ | `test/code.test.ts` |
+| ME-4 | Text with a `width` wraps; text in a `column` is arranged by it | ☑ | `media.spec.ts` |
+| ME-5 | Binary files are stored by hash in drafts, the cloud and zips, and served to share links | ☑ | `features/assets/assets.test.ts`; `media.spec.ts` (cloud share) |
+| WO-1 | A step has `script`; a step with `say` or `script` starts a beat | ☑ | `test/words.test.ts` |
+| WO-2 | The Script window follows the deck: this beat's script, the next, the clock | ☑ | `script-window.spec.ts` |
+| WO-3 | Recording cuts a take at every advance; back records the beat again; silence is trimmed | ☑ | `script-window.spec.ts`; `recorder.ts` (`voiceSpan`) |
+| WO-4 | A recording is found by its words; a changed script shows it out of date; it can be kept | ☑ | `test/words.test.ts`; `script-window.spec.ts` |
+| WO-5 | A beat lasts as long as its clip; without one, as long as its script takes to say | ☑ | `test/words.test.ts`; `controller.ts` |
+| WO-6 | Play runs the deck with its voice | ☑ | `controller.ts` (VoicePlayer) |
+| VX-1 | A deck exports as a PDF and as images, a page per slide or per beat | ☑ | `deck-export.spec.ts` |
+| VX-2 | A deck exports its script, subtitles and chapters | ☑ | `deck-export.spec.ts`; `test/words.test.ts` |
+| VX-3 | A deck exports as video with its voice at 1080p or 2160p, in the browser | ☑ | `deck-export.spec.ts` (plays in Chrome); `webm-mux.test.ts` |
+| AI-12 | The assistant can add, move and remove slides and set a beat's caption and script | ☑ | `lib/ai/tools.test.ts` |
+| HM-1 | Home starts things: blank diagram, blank deck, open files (also by dropping them), templates | ☑ | e2e home (start; dropped files); screenshot dashboard/home-empty |
+| HM-2 | Home carries on: the last thing worked on with Open, Preview and Present | ☑ | e2e home; screenshot dashboard/home |
+| HM-3 | A card says what an item is and how far along; a deck looks like one; where it lives is said only when it tells you something | ☑ | core words tests (`projectAbout`); web diagram-card test; e2e home |
+| HM-4 | Everything can be searched (`/`), filtered by kind and place, sorted, and shown as cards or a list; the choice is kept | ☑ | e2e home; screenshot dashboard/home-list |
+| HM-5 | Items can be pinned (first in the list, and in the sidebar) and deleted or saved to the account several at once | ☑ | e2e home; screenshots dashboard/home-pinned, home-selected |
+| HM-6 | Templates and Concepts are pages of their own, filtered by kind and cloud, topic and platform | ☑ | e2e home; screenshots dashboard/templates, dashboard/concepts |
+| HM-7 | The sidebar holds places (Home, Templates, Concepts, Script); reference pages sit in Help | ☑ | e2e home |
+| HM-8 | Script lists what has a story, with its recording, and opens its Script window; any text can be pasted and read; takes are kept with no editor open | ☑ | e2e home (Script); e2e script-window (account, from the Script page); e2e prompter; screenshot dashboard/script |
+| DK-13 | On a slide the dock is its story; scenes are offered only where the slide's diagram has some | ☑ | editor-store tests (`dockOf`, `scenesOffered`); e2e deck-editor (a slide's dock); screenshots editor/deck-dock-still, deck-dock-story |
+
 ## UX — Non-functional (from the build brief)
 
 | ID   | Requirement                                                           | Status | Evidence                                   |

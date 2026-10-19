@@ -1,30 +1,30 @@
 import { SCENE_TRANSITION, easeInOutCubic } from "./transition";
 
 /**
- * Playing scenes in order turns them into a story (SC-9, EX-6). Each scene holds for `hold`
- * seconds (a multiple of 4 keeps every motion loop seamless) and the change into it animates
- * over the first `transition` seconds of its hold.
+ * Playing the scenes in order (SC-9, EX-6). Each scene holds for `hold` seconds (a multiple of 4
+ * keeps every motion loop seamless) and the change into it animates over the first `transition`
+ * seconds of its hold. (A story, with steps and words, is `@mogram/core/picture`.)
  */
-export interface StoryPosition {
+export interface ScenesPosition {
   readonly from: number;
   readonly to: number;
   readonly progress: number;
 }
 
-export const STORY_HOLD = 4;
+export const SCENE_HOLD = 4;
 /** Every preset period divides this, so looping any scene for this long is seamless (D-13). */
 export const LOOP_SECONDS = 4;
 
-export function storyDuration(sceneCount: number, hold = STORY_HOLD): number {
+export function scenesDuration(sceneCount: number, hold = SCENE_HOLD): number {
   return Math.max(1, sceneCount) * hold;
 }
 
-export function storyAt(
+export function scenesAt(
   t: number,
   sceneCount: number,
-  hold = STORY_HOLD,
+  hold = SCENE_HOLD,
   transition = SCENE_TRANSITION,
-): StoryPosition {
+): ScenesPosition {
   if (sceneCount <= 1) return { from: 0, to: 0, progress: 1 };
   const total = sceneCount * hold;
   const local = ((t % total) + total) % total;

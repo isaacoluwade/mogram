@@ -1,0 +1,36 @@
+# Plan output with Terraform's own colours, parts lit one after another, and a note that wraps.
+# (P5: language plan, text written in place.  P4: width on text)
+mogram: 1
+name: Reading a plan
+shapes:
+  plan:
+    shape: code
+    file: ../code/plan-rename-project.txt
+    language: plan
+    title: terraform plan -var project=tfdemo
+    font_size: 22
+    parts:
+      block: 5-6
+      reason: 7
+      summary: 11
+stories:
+  main:
+    - say: One block per resource.
+      script: |
+        One block per resource. It names the resource, and it says what's going to happen to it.
+      focus: [plan.block]
+    - say: This comment is the one to look for.
+      script: And this comment right here is the one to look for. Forces replacement.
+      set: { plan.reason: { tone: rose } }
+      focus: [plan.reason]
+    - say: Then the summary line.
+      script: |
+        And then the summary line. I changed one word, and it wants to destroy nine things. Read this line every single time.
+      set: { plan.summary: { tone: amber, mark: warn }, rule: shown }
+      focus: [plan.summary, rule]
+      zoom: plan.summary
+layout:
+  plan: { at: [12, 26], size: [150, 60] }
+  decorations:
+    title: { text: What is Terraform about to do?, style: title, font_size: 56, at: [12, 9] }
+    rule: { text: "**Read this line every single time.**", font_size: 34, at: [172, 60], width: 56, show: hidden }

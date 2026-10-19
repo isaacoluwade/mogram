@@ -2,10 +2,13 @@ import { sql } from "drizzle-orm";
 import {
   boolean,
   check,
+  customType,
+  foreignKey,
   index,
   integer,
   jsonb,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uuid,
@@ -157,6 +160,48 @@ export const revision = pgTable(
   (table) => [index("revision_diagram_created_idx").on(table.diagramId, table.createdAt)],
 );
 
+const binary = customType<{ data: Buffer; driverData: Uint8Array }>({
+  dataType: () => "bytea",
+  fromDriver: (value) => Buffer.from(value),
+});
+
+export const asset = pgTable(
+  "asset",
+  {
+    ownerId: text("owner_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    hash: text("hash").notNull(),
+    type: text("type").notNull(),
+    bytes: integer("bytes").notNull(),
+    data: binary("data").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.hash] }),
+    check("asset_bytes_check", sql`${table.bytes} > 0 and ${table.bytes} <= 8000000`),
+    check("asset_hash_check", sql`${table.hash} ~ '^[a-f0-9]{64}$'`),
+  ],
+);
+
+export const assetUse = pgTable(
+  "asset_use",
+  {
+    diagramId: uuid("diagram_id")
+      .notNull()
+      .references(() => diagram.id, { onDelete: "cascade" }),
+    ownerId: text("owner_id").notNull(),
+    hash: text("hash").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.diagramId, table.hash] }),
+    foreignKey({
+      columns: [table.ownerId, table.hash],
+      foreignColumns: [asset.ownerId, asset.hash],
+    }).onDelete("cascade"),
+  ],
+);
+
 // -------------------------------------------------------------------------------------------------
 // Sign-in throttling per email address (AC-7). Counted in the database with one atomic statement,
 // so it holds across server instances and can't be dodged by spoofing client IP headers.
@@ -198,6 +243,8 @@ export const schema = {
   verification,
   diagram,
   revision,
+  asset,
+  assetUse,
   authThrottle,
   aiUsage,
 };

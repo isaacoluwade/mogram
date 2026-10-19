@@ -22,6 +22,9 @@ export const SHAPES = [
   "hexagon",
   "document",
   "person",
+  "meter",
+  "image",
+  "code",
 ] as const;
 export type ShapeId = (typeof SHAPES)[number];
 
@@ -41,6 +44,17 @@ export interface ShapeInfo {
 }
 
 export const SHAPE_INFO: Readonly<Record<ShapeId, ShapeInfo>> = {
+  code: {
+    label: "Code",
+    description: "A listing with preserved indentation",
+    size: { w: 60, h: 30 },
+  },
+  image: {
+    label: "Image",
+    description: "A picture with an optional caption",
+    size: { w: 40, h: 25 },
+    labelBelow: true,
+  },
   rectangle: { label: "Rectangle", description: "A box, service or node", size: { w: 15, h: 8 } },
   rounded: { label: "Rounded", description: "A service or process", size: { w: 15, h: 8 } },
   ellipse: { label: "Ellipse", description: "A system boundary or state", size: { w: 15, h: 10 } },
@@ -69,6 +83,11 @@ export const SHAPE_INFO: Readonly<Record<ShapeId, ShapeInfo>> = {
     description: "A user or operator",
     size: { w: 6, h: 9 },
     labelBelow: true,
+  },
+  meter: {
+    label: "Meter",
+    description: "A value against a most: a bar, a timer ring or a number",
+    size: { w: 18, h: 5 },
   },
 };
 
@@ -290,6 +309,8 @@ export function shapeGeometry(
 ): ShapeGeometry {
   const measure = shapeParam(shape, w, h, params)?.value ?? 0;
   switch (shape) {
+    case "code":
+    case "image":
     case "rectangle":
     case "rounded": {
       const corner = measure;
@@ -409,6 +430,11 @@ export function shapeGeometry(
         polygon: o.points,
         label: { x: 8, y: 4, w: Math.max(0, w - 16), h: Math.max(0, h - wave * 2 - 6) },
       };
+    }
+    case "meter": {
+      // A plain rounded box: what's in it (a bar, a ring, a number) is drawn by the renderer.
+      const o = roundedRect(w, h, Math.min(10, h / 2));
+      return { outline: o.close(), details: null, polygon: o.points, label: inset(w, h, 10, 4) };
     }
     case "person": {
       // A head over shoulders, filling the box; the label goes underneath.

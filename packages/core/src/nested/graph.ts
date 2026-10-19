@@ -3,6 +3,7 @@ import { parseDiagram, type ParseResult } from "../format/parse";
 import { diagramFileSet } from "../format/project";
 import type { StatePreset } from "../presets/names";
 import { resolveState, worstState, type ResolvedState } from "../state/resolve";
+import { pictureAt, type Moment } from "../picture";
 
 /**
  * Nested diagrams (NE-1 … NE-14). A component's `opens:` points at another folder in the project;
@@ -188,9 +189,14 @@ export function resolveLevels(
 
 export interface InstanceInput {
   readonly folder: string;
+  /** Lines handed down from the diagram outside (SC-10); none for the top diagram. */
   readonly scene: readonly SceneEntry[];
   readonly viewer: readonly SceneEntry[];
   readonly ownerDown: boolean;
+  /** Where the top diagram is: its scene and how far into its story (D-86). */
+  readonly moment?: Moment | null;
+  /** The diagram to resolve when it isn't the loader's (an editor's last one that parsed). */
+  readonly diagram?: Diagram;
   /** The traffic slider: everything entering each level, times this (D-82). */
   readonly traffic?: number;
 }
@@ -204,10 +210,10 @@ export function resolveInstance(
   input: InstanceInput,
   depth = 0,
 ): ResolvedState {
-  const { diagram } = loader.load(input.folder);
+  const diagram = input.diagram ?? loader.load(input.folder).diagram;
   return resolveState({
     diagram,
-    scene: input.scene,
+    picture: pictureAt(diagram, input.moment ?? null, input.scene),
     viewer: input.viewer,
     ownerDown: input.ownerDown,
     ...(input.traffic !== undefined ? { traffic: input.traffic } : {}),

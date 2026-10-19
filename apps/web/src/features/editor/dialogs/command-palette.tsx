@@ -20,7 +20,7 @@ import { useEditor, useEditorStore } from "../editor-context";
 import type { EditorStore, QuickAdd } from "../store/editor-store";
 import { openNested } from "../levels";
 import { librariesInUse } from "../library/library-choice";
-import { storyDiagram } from "../store/editor-store";
+import { topDiagram } from "../store/editor-store";
 
 /**
  * The command palette (⌘K or /; 05-ui-shell-commands §10, §13.8): one search over every command
@@ -273,16 +273,18 @@ function PaletteBody({ onClose }: { onClose: () => void }) {
         repeatable: false,
         run: () => openNested(store, c.name),
       }));
-    const scenes: Item[] = storyDiagram(store.getState().files).scenes.map((scene) => ({
-      id: `scene:${scene.name}`,
-      section: "Scenes" as const,
-      label: scene.label,
-      keywords: `${scene.name} scene`,
-      detail: "Scene",
-      icon: <Clapperboard />,
-      repeatable: false,
-      run: () => context.host.goToScene(scene.name),
-    }));
+    const scenes: Item[] = topDiagram(store.getState().files, store.getState().root).scenes.map(
+      (scene) => ({
+        id: `scene:${scene.name}`,
+        section: "Scenes" as const,
+        label: scene.label,
+        keywords: `${scene.name} scene`,
+        detail: "Scene",
+        icon: <Clapperboard />,
+        repeatable: false,
+        run: () => context.host.goToScene(scene.name),
+      }),
+    );
     return { recent, commands, elements, nested, scenes };
   }, [context, store]);
 

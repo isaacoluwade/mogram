@@ -1,11 +1,22 @@
+import { followIntoDecks } from "./deck-list";
 import { Scalar, YAMLMap, isMap, isScalar, type Node } from "yaml";
-import type { Diagram, ProjectFiles, SceneCapacity, Tour } from "../model/types";
+import type {
+  Diagram,
+  Place,
+  ProjectFiles,
+  SceneCapacity,
+  SceneEntry,
+  Tone,
+  Tour,
+} from "../model/types";
+import type { Mark, Presence } from "../presets/marks";
 import { humanize, isValidName, toName, uniqueName } from "../model/names";
 import type { FlowPreset, MotionPreset, StatePreset } from "../presets/names";
 import { mainPath } from "../tours/graph";
 import { edit, type EditContext, type EditResult } from "./context";
-import { EditError, flowMap, renameKey, scalarString, setKey } from "./session";
+import { EditError, flowMap, pointNode, renameKey, scalarString, setKey } from "./session";
 import { formatMultiple, formatPercent } from "./capacity";
+import { stepSet, type SetRef } from "./stories";
 
 // -------------------------------------------------------------------------------------------------
 // Scenes (SC-5, SC-6)
@@ -39,9 +50,9 @@ export function addScene(
     const name = uniqueName(isValidName(base) ? base : "scene", sceneNames(diagram));
     const file =
       args.copyFrom === undefined
-        ? ctx.storyFile("scenes")
+        ? ctx.sectionFile("scenes")
         : (diagram.scenes.find((s) => s.name === args.copyFrom)?.source.file ??
-          ctx.storyFile("scenes"));
+          ctx.sectionFile("scenes"));
     const section = ctx.session.section(file, "scenes");
     if (args.copyFrom !== undefined) {
       const source = sceneMap(ctx, args.copyFrom);
@@ -53,7 +64,7 @@ export function addScene(
   });
 }
 
-export function renameScene(
+function renameSceneHere(
   files: ProjectFiles,
   diagram: Diagram,
   args: { readonly from: string; readonly to: string },
@@ -69,7 +80,7 @@ export function renameScene(
   });
 }
 
-export function deleteScene(files: ProjectFiles, diagram: Diagram, scene: string): EditResult {
+function deleteSceneHere(files: ProjectFiles, diagram: Diagram, scene: string): EditResult {
   return edit(files, diagram, (ctx) => {
     sceneSection(ctx, scene).delete(scene);
     rewriteTourScenes(ctx, (value) => (value === scene ? null : value));
@@ -109,6 +120,13 @@ export interface SceneValue {
   readonly motion?: MotionPreset | null;
   /** Traffic, share, hit rate, copies or size in the scene; left out, what's there stays. */
   readonly capacity?: SceneCapacity | null;
+  /** Presence, words, tone and mark (D-86): left out, what's there stays; null takes it away. */
+  readonly show?: Presence | null;
+  readonly label?: string | null;
+  readonly tone?: Tone | null;
+  readonly mark?: Mark | "none" | null;
+  /** Where something a layout places goes (D-87): left out, it stays; null, it goes back. */
+  readonly place?: Place | null;
 }
 
 /** A scene line's capacity values, written readably (`traffic: 5x`, `share: 10%`). */
@@ -123,24 +141,28 @@ function capacityEntries(capacity: SceneCapacity | null | undefined): [string, s
   return out;
 }
 
+/** The lines of a set as the diagram has them: a scene's, or a step's. */
+export function setEntries(diagram: Diagram, ref: SetRef): readonly SceneEntry[] {
+  if (typeof ref === "string") return diagram.scenes.find((s) => s.name === ref)?.entries ?? [];
+  return diagram.stories.find((s) => s.name === ref.story)?.steps[ref.index]?.entries ?? [];
+}
+
 /**
- * Sets a target's capacity values in a scene (traffic, share, hit rate, copies, size), keeping
- * its state, flow and motion there. `null` for a key removes it.
+ * Sets a target's capacity values in a scene or a step (traffic, share, hit rate, copies, size),
+ * keeping what else it says there. `null` for a key removes it.
  */
 export function setSceneCapacity(
   files: ProjectFiles,
   diagram: Diagram,
   args: {
-    readonly scene: string;
+    readonly scene: SetRef;
     readonly target: string;
     readonly capacity: {
       readonly [K in keyof SceneCapacity]?: NonNullable<SceneCapacity[K]> | null;
     };
   },
 ): EditResult {
-  const line = diagram.scenes
-    .find((s) => s.name === args.scene)
-    ?.entries.find((e) => e.target === args.target);
+  const line = setEntries(diagram, args.scene).find((e) => e.target === args.target);
   // Keys set to null are left out; keys not mentioned keep the scene's value.
   const merged = Object.fromEntries([
     ...Object.entries(line?.capacity ?? {}).filter(([key]) => !(key in args.capacity)),
@@ -155,69 +177,137 @@ export function setSceneCapacity(
       motion: line?.motion ?? null,
       capacity: merged,
     },
+    // What's written stays written, whatever it's compared with.
+    base: { state: null, flow: null, motion: null },
   });
 }
 
 /**
- * Sets what one element looks like in a scene. A value equal to normal removes the line, so a
- * scene only ever records differences (SC-5).
+ * Sets what one element is like in a set: a scene (by name) or a step of a story. A value equal
+ * to what it would be anyway removes the key, so a set only ever records differences (SC-5):
+ * for a scene that's the element's own values; for a step, pass `base` as it stands just before.
  */
 export function setSceneEntry(
   files: ProjectFiles,
   diagram: Diagram,
   args: {
-    readonly scene: string;
+    readonly scene: SetRef;
     readonly target: string;
     readonly value: SceneValue | null;
     /**
-     * The element's own values, for a target inside a nested diagram (`aks.checkout`), which
-     * this diagram doesn't define: a scene only records what differs from them (SC-5).
+     * What the element is like without this line: its own values in a scene (needed for a
+     * target inside a nested diagram, `aks.checkout`, which this diagram doesn't define), and
+     * the picture just before for a step.
      */
     readonly base?: SceneValue;
   },
 ): EditResult {
   return edit(files, diagram, (ctx) => {
-    const map = sceneMap(ctx, args.scene);
+    const step = typeof args.scene === "string" ? null : args.scene;
+    const map = step === null ? sceneMap(ctx, args.scene as string) : stepSet(ctx, step).set;
     const value = args.value;
     const component = diagram.components.get(args.target);
     const container = diagram.containers.get(args.target);
     const connection = diagram.connections.get(args.target);
-    const baseState = args.base?.state ?? component?.state ?? container?.state ?? null;
-    const baseMotion = args.base?.motion ?? component?.motion ?? "none";
-    const baseFlow = args.base?.flow ?? connection?.flow ?? null;
+    const decoration = diagram.decorations.get(args.target);
+    const base = args.base;
+    const baseState =
+      base?.state !== undefined ? base.state : (component?.state ?? container?.state ?? null);
+    const baseMotion = base?.motion !== undefined ? base.motion : (component?.motion ?? "none");
+    const baseFlow = base?.flow !== undefined ? base.flow : (connection?.flow ?? null);
 
     const state = value?.state != null && value.state !== baseState ? value.state : null;
     const flow = value?.flow != null && value.flow !== baseFlow ? value.flow : null;
     const motion = value?.motion != null && value.motion !== baseMotion ? value.motion : null;
-    // Capacity stays as it is in the scene unless the value says otherwise.
-    const existing = diagram.scenes
-      .find((s) => s.name === args.scene)
-      ?.entries.find((e) => e.target === args.target)?.capacity;
-    const capacity = capacityEntries(value?.capacity === undefined ? existing : value.capacity);
+    const line = setEntries(diagram, args.scene).find((e) => e.target === args.target);
+    // Capacity, and what follows, stay as they are in the set unless the value says otherwise.
+    const capacity = capacityEntries(
+      value === null ? null : value.capacity === undefined ? line?.capacity : value.capacity,
+    );
+    const pick = <T>(
+      given: T | null | undefined,
+      kept: T | undefined,
+      usual: T | null,
+    ): T | null =>
+      value === null
+        ? null
+        : given === undefined
+          ? (kept ?? null)
+          : given !== null && given !== usual
+            ? given
+            : null;
+    const show = pick(
+      value?.show,
+      line?.show,
+      base?.show ??
+        component?.show ??
+        container?.show ??
+        connection?.show ??
+        decoration?.show ??
+        null,
+    );
+    const label = pick(
+      value?.label,
+      line?.label,
+      base?.label ??
+        component?.label ??
+        container?.label ??
+        (connection === undefined ? null : (connection.text ?? "")) ??
+        decoration?.text ??
+        null,
+    );
+    const tone = pick(
+      value?.tone,
+      line?.tone,
+      base?.tone ?? component?.look?.tone ?? decoration?.tone ?? null,
+    );
+    const mark = pick<Mark | "none">(
+      value?.mark,
+      line?.mark,
+      base?.mark ?? component?.mark ?? container?.mark ?? "none",
+    );
 
-    const [only] = capacity;
-    if (state === null && flow === null && motion === null && capacity.length === 0) {
-      map.delete(args.target);
-    } else if (motion === null && capacity.length === 0) {
-      map.set(args.target, state ?? flow);
-    } else if (
-      state === null &&
-      flow === null &&
-      motion === null &&
-      capacity.length === 1 &&
-      only?.[0] === "traffic"
-    ) {
-      // `users_to_lb: 5x`, the way people write a traffic level.
+    // Where it's put: a place equal to where it already is says nothing.
+    const usual = base?.place ?? {
+      ...(component?.on != null ? { on: component.on } : {}),
+      ...(decoration?.on != null ? { on: decoration.on } : {}),
+      ...(component?.on == null && component?.parent != null ? { in: component.parent } : {}),
+    };
+    const given = value === null ? null : value.place === undefined ? line?.place : value.place;
+    const place =
+      given == null ||
+      (given.on === usual.on &&
+        given.in === usual.in &&
+        given.cell === undefined &&
+        given.along === undefined &&
+        value?.place !== undefined)
+        ? null
+        : given;
+
+    const words: [string, string | number | Node][] = [];
+    if (place?.in !== undefined) words.push(["in", place.in]);
+    if (place?.on !== undefined) words.push(["on", place.on]);
+    if (place?.cell !== undefined) words.push(["cell", pointNode(place.cell)]);
+    if (place?.along !== undefined) words.push(["along", formatPercent(place.along)]);
+    if (show !== null) words.push(["show", show]);
+    if (state !== null) words.push(["state", state]);
+    if (flow !== null) words.push(["flow", flow]);
+    if (motion !== null) words.push(["motion", motion]);
+    words.push(...capacity);
+    if (label !== null) words.push(["label", label]);
+    if (tone !== null) words.push(["tone", tone]);
+    if (mark !== null) words.push(["mark", mark]);
+
+    const [only] = words;
+    if (only === undefined) map.delete(args.target);
+    // `db: down`, `a_to_b: blocked`, `banner: shown`, `users_to_lb: 5x`: one word says it.
+    else if (words.length === 1 && ["show", "state", "flow", "traffic"].includes(only[0]))
       map.set(args.target, only[1]);
-    } else {
-      const entries: [string, string | number][] = [];
-      if (state !== null) entries.push(["state", state]);
-      if (flow !== null) entries.push(["flow", flow]);
-      if (motion !== null) entries.push(["motion", motion]);
-      entries.push(...capacity);
-      map.set(args.target, flowMap(entries));
-    }
-    if (map.items.length === 0) sceneSection(ctx, args.scene).set(args.scene, new Scalar(null));
+    else map.set(args.target, flowMap(words));
+
+    if (map.items.length > 0) return;
+    if (step === null) sceneSection(ctx, args.scene as string).set(args.scene, new Scalar(null));
+    else stepSet(ctx, step).clear();
   });
 }
 
@@ -305,7 +395,7 @@ export function addTour(
     );
     const map = new YAMLMap();
     if (args.title.trim() !== humanize(name)) map.set("title", args.title.trim());
-    ctx.session.section(ctx.storyFile("tours"), "tours").set(name, map);
+    ctx.session.section(ctx.sectionFile("tours"), "tours").set(name, map);
     ctx.setNamed(name);
   });
 }
@@ -483,4 +573,31 @@ export function setTourChoices(
       if (choice.next !== null && !steps.has(choice.next)) steps.set(choice.next, new Scalar(null));
     }
   });
+}
+
+/** Renames a scene; slides that lay it over themselves are told its new name (D-100). */
+export function renameScene(
+  files: ProjectFiles,
+  diagram: Diagram,
+  args: { readonly from: string; readonly to: string },
+): EditResult {
+  const result = renameSceneHere(files, diagram, args);
+  const to = result.named ?? args.to;
+  return {
+    ...result,
+    files: followIntoDecks(result.files, diagram.folder, (fields) =>
+      fields.scene === args.from ? { ...fields, scene: to } : fields,
+    ),
+  };
+}
+
+/** Deletes a scene; slides that laid it over themselves no longer do. */
+export function deleteScene(files: ProjectFiles, diagram: Diagram, scene: string): EditResult {
+  const result = deleteSceneHere(files, diagram, scene);
+  return {
+    ...result,
+    files: followIntoDecks(result.files, diagram.folder, (fields) =>
+      fields.scene === scene ? { ...fields, scene: null } : fields,
+    ),
+  };
 }

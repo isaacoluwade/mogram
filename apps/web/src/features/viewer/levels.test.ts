@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { AKS_FILES } from "@/features/templates/files";
-import { ProjectLevels, connectionBetween, focusSet, splitTarget } from "./levels";
+import { ProjectLevels, connectionBetween, elementBox, focusSet, splitTarget } from "./levels";
 
 describe("viewer levels", () => {
   const levels = new ProjectLevels(AKS_FILES);
@@ -59,6 +59,22 @@ describe("viewer levels", () => {
   it("splits tour targets into level and element", () => {
     expect(splitTarget("aks.checkout")).toEqual({ path: ["aks"], element: "checkout" });
     expect(splitTarget("front_door")).toEqual({ path: [], element: "front_door" });
+  });
+  it("stops a dotted path at a named part, including inside a nested level", () => {
+    const project = new ProjectLevels({
+      "mogram.yaml": "mogram: 1\ncomponents:\n  nested: { opens: inside }\n",
+      "inside/mogram.yaml":
+        "mogram: 1\nshapes:\n  code: { shape: code, text: hello, parts: { line: 1 } }\n",
+    });
+    expect(splitTarget("nested.code.line", project)).toEqual({
+      path: ["nested"],
+      element: "code.line",
+    });
+    expect(splitTarget("code.line", project, ["nested"])).toEqual({
+      path: [],
+      element: "code.line",
+    });
+    expect(elementBox(project.geometry("inside"), "code.line")?.h).toBe(30);
   });
 
   it("finds connections in either direction and focuses an element with its connections", () => {

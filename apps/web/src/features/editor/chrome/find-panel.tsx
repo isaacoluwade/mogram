@@ -35,9 +35,14 @@ const MAX_LEVELS = 64;
  * components is one blueprint (NE-1), so it's searched once, by the first way in; the level being
  * edited keeps its own way in.
  */
-function everyLevel(files: ProjectFiles, here: readonly string[], hereFolder: string): Level[] {
-  const levels: Level[] = [{ path: hereFolder === "" ? here : [], folder: "", where: "" }];
-  const seen = new Set([""]);
+function everyLevel(
+  files: ProjectFiles,
+  here: readonly string[],
+  hereFolder: string,
+  root: string,
+): Level[] {
+  const levels: Level[] = [{ path: hereFolder === root ? here : [], folder: root, where: "" }];
+  const seen = new Set([root]);
   for (let i = 0; i < levels.length && levels.length < MAX_LEVELS; i++) {
     const level = levels[i];
     if (level === undefined) break;
@@ -117,8 +122,9 @@ export function FindPanel() {
 
 function FindBody({ onClose }: { onClose: () => void }) {
   const store = useEditorStore();
-  const { files, folder, levelPath } = useEditorShallow((s) => ({
+  const { files, root, folder, levelPath } = useEditorShallow((s) => ({
     files: shownFiles(s),
+    root: s.root,
     folder: s.folder,
     levelPath: s.levelPath,
   }));
@@ -135,11 +141,11 @@ function FindBody({ onClose }: { onClose: () => void }) {
   const [start] = useState(() => ({ path: levelPath, folder }));
   const levels = useMemo(
     () =>
-      everyLevel(files, start.path, start.folder).map((level) => ({
+      everyLevel(files, start.path, start.folder, root).map((level) => ({
         ...level,
         items: searchable(parseCached(files, level.folder).diagram),
       })),
-    [files, start],
+    [files, start, root],
   );
   const matches = useMemo<Match[]>(() => {
     const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);

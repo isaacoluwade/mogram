@@ -1,8 +1,9 @@
 "use client";
 
-import { useId, useMemo, type ReactNode, type Ref } from "react";
-import { GRID, type Box } from "@mogram/core/layout";
+import { Fragment, useId, useMemo, type ReactNode, type Ref } from "react";
+import { GRID, type Box, type Point } from "@mogram/core/layout";
 import { gridLevels, gridLines, type GridStyle } from "../grid";
+import { wrap } from "../text";
 import { TimeContext, type TimeSource } from "../clock";
 import type { Camera } from "../camera";
 import type { SceneModel } from "../scene";
@@ -12,11 +13,14 @@ import type { CapacityRuntime } from "../capacity";
 import { ComponentNode } from "./component-node";
 import { FleetNode } from "./fleet-node";
 import { MachineNode } from "./machine-node";
+import { MeterNode } from "./meter-node";
 import { ShapeNode } from "./shape-node";
 import { ConnectionNode } from "./connection-node";
 import { ContainerNode } from "./container-node";
 import { GroupNode, NoteNode, TextNode, ZoneNode } from "./decoration-nodes";
 import { PaintGradient, paintFill } from "./paint-gradient";
+import { PresenceGroup } from "./presence";
+import type { PaintKind } from "@mogram/core/layout";
 import {
   RenderContext,
   svgIds,
@@ -56,22 +60,95 @@ export interface DiagramSvgProps {
   readonly editingText?: string | null;
   /** Capacity over time (D-82): copies booting, machines growing, traffic easing. */
   readonly capacity?: CapacityRuntime | null;
+  /**
+   * The story's words, drawn into a still or exported frame (D-86) in a band of the frame: the
+   * viewer shows them in its own bar instead.
+   */
+  readonly caption?: { readonly text: string | null; readonly opacity: number; readonly box: Box };
 }
 
 /** Nodes by name, so the paint order can interleave kinds. */
-function useNodes(scene: SceneModel) {
-  return useMemo(() => {
-    const byName = <T extends { readonly name: string }>(items: readonly T[]) =>
-      new Map(items.map((item) => [item.name, item]));
-    return {
-      zone: byName(scene.zones),
-      container: byName(scene.containers),
-      group: byName(scene.groups),
-      connection: byName(scene.connections),
-      component: byName(scene.components),
-      text: byName(scene.texts),
-    };
-  }, [scene]);
+function nodesOf(scene: SceneModel) {
+  const byName = <T extends { readonly name: string }>(items: readonly T[]) =>
+    new Map(items.map((item) => [item.name, item]));
+  return {
+    zone: byName(scene.zones),
+    container: byName(scene.containers),
+    group: byName(scene.groups),
+    connection: byName(scene.connections),
+    component: byName(scene.components),
+    text: byName(scene.texts),
+  };
+}
+
+type SceneNodes = ReturnType<typeof nodesOf>;
+
+function useNodes(scene: SceneModel): SceneNodes;
+function useNodes(scene: SceneModel | null): SceneNodes | null;
+function useNodes(scene: SceneModel | null): SceneNodes | null {
+  return useMemo(() => (scene === null ? null : nodesOf(scene)), [scene]);
+}
+
+/** One painted thing, and the point it grows from when it arrives. */
+function draw(
+  nodes: SceneNodes,
+  scene: SceneModel,
+  kind: PaintKind,
+  name: string,
+  capacity: boolean,
+): { readonly node: ReactNode; readonly origin: Point | null } | null {
+  const centre = (box: Box): Point => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
+  switch (kind) {
+    case "zone": {
+      const zone = nodes.zone.get(name);
+      return zone === undefined ? null : { node: <ZoneNode zone={zone} />, origin: null };
+    }
+    case "container": {
+      const container = nodes.container.get(name);
+      return container === undefined
+        ? null
+        : { node: <ContainerNode container={container} />, origin: null };
+    }
+    case "group": {
+      const group = nodes.group.get(name);
+      return group === undefined ? null : { node: <GroupNode group={group} />, origin: null };
+    }
+    case "connection": {
+      const connection = nodes.connection.get(name);
+      return connection === undefined
+        ? null
+        : { node: <ConnectionNode connection={connection} />, origin: null };
+    }
+    case "component": {
+      const component = nodes.component.get(name);
+      if (component === undefined) return null;
+      const spokes = scene.spokes.get(name) ?? null;
+      // Scaling is drawn only while the diagram models capacity (D-82).
+      const node =
+        component.scaling !== null && capacity ? (
+          component.scaling.kind === "out" ? (
+            <FleetNode component={component} spokes={spokes} />
+          ) : (
+            <MachineNode component={component} spokes={spokes} />
+          )
+        ) : component.meter !== null ? (
+          <MeterNode component={component} />
+        ) : component.shape !== null ? (
+          <ShapeNode component={component} />
+        ) : (
+          <ComponentNode component={component} />
+        );
+      return { node, origin: centre(component.shape !== null ? component.box : component.tile) };
+    }
+    case "text": {
+      const item = nodes.text.get(name);
+      if (item === undefined) return null;
+      return {
+        node: item.variant === "note" ? <NoteNode note={item} /> : <TextNode item={item} />,
+        origin: centre(item.box),
+      };
+    }
+  }
 }
 
 /** The diagram as one SVG, drawn back to front in the scene's paint order (architecture.md §5). */
@@ -96,6 +173,7 @@ export function DiagramSvg({
   interactive = false,
   editingText = null,
   capacity: live = null,
+  caption,
 }: DiagramSvgProps) {
   // Without a live timeline (thumbnails, the minimap), capacity is drawn as it settles.
   const capacity = useMemo<CapacityRuntime | null>(
@@ -110,27 +188,34 @@ export function DiagramSvg({
       theme: scene.theme,
       fontFamily,
       transitionStart: scene.transitionStart,
+      transitionSeconds: scene.transitionSeconds,
       mode,
-      focus,
+      focus: focus ?? scene.focus,
       ids,
       interactive,
       editingText,
       capacity,
+      ramp: scene.ramp,
     }),
     [
       scene.theme,
       fontFamily,
       scene.transitionStart,
+      scene.transitionSeconds,
+      scene.focus,
       mode,
       focus,
       ids,
       interactive,
       editingText,
       capacity,
+      scene.ramp,
     ],
   );
   const nodes = useNodes(scene);
+  const old = useNodes(scene.leaving);
   const isStatic = frame !== undefined;
+  const page = scene.page;
   const transform =
     camera === undefined ? undefined : `translate(${camera.x} ${camera.y}) scale(${camera.zoom})`;
 
@@ -166,71 +251,124 @@ export function DiagramSvg({
               />
             ) : null}
             {underlay}
-            <g data-layer="diagram">
+            {/* With a page (D-98), someone watching sees the page and nothing beyond it. */}
+            {page !== null && mode !== "edit" ? (
+              <clipPath id={ids.page}>
+                <rect x={page.x} y={page.y} width={page.w} height={page.h} />
+              </clipPath>
+            ) : null}
+            <g
+              data-layer="diagram"
+              clipPath={page !== null && mode !== "edit" ? `url(#${ids.page})` : undefined}
+            >
               {scene.paint.map(({ kind, name }) => {
                 const key = `${kind}:${name}`;
-                switch (kind) {
-                  case "zone": {
-                    const zone = nodes.zone.get(name);
-                    return zone === undefined ? null : <ZoneNode key={key} zone={zone} />;
-                  }
-                  case "container": {
-                    const container = nodes.container.get(name);
-                    return container === undefined ? null : (
-                      <ContainerNode key={key} container={container} />
-                    );
-                  }
-                  case "group": {
-                    const group = nodes.group.get(name);
-                    return group === undefined ? null : <GroupNode key={key} group={group} />;
-                  }
-                  case "connection": {
-                    const connection = nodes.connection.get(name);
-                    return connection === undefined ? null : (
-                      <ConnectionNode key={key} connection={connection} />
-                    );
-                  }
-                  case "component": {
-                    const component = nodes.component.get(name);
-                    if (component === undefined) return null;
-                    // Scaling is drawn only while the diagram models capacity (D-82).
-                    if (component.scaling !== null && capacity !== null)
-                      return component.scaling.kind === "out" ? (
-                        <FleetNode
-                          key={key}
-                          component={component}
-                          spokes={scene.spokes.get(name) ?? null}
-                        />
-                      ) : (
-                        <MachineNode
-                          key={key}
-                          component={component}
-                          spokes={scene.spokes.get(name) ?? null}
-                        />
-                      );
-                    return component.shape !== null ? (
-                      <ShapeNode key={key} component={component} />
-                    ) : (
-                      <ComponentNode key={key} component={component} />
-                    );
-                  }
-                  case "text": {
-                    const item = nodes.text.get(name);
-                    if (item === undefined) return null;
-                    return item.variant === "note" ? (
-                      <NoteNode key={key} note={item} />
-                    ) : (
-                      <TextNode key={key} item={item} />
-                    );
-                  }
-                }
+                const pair = scene.presence.get(key);
+                const now = draw(nodes, scene, kind, name, capacity !== null);
+                // While the picture changes (D-86): what's leaving is drawn as it was, and
+                // what's changing its words or look has its old self underneath.
+                // Something on its way from one place to another is one thing moving, not
+                // an old one fading out and a new one fading in.
+                const travel = scene.travel.get(key);
+                const fading = scene.crossfade.has(key) && travel === undefined;
+                const was =
+                  old !== null && scene.leaving !== null && (now === null || fading)
+                    ? draw(old, scene.leaving, kind, name, capacity !== null)
+                    : null;
+                if (now === null && was === null) return null;
+                const solid = { from: 1, to: 1 };
+                return (
+                  <Fragment key={key}>
+                    {was !== null ? (
+                      <PresenceGroup
+                        key="was"
+                        pair={pair ?? solid}
+                        role={now === null ? "stay" : "old"}
+                      >
+                        {was.node}
+                      </PresenceGroup>
+                    ) : null}
+                    {now !== null ? (
+                      <PresenceGroup
+                        key="now"
+                        pair={fading ? (pair ?? solid) : pair}
+                        role={fading ? "new" : "stay"}
+                        origin={now.origin}
+                        travel={travel}
+                      >
+                        {now.node}
+                      </PresenceGroup>
+                    ) : null}
+                  </Fragment>
+                );
               })}
             </g>
+            {/* In the editor the page is drawn, and what's off stage is dimmed, not hidden. */}
+            {page !== null && mode === "edit" ? (
+              <g data-layer="page" pointerEvents="none">
+                <path
+                  d={`M-100000 -100000H100000V100000H-100000Z M${page.x} ${page.y}v${page.h}h${page.w}v${-page.h}Z`}
+                  fillRule="evenodd"
+                  fill={scene.theme.base}
+                  opacity={0.6}
+                />
+                <rect
+                  data-testid="page-frame"
+                  x={page.x}
+                  y={page.y}
+                  width={page.w}
+                  height={page.h}
+                  fill="none"
+                  stroke={scene.theme.line}
+                  strokeWidth={1}
+                  vectorEffect="non-scaling-stroke"
+                />
+              </g>
+            ) : null}
             {overlay}
           </g>
+          {caption !== undefined ? (
+            <CaptionBand caption={caption} theme={scene.theme} fontFamily={fontFamily} />
+          ) : null}
         </RenderContext>
       </TimeContext>
     </svg>
+  );
+}
+
+const CAPTION_SIZE = 17;
+const CAPTION_LINE = 24;
+
+/** The story's words under an exported picture: up to three lines, centred in their band. */
+function CaptionBand({
+  caption,
+  theme,
+  fontFamily,
+}: {
+  caption: NonNullable<DiagramSvgProps["caption"]>;
+  theme: CanvasTheme;
+  fontFamily: string;
+}) {
+  const { box, text } = caption;
+  if (text === null || text === "") return null;
+  const lines = wrap(text, Math.max(120, box.w - 64), CAPTION_SIZE, 3, 500, "Inter");
+  const top = box.y + (box.h - lines.length * CAPTION_LINE) / 2 - 6;
+  return (
+    <text
+      data-part="caption"
+      textAnchor="middle"
+      fontSize={CAPTION_SIZE}
+      fontWeight={500}
+      fill={theme.text}
+      opacity={caption.opacity}
+      style={{ fontFamily }}
+    >
+      {lines.map((line, index) => (
+        <tspan key={index} x={box.x + box.w / 2} y={top + CAPTION_SIZE + index * CAPTION_LINE}>
+          {line}
+        </tspan>
+      ))}
+    </text>
   );
 }
 

@@ -1,6 +1,18 @@
-import type { Decoration, Diagram, GridPoint, GridSize, TextStyle } from "../model/types";
+import type { Diagram, GridPoint, GridSize } from "../model/types";
+import { decorationSize } from "./decorations";
+export { decorationSize, TEXT_LINE_HEIGHT, textStyleSize } from "./decorations";
+import { pageSize } from "../presets/pages";
+import { contentSize } from "./media";
 import { SHAPE_INFO } from "../presets/shapes";
 import { capacityFootprint, capacityRoom } from "./capacity";
+import {
+  isPlaced,
+  isPlacedComponent,
+  layoutRooms,
+  placeAll,
+  traySize,
+  type Placement,
+} from "./place";
 import {
   COMPONENT_UNITS,
   CONTAINER_UNITS,
@@ -13,6 +25,7 @@ import {
   translate,
   union,
   type Box,
+  type Point,
 } from "./geometry";
 
 export type PlacedKind = "component" | "container" | "decoration";
@@ -37,6 +50,11 @@ export interface PlacedElement {
   readonly order: number;
 }
 
+/** What a viewer, a thumbnail or an export frames: the page when there is one, else the contents. */
+export function frameOf(layout: LayoutResult): Box {
+  return layout.page ?? layout.bounds;
+}
+
 export interface LayoutResult {
   readonly elements: ReadonlyMap<string, PlacedElement>;
   /** Icon tiles of components (connections attach here). */
@@ -46,6 +64,14 @@ export interface LayoutResult {
   /** Children per parent (`null` = canvas), in document order. */
   readonly children: ReadonlyMap<string | null, readonly string[]>;
   readonly bounds: Box;
+  /** The diagram's page in pixels (D-98), its corner at the origin; null when it has none. */
+  readonly page: Box | null;
+  /**
+   * Things a layout places (D-87), in the order they're painted: the contents of rows, columns
+   * and grids, and riders. They're in `elements` too, where they are for the diagram as
+   * written; `placeMovers` puts them where a picture has them.
+   */
+  readonly movers: readonly string[];
 }
 
 export interface LayoutOverrides {
@@ -59,41 +85,6 @@ export interface LayoutOverrides {
     readonly dx: number;
     readonly dy: number;
   };
-}
-
-const TEXT_SIZES: Readonly<Record<TextStyle, number>> = {
-  title: 28,
-  heading: 20,
-  body: 14,
-  caption: 12,
-};
-
-/** Line height of free text and notes, as a multiple of the font size. */
-export const TEXT_LINE_HEIGHT = 1.4;
-
-export function textStyleSize(style: TextStyle): number {
-  return TEXT_SIZES[style];
-}
-
-/** Size of a decoration in grid units. Text sizes are estimates (rendering measures exactly). */
-export function decorationSize(decoration: Decoration): GridSize {
-  switch (decoration.variant) {
-    case "zone":
-      return decoration.size;
-    case "label":
-      return { w: Math.max(4, Math.ceil((estimateTextWidth(decoration.text, 12) + 24) / 8)), h: 3 };
-    case "note":
-      return decoration.size;
-    case "text": {
-      const fontSize = decoration.look.fontSize ?? TEXT_SIZES[decoration.style];
-      const lines = decoration.text.split("\n");
-      const widest = Math.max(...lines.map((line) => estimateTextWidth(line, fontSize)));
-      return {
-        w: Math.max(2, Math.ceil(widest / 8)),
-        h: Math.max(2, Math.ceil((fontSize * TEXT_LINE_HEIGHT * lines.length) / 8)),
-      };
-    }
-  }
 }
 
 interface Node {
@@ -120,10 +111,14 @@ export function computeLayout(diagram: Diagram, overrides: LayoutOverrides = {})
   };
   for (const container of diagram.containers.values())
     addNode(container.name, "container", container.parent);
+  // What a layout places (D-87) isn't placed here: it follows from where it's been put.
   for (const component of diagram.components.values())
-    addNode(component.name, "component", component.parent);
+    if (!isPlacedComponent(diagram, component))
+      addNode(component.name, "component", component.parent);
   for (const decoration of diagram.decorations.values())
-    addNode(decoration.name, "decoration", decoration.parent);
+    if (!isPlaced(diagram, decoration.name))
+      addNode(decoration.name, "decoration", decoration.parent);
+  const rooms = layoutRooms(diagram);
 
   const siblingEdges = buildSiblingEdges(diagram, nodes);
   const rel = new Map<string, GridPoint>();
@@ -144,7 +139,17 @@ export function computeLayout(diagram: Diagram, overrides: LayoutOverrides = {})
         sizes.set(kid, containerSize(kid));
       } else if (node?.kind === "decoration") {
         const decoration = diagram.decorations.get(kid);
-        if (decoration !== undefined) sizes.set(kid, decorationSize(decoration));
+        if (decoration !== undefined) {
+          const resized = overrides.sizes?.get(kid);
+          sizes.set(
+            kid,
+            decorationSize(
+              decoration.variant === "text" && resized !== undefined
+                ? { ...decoration, width: resized.w }
+                : decoration,
+            ),
+          );
+        }
       } else {
         const component = diagram.components.get(kid);
         const shape = component?.shape ?? null;
@@ -156,7 +161,13 @@ export function computeLayout(diagram: Diagram, overrides: LayoutOverrides = {})
           // Shapes take their size from the layout (resized by hand) or their kind's default.
           const manual = overrides.sizes?.get(kid) ?? diagram.layout.get(kid)?.size ?? null;
           if (manual !== null) sized.add(kid);
-          sizes.set(kid, manual ?? { ...SHAPE_INFO[shape].size });
+          sizes.set(
+            kid,
+            manual ??
+              (component === undefined ? null : contentSize(component)) ?? {
+                ...SHAPE_INFO[shape].size,
+              },
+          );
         }
       }
     }
@@ -206,7 +217,13 @@ export function computeLayout(diagram: Diagram, overrides: LayoutOverrides = {})
     const container = diagram.containers.get(name);
     let w: number = CONTAINER_UNITS.minW;
     let h: number = CONTAINER_UNITS.minH;
-    if (container !== undefined) {
+    const room = rooms.get(name);
+    if (container !== undefined && room !== undefined) {
+      // A container that arranges its contents is as big as the room it keeps for them.
+      const tray = traySize(container, room);
+      w = Math.max(tray.w, Math.ceil((estimateTextWidth(container.label, 11) + 24) / 8));
+      h = tray.h;
+    } else if (container !== undefined) {
       w = Math.max(w, Math.ceil((estimateTextWidth(container.label, 13) + 64) / 8));
     }
     for (const kid of children.get(name) ?? []) {
@@ -287,7 +304,78 @@ export function computeLayout(diagram: Diagram, overrides: LayoutOverrides = {})
     w: 0,
     h: 0,
   };
-  return { elements, tiles, groups, children, bounds };
+  const size = diagram.settings.page === null ? null : pageSize(diagram.settings.page);
+  const page = size === null ? null : { x: 0, y: 0, w: toPx(size.w), h: toPx(size.h) };
+  return placeMovers({ elements, tiles, groups, children, bounds, page, movers: [] }, diagram);
+}
+
+/**
+ * Puts everything a layout places (D-87) where a picture has it: `shown` is the diagram as it
+ * stands (who is in which container, riding on what), `absent` what isn't there now, and
+ * `pointOn` where connections run, for things riding on one. Everything else stays as laid out.
+ */
+export function placeMovers(
+  layout: LayoutResult,
+  written: Diagram,
+  shown: Diagram = written,
+  options: {
+    readonly absent?: ReadonlySet<string>;
+    readonly pointOn?: (connection: string, along: number) => Point | null;
+  } = {},
+): LayoutResult {
+  const still = new Map(layout.elements);
+  const tiles = new Map(layout.tiles);
+  for (const name of layout.movers) {
+    still.delete(name);
+    tiles.delete(name);
+  }
+  const placed = placeAll({
+    written,
+    shown,
+    ...(options.absent === undefined ? {} : { absent: options.absent }),
+    ...(options.pointOn === undefined ? {} : { pointOn: options.pointOn }),
+    boxOf: (name) => still.get(name)?.box ?? null,
+    decorationSize,
+  });
+  if (placed.size === 0 && layout.movers.length === 0) return layout;
+  const elements = new Map(still);
+  let order = still.size;
+  const add = (placement: Placement): void => {
+    const z =
+      placement.kind === "decoration"
+        ? (written.decorations.get(placement.name)?.z ?? 0)
+        : (written.layout.get(placement.name)?.z ?? 0);
+    const holder = placement.parent === null ? undefined : still.get(placement.parent);
+    elements.set(placement.name, {
+      name: placement.name,
+      kind: placement.kind,
+      parent: placement.parent,
+      box: placement.box,
+      rel: {
+        x: Math.round((placement.box.x - (holder?.box.x ?? 0)) / 8),
+        y: Math.round((placement.box.y - (holder?.box.y ?? 0)) / 8),
+      },
+      size: { w: Math.round(placement.box.w / 8), h: Math.round(placement.box.h / 8) },
+      pinned: true,
+      sized: written.layout.get(placement.name)?.size != null,
+      depth: (holder?.depth ?? -1) + 1,
+      z,
+      order: order++,
+    });
+    const component = shown.components.get(placement.name);
+    if (component !== undefined && component.shape === null)
+      tiles.set(placement.name, tileOf(placement.box));
+  };
+  // Painted in file order, components before text: a label riding on a token sits on top of it.
+  const names = [
+    ...[...written.components.keys()].filter((name) => placed.has(name)),
+    ...[...written.decorations.keys()].filter((name) => placed.has(name)),
+  ];
+  for (const name of names) {
+    const placement = placed.get(name);
+    if (placement !== undefined) add(placement);
+  }
+  return { ...layout, elements, tiles, movers: names };
 }
 
 function applyTranslation(

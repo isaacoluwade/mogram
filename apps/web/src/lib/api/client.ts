@@ -8,6 +8,18 @@ import type {
   Visibility,
 } from "./contracts";
 
+type Files = Readonly<Record<string, string>>;
+
+/**
+ * What runs before a project's files go to the server. The assets feature sets it (D-101): it
+ * uploads the pictures and recordings the files point at that the account doesn't have yet.
+ */
+let prepareFiles: (files: Files) => Promise<void> = () => Promise.resolve();
+
+export function beforeFilesSaved(prepare: (files: Files) => Promise<void>): void {
+  prepareFiles = prepare;
+}
+
 /**
  * Typed browser client for the REST API (D-7). Every call either returns the documented body or
  * throws an `ApiError` carrying the server's code and human-readable message.
@@ -80,25 +92,35 @@ export const api = {
   listDiagrams: async (): Promise<DiagramSummary[]> =>
     (await request<{ diagrams: DiagramSummary[] }>("/api/diagrams")).diagrams,
 
-  getDiagram: async (id: string): Promise<DiagramDetail> =>
-    (await request<{ diagram: DiagramDetail }>(`/api/diagrams/${encodeURIComponent(id)}`)).diagram,
+  getDiagram: async (id: string): Promise<DiagramDetail> => {
+    const path = `/api/diagrams/${encodeURIComponent(id)}`;
+    const { diagram } = await request<{ diagram: DiagramDetail }>(path);
+    return diagram;
+  },
 
   createDiagram: async (input: {
     name: string;
     files: Record<string, string>;
     thumbnail?: string | null;
     source?: "create" | "import";
-  }): Promise<DiagramDetail> =>
-    (
+  }): Promise<DiagramDetail> => {
+    await prepareFiles(input.files);
+    return (
       await request<{ diagram: DiagramDetail }>("/api/diagrams", {
         method: "POST",
         body: json(input),
       })
-    ).diagram,
+    ).diagram;
+  },
 
   /** Throws `ApiError` with code "conflict" and `currentVersion` when a newer version exists. */
-  saveDiagram: (id: string, input: SaveInput): Promise<{ version: number; updatedAt: string }> =>
-    request(`/api/diagrams/${encodeURIComponent(id)}`, { method: "PUT", body: json(input) }),
+  saveDiagram: async (
+    id: string,
+    input: SaveInput,
+  ): Promise<{ version: number; updatedAt: string }> => {
+    await prepareFiles(input.files);
+    return request(`/api/diagrams/${encodeURIComponent(id)}`, { method: "PUT", body: json(input) });
+  },
 
   /** A rename writes the new name into the YAML too (new version); a thumbnail is metadata only. */
   updateDiagram: async (
@@ -143,12 +165,12 @@ export const api = {
       )
     ).revisions,
 
-  getRevisionFiles: async (id: string, revisionId: string): Promise<Record<string, string>> =>
-    (
-      await request<{ files: Record<string, string> }>(
-        `/api/diagrams/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`,
-      )
-    ).files,
+  getRevisionFiles: async (id: string, revisionId: string): Promise<Record<string, string>> => {
+    const { files } = await request<{ files: Record<string, string> }>(
+      `/api/diagrams/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`,
+    );
+    return files;
+  },
 
   nameRevision: (id: string, revisionId: string, name: string | null): Promise<void> =>
     request(`/api/diagrams/${encodeURIComponent(id)}/revisions/${encodeURIComponent(revisionId)}`, {
@@ -162,7 +184,7 @@ export const api = {
       body: json({ name }),
     }),
 
-  importVersions: (
+  importVersions: async (
     id: string,
     versions: readonly {
       files: Record<string, string>;
@@ -172,11 +194,13 @@ export const api = {
       label: string | null;
       restoredFromAt: string | null;
     }[],
-  ): Promise<{ imported: number }> =>
-    request(`/api/diagrams/${encodeURIComponent(id)}/revisions/import`, {
+  ): Promise<{ imported: number }> => {
+    for (const version of versions) await prepareFiles(version.files);
+    return request(`/api/diagrams/${encodeURIComponent(id)}/revisions/import`, {
       method: "POST",
       body: json({ versions }),
-    }),
+    });
+  },
 
   restoreRevision: (
     id: string,
@@ -187,7 +211,9 @@ export const api = {
       { method: "POST" },
     ),
 
-  getShared: async (shareId: string): Promise<SharedDiagram> =>
-    (await request<{ diagram: SharedDiagram }>(`/api/share/${encodeURIComponent(shareId)}`))
-      .diagram,
+  getShared: async (shareId: string): Promise<SharedDiagram> => {
+    const path = `/api/share/${encodeURIComponent(shareId)}`;
+    const { diagram } = await request<{ diagram: SharedDiagram }>(path);
+    return diagram;
+  },
 };

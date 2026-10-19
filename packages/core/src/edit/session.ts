@@ -26,8 +26,10 @@ const SECTION_ORDER = [
   "description",
   "concept",
   "theme",
+  "page",
   "background",
   "grid",
+  "deck",
   "libraries",
   "ports",
   "data",
@@ -38,6 +40,8 @@ const SECTION_ORDER = [
   "groups",
   "connections",
   "scenes",
+  "stories",
+  "controls",
   "tours",
   "layout",
 ] as const;
@@ -237,8 +241,10 @@ const SETTING_ORDER = [
   "description",
   "concept",
   "theme",
+  "page",
   "background",
   "grid",
+  "deck",
   "data",
 ];
 

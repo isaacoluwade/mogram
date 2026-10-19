@@ -149,6 +149,6 @@ export function restoreElements(
     if (scene === undefined) throw new EditError(`Scene "${name}" isn't in that version.`);
     const node = oldNode(scene.source.file, ["scenes", name]);
     if (node === null) throw new EditError(`Scene "${name}" couldn't be read from that version.`);
-    ctx.session.section(ctx.storyFile("scenes"), "scenes").set(name, node);
+    ctx.session.section(ctx.sectionFile("scenes"), "scenes").set(name, node);
   }
 }

@@ -111,7 +111,7 @@ export function insertYaml(
       const taken = new Set(
         (kind === "scenes" ? diagram.scenes : diagram.tours).map((s) => s.name),
       );
-      const target = ctx.session.section(ctx.storyFile(kind), kind);
+      const target = ctx.session.section(ctx.sectionFile(kind), kind);
       for (const pair of map.items) {
         const key = keyOf(pair);
         if (taken.has(key) || target.has(key))

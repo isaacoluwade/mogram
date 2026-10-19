@@ -1,0 +1,24 @@
+# A text slide: a heading, and points arranged by a column that appear one at a time.
+# (P4: width on text, text placed by a layout)
+mogram: 1
+name: Why state matters
+containers:
+  points: { label: " ", layout: column, gap: 3 }
+stories:
+  main:
+    - say: It maps your code to real things.
+      script: So why does state matter? Well, first, it's the map from a line of your code to a real thing in Azure.
+      set: { p1: shown }
+    - say: Lose it, and Terraform starts over.
+      script: Second, if you lose it, Terraform doesn't recognise anything it built, and it tries to build all of it again.
+      set: { p2: shown }
+    - say: It can hold secrets.
+      script: And third, it can hold secrets in plain text. So you guard it like one.
+      set: { p3: shown }
+layout:
+  points: { at: [24, 40] }
+  decorations:
+    title: { text: Why does state matter?, style: title, font_size: 64, at: [24, 14] }
+    p1: { text: It maps each line of your code to a real ID in Azure., font_size: 36, in: points, width: 150, show: hidden }
+    p2: { text: "Lose it, and Terraform tries to build everything again.", font_size: 36, in: points, width: 150, show: hidden }
+    p3: { text: It can hold secrets in plain text., font_size: 36, in: points, width: 150, show: hidden }

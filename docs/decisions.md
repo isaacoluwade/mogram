@@ -963,3 +963,387 @@ planned (networking, Azure, AWS, Git…). Agreed with the product owner on 2026-
   browser replays it without the whole library in the editor's bundle.
 
 Adding concepts, and scenes that show, hide or move elements (for Git), come later.
+
+### D-86 · Stories: one picture, changed step by step, from a few general tools
+
+The concept research (`research/concepts/`: 1,293 concepts across sixteen areas, a plan for the
+best animated explanation of each, every plan reviewed) asked what Mogram needs to tell those
+stories. The answer (`plans/concept-platform.md`, reviewed a second time against ten plans and
+the code) is deliberately not a feature per concept. Agreed principles:
+
+- **Few tools, each general.** Elements, layouts, values and controls, stories, scenes, and the
+  capacity model. No commit-graph or handshake widgets: those are made from the tools.
+- **One vocabulary for change.** A scene and a step of a story are both a **set**: lines that
+  say what differs for an element. A set can change its state, flow, motion and capacity
+  numbers (as scenes always could), and now whether it's there (`show: shown | faded |
+hidden`), what it says (`label`), a shape's or text's `tone`, and its `mark`. It can't change
+  what a thing is.
+- **A story is a named run of steps.** A step with `say` starts a beat; steps without carry it
+  on. Changes add up. `rewind` cuts back to the start or a named step (the same again, with one
+  thing changed); `choices` play another story and come back. No jumps, no keyframes.
+- **The picture has one definition** (`pictureAt` in `@mogram/core/picture`): the diagram, then
+  the steps played, then the scene picked; the viewer's what-ifs and what the model derives
+  come after, in `resolveState`. It returns a plain `Diagram` with hidden things gone, so the
+  capacity model, layout and renderer needed no new cases. A `Moment` (scene + place in a
+  story) replaces the bare scene name that used to run through the stores, resolver, exports
+  and links.
+- **The geometry stays still.** A diagram is laid out once, with everything shown. Things
+  appear in the room kept for them; nothing unrelated shifts and routes don't jump.
+- **Editing has one honest rule.** What a thing is (shape, style, size, place, card) belongs to
+  the diagram whichever step is showing. What happens to it (shown or hidden, state, flow,
+  words, mark, tone, traffic) belongs to the step or scene picked, compared with how the steps
+  before left it, so a step only records differences. Hidden things are drawn faintly in the
+  editor so they can still be selected.
+- **"Story" now means this.** Playing the scenes in order keeps working and is called that
+  (`SCENE_HOLD`, `scenesAt`, export "All scenes").
+
+What's refused, and what it costs, is in the plan (§8): no general simulator, no rules per
+element, no curves drawn by hand. Outside the capacity model a story is states set step by
+step, so a concept is checked against its reviewed plan beat by beat before it ships.
+
+### D-87 · Layouts: containers that arrange, things that ride, and moving between places
+
+The plans keep needing small things with identity that go somewhere: a message from a queue to
+a consumer, a branch name from one commit to another, rows appearing in a ledger. Rather than a
+queue widget and a commit-graph widget, one idea (D-86's plan, K3):
+
+- **A container can arrange what's in it** (`layout: row | column | grid`). Its children need no
+  positions and are placed in file order.
+- **A thing can ride on another** (`on:` an element or a connection): it sits above it (or on
+  the line) and goes where it goes.
+- **Only what a layout places can move.** A set puts it `in` another arranging container or `on`
+  something else, and it travels there, along the connection between the two when there is one.
+  Things placed freely never move in a story: that's what keeps a diagram still.
+- **Room is kept for the most a container ever holds**, worked out from every step and scene
+  (as a scale set keeps room for its most copies, D-82), so containers never resize.
+- **Placed things are painted on top and aren't routed around.** They're small and they move.
+- **`like:`** makes a copy of another element of its kind (type or shape, look, label, size,
+  data), merged the way a named style is; shown, it grows out of what it copies.
+
+`computeLayout` still lays the diagram out once, as written. `placeMovers` then puts placed
+things where a picture has them; the scene builder calls it per picture and re-routes only the
+connections touching them (through a route cache), so everything unaware of pictures still gets
+a sensible layout. In the editor, dropping a placed thing into an arranging container or onto an
+element places it there (at the step showing, or as written).
+
+### D-88 · Values, meters and controls: numbers that are worked out, and a viewer who can turn them
+
+The commonest fault the reviewers found in the plans was arithmetic: a number on screen that
+didn't follow from the others. And most interactions were "change a number, see what happens".
+
+- **Formulas.** A value in `data:` written `= …` is worked out per picture (`workOut`), in a
+  small language with no loops or assignment. Labels read values with `%name%`. Formulas can
+  read the capacity model (`load`, `copies`, `traffic`, `count`); those are worked out by the
+  renderer, where the model is known.
+- **The model can be driven**: a connection's `traffic` can be a formula, so a dial turns up the
+  same model that scales a diagram on its own. A formula that feeds the model can't read it.
+- **A set can change a value**, or run it from one number to another across the step.
+- **Meters** are one shape (`meter`) drawn as a bar, a ring or a number, with an optional limit.
+- **Controls** belong to the viewer: `dial` (a number), `toggle` (a scene on or off) and `pick`
+  (one of several scenes). They're part of the `Moment`, so the picture is still a function of
+  where you are. This brings back "how much traffic" as something a viewer sets, which D-84
+  removed as a slider on every diagram; the difference is that a concept declares it, names it
+  and binds it to a value.
+- **`when:`** on a step makes it play only while a formula holds, so a dial can change what
+  happens. Moving a control replays the story to the beat it was at.
+
+Not built: text the viewer types, rules per element, feedback loops (plan §8).
+
+### D-96 · A prompter that follows your voice, in the browser
+
+The deck plan (`docs/mogram-decks/`) puts a script window at P8. It came forward: it's the part
+that's wanted now, and it needs none of pages, decks or recorded voice.
+
+- **`script` on a step** is what's said over a beat. It's separate from `say`, which is what's
+  drawn. A beat begins on either. The editor's Story strip has a Script field beside Caption.
+- **Any script can be read**, not only a diagram's: `/prompter` takes pasted text (a paragraph
+  is a beat) and keeps it in the browser. A draft's is at `/draft/<id>/prompter`, a saved
+  diagram's at `/edit/<id>/prompter`, both opened from the viewer.
+- **The prompter follows; it doesn't transcribe.** The script is known, so the question is only
+  "where in it are these last few words?". `follow` (`@mogram/core/prompter`) lines up the last
+  eight words heard against the script around the current place (14 words back, 45 ahead),
+  allowing for words dropped, added or misheard. Only words the reader hadn't said yet count as
+  proof of moving: two to carry on, four to jump ahead nearby. If nothing nearby fits, the whole
+  script is searched, and the reader is moved there only when five words line up and nowhere
+  else lines up nearly as well (a page skipped, a take started again). An ad-lib matches
+  nothing, so the prompter waits. Going back by a word or two is ignored: a recogniser changes
+  its mind about its last words constantly, and following that would make the text flicker.
+- **Recognition is Chrome's on-device Web Speech API** (`processLocally`, Chrome 139 and later).
+  The web app stays standalone: no native companion, no server, no model shipped by us. The
+  page opens the microphone itself and hands Chrome the track, which is what lets the reader
+  pick a microphone and see its level. Chrome ends a session after a silence, so the listener
+  starts it again and keeps the last words across the gap.
+- **No vocabulary hints.** Chrome can be told which phrases to favour. On the bench, favouring a
+  script's unusual words made it say "Terraform" four times over and swallow the sentence that
+  followed. Without hints it heard the same names correctly, and the follower doesn't need
+  every word anyway.
+- **The prompter is its own window**, sized for an Elgato Prompter: the word being read sits
+  between two marks at mid-height, what's been said dims, the controls fade while it's
+  following, the screen is kept awake, and text size, mirroring and the microphone are
+  remembered. It tells the viewer which beat it's on over a `BroadcastChannel`, so the diagram
+  plays along. Arrow keys and a clicker always work, voice or no voice.
+- **A bench reads scripts aloud** (`pnpm bench:prompter` in `apps/web`): macOS `say` makes the
+  recordings, which are played into the prompter as its microphone in the installed Chrome. It
+  has to start Chrome plainly: under Playwright's launcher the recogniser takes the audio in and
+  says nothing until the session ends, so the ordinary journeys can't test listening. What the
+  recogniser heard on the bench is kept in `packages/core/test/fixtures/` and replayed by the
+  follower's unit tests.
+
+Considered and left: a native macOS helper using Apple's `SpeechAnalyzer` (the engine in
+career-engine, and the best recogniser available on the machine, but it makes the web app depend
+on an installed app); Whisper or Moonshine in WebAssembly (works in any browser and gives word
+times, but is a large download and needs WebAssembly allowed in the content policy). Moonshine
+is the second engine to add if Chrome's proves unreliable.
+
+On the bench the prompter stays about one word behind the reader (three or four at worst)
+across five synthetic voices and accents, 140 to 220 words a minute, a hiss under the voice, 25
+seconds of silence, three ad-libs, two skipped paragraphs, a paragraph read twice, a loosely
+worded reading and a five-minute script; and for a person, a LibriSpeech reader (public domain)
+for seven minutes, straight and then wandering, with asides, skipped takes and takes read
+twice. The person's reading found two more things: one small word misheard before a long one
+at the end of a paragraph left the prompter two words short, so that case is stepped over; and
+the recogniser once handed back an older stretch of words for a single guess, which jumped the
+prompter back and forward again, so going back now has to be heard twice (`steadyFollow`).
+
+The real microphone path (permission, level, the list of microphones, letting go on stop) was
+tried on this machine's own microphone. What still hasn't happened is the owner reading into
+it: one voice isn't every voice. Chrome gives no word times, so it can't mark where to cut a
+recording. Other browsers get the prompter without listening.
+
+### D-97 · A diagram in any folder can be the one on screen
+
+The deck plan (`docs/mogram-decks/`, P0) stands on this: a slide is a diagram in a folder, and it
+plays its own story. Until now only the project's own diagram did. Stories, scenes, controls and
+tours were read from folder `""` everywhere, and other folders were only ever reached through
+`opens:`, where they take their state from above.
+
+- **A root.** The viewer, the editor and an export each have a `root`: the folder of the
+  diagram being looked at. It defaults to the project's own, so nothing changes for a project
+  with one diagram. Level paths start from the root, and its story, scenes, controls and tours
+  are the ones that play.
+- **By link.** `?root=slides/flow` on any viewer link and on the editor. A folder that isn't in
+  the project, or isn't a folder name, is ignored and the project's own diagram opens. Preview
+  from the editor carries the root, and "Back to editor" returns to it.
+- **What didn't change.** A level reached through `opens:` still takes its scene and story from
+  the diagram above it; its own stories don't play there. A folder is either the root or a
+  level, never both at once.
+
+This is the plan's D-89 to D-95 renumbered as they're built: the prompter took D-96.
+
+### D-98 · A page is a setting on any diagram
+
+P1 of the deck plan (its D-90 and D-95). A diagram's frame was the union of its contents, which
+is right for a diagram and wrong for a slide, a video or anything that has to come out at a known
+size.
+
+- `page: 16:9` (or `4:3`, `1:1`, `9:16`) beside `theme:`. The short side is 135 cells, 1080 px
+  at 100%, so a 16:9 page is 1920 × 1080 and a 28 px title is 28 px in a 1080p video. The page's
+  top-left corner is the canvas origin.
+- **One question, one answer.** `frameOf(layout)` is the page when there is one and the bounds
+  otherwise. The viewer's fit, previews and thumbnails ask it. `LayoutResult.bounds` stays the
+  contents, for the things that mean the contents (the minimap, where a paste lands).
+- **Watching, the page is everything.** The viewer and exports clip to it. The viewer fits it at
+  whatever zoom that takes, and edge to edge when presenting. An export gains the area **Page**,
+  which is the default when there is one, with no padding and at 1× (the page is already the
+  size it's meant to be seen at).
+- **Editing, it's a frame.** The editor outlines the page, dims what's off stage rather than
+  hiding it, fits the page, and offers its edges and centre lines as guides. What lies wholly
+  outside it earns a suggestion.
+- A diagram without a page behaves exactly as before. This isn't a deck feature: a single
+  diagram with a page exports cleanly at 1080p.
+
+### D-99 · A deck plays diagrams in order
+
+The deck's `slides` list names diagrams in project folders; it does not copy their contents.
+The player keeps a slide position as well as the diagram's story position. Slides can select
+a stretch of a story, carry on in the same diagram, or cut to another diagram. Skipped slides
+remain in the source but are not played. Sections organize the overview without becoming beats.
+
+The viewer controller owns stepping, playback and opening holds. A carried slide keeps its
+mounted diagram; an unrelated slide cuts. Links can select a slide, and Record mode presents
+only the page. Projects without a deck retain the single-diagram controller behavior.
+
+Revised 2026-10-10, in the rewrite of the player:
+
+- **A cut is a crossfade.** The slide being left stays mounted as a passive layer (its picture
+  only, `inert`, no keys, no address) and fades off the new one over 0.45 s, or not at all for
+  reduced motion. Its controller is told it has been left, so a timer it started can't move
+  the deck again.
+- **Handovers are checked.** Each viewer's way on (`next`, `previous`, `goTo`) holds the deck
+  position it was made for; a call from a slide that's no longer showing does nothing.
+- **Presenting and recording outlast a cut.** The player keeps the mode and each new slide's
+  viewer starts in it. Record mode is a viewer state (entered from its button without a
+  navigation); Esc leaves it, and leaving fullscreen doesn't.
+- **A deck can live in any folder.** `?root=` naming a deck folder plays that deck; naming a
+  slide's folder shows that diagram alone. The address keeps `root`, `slide` and `beat`.
+- **Editor and player link to each other by slide.** "Back to editor" opens `?slide=N` on the
+  slide showing; Preview and Present from the editor open the deck on the slide and beat being
+  edited.
+
+### D-100 · Deck authoring uses the existing editor
+
+The slide rail writes the deck list with core YAML edits. Adding, reordering, duplicating,
+detaching, skipping, deleting, sectioning and splitting a story into slides are undoable file
+changes. The Slide tab edits the selected entry. Opening a deck selects its first slide;
+the deck's shared frame is a separate editor destination.
+
+A new slide can link an existing project diagram or import a template, concept, browser draft
+or account diagram into a new folder. Account imports retain their diagram id and version as
+origin metadata. Blank deck and tour templates use the same project-file representation as
+any other deck. There is no second slide content or storage system.
+
+### D-101 · Binary assets are addressed by their bytes
+
+Image and audio project files can contain a canonical `mogram-asset 1` SHA-256 pointer rather
+than base64. Browser drafts store the Blob in IndexedDB. The cloud stores bytes under an
+owner and hash, verifies the upload hash, and accepts a pointer only when that owner already
+has matching type and length. ZIP downloads replace pointers with the original bytes.
+
+Owner asset reads can use historical diagram references. Public reads require a pointer in
+the currently shared files and an active share link. Asset responses are `no-store`, not the
+build notes' proposed immutable cache: a cached public response must not bypass revocation.
+Historical references accumulate; asset garbage collection is not part of this implementation.
+
+Images use the existing shape geometry, movement and story state. Intrinsic dimensions suggest
+an initial size, while an explicit size wins; contain and cover are image properties. Text
+width is expressed in grid cells and is also the wrapping width when arranged in a container.
+Arranged text participates in one layout path, so it is not drawn twice.
+
+### D-102 · Pictures are an element, sized by the picture
+
+`shape: image` shows a picture from the project (a pointer, D-101, or a small `data:` URL). It
+is 80 cells wide at the picture's own proportions unless sized; `fit: contain` (the default)
+shows all of it, `cover` fills the element. A picture has no label unless one is written. It
+can't open a nested diagram: its regions are parts (D-104). Dropping or choosing pictures adds
+them as elements, or one slide each from the rail.
+
+### D-103 · Code is an element, coloured by its language
+
+`shape: code` shows text written in the YAML or a code file of the project, a slice of it
+(`lines: 12-31`), with exact whitespace, an optional header (the file's name by default) and
+line numbers in the file's own numbering. One tokeniser per language (hcl, console, plan, yaml,
+json, shell, diff, plain) colours it from the theme; the whole file is coloured and then sliced,
+so a slice starting inside a heredoc is still right. Metrics are fixed (advance 0.6, line height
+1.5) so a listing's size and its lines' places are known without measuring. Exports embed the
+mono font when a diagram has code. Double-clicking a listing opens its Code section.
+
+### D-104 · Parts
+
+A part is a named piece of an element: a listing's lines or a picture's region (shares of the
+picture, 0–1). A set can show, fade, hide, tone and mark it; `focus`, `zoom` and connection ends
+can name it as `element.part`. Parts' looks ease like any other look. An element with parts
+can't open a nested diagram, which keeps `element.part` unambiguous.
+
+### D-105 · Words and voice
+
+A beat has a caption (`say`), a script (`script`) and a voice. The voice isn't written in the
+YAML: it's `voice/<key>.<ext>` in the deck's folder (or the diagram's), where the key is the
+script's first words and a 32-bit FNV-1a hash of all of them, lower-cased with punctuation and
+accents dropped. Moving a beat, reordering slides or renaming anything never loses a recording;
+changing a word makes it out of date; undoing brings it back; fixing a comma keeps it. Beside
+each clip, `voice/<key>.txt` holds the words it was recorded saying, so an out-of-date clip can
+be found (the unused clip whose words are most like the beat's, at least half the same) and
+kept for the new words.
+
+The Script window records a take a beat at a time, after a three-second count-in: the take is
+cut whenever the reading moves on (by voice or key) and going back records the beat again. The
+silence at either end is skipped when it plays (the pointer's `skip` and length), never cut out.
+Takes go to the editor of the same diagram over a `BroadcastChannel`, which keeps them as an
+undoable edit; with no editor open, a draft's takes are written into the draft. The editor sends
+the Script window the files as they change, so it reads what's written.
+
+A beat with a recording lasts as long as it plus 0.4 s, its steps spaced evenly through it;
+without one, as long as its script takes to say. Playing a deck or story by itself plays each
+beat's recording; stepping by hand plays none. The Script window following a deck tells viewers
+the slide and the beats begun: the next beat plays in place, a slide that carries on plays on,
+anything else is a jump (a cut, then the beat).
+
+### D-106 · Deck exports
+
+A whole deck exports as a PDF or images (a page per slide, its last picture, or per beat;
+images zipped in section folders), as its script (`script.md`, marking beats not recorded), as
+subtitles (`.vtt`, cues of two short lines timed by their words) and chapters (`0:00 Section`),
+and as a video: WebM, VP9 (VP8 where VP9 can't be encoded) through WebCodecs, at 1080p or 4K,
+30 or 60 fps, with every recording mixed into Opus. The muxer is our own (no library). Every
+picture is drawn as the player draws it: the frame under the slide, on the deck's page, a cut as
+a crossfade. Video is WebM rather than MP4 because a WebM can be written correctly in a page of
+code; MP4 would need a library or a much larger muxer.
+
+### D-107 · The assistant builds decks
+
+Six more tools, replayed like the others: `add_slide`, `move_slide`, `remove_slide`,
+`add_section`, `set_slide` (title, story, stretch, scene, frame, skip) and
+`set_beat_words` (caption and script). Slides are addressed by their number as the deck plays.
+The deck is the folder on screen or the nearest one above it. Each turn's message lists the
+deck's slides. Story edits now count in the project diff, so they're summarised in history.
+
+Not built, on purpose (decks plan §7): a `video` element and decks of decks (courses). The
+video export covers recorded footage of a deck; camera footage is joined outside Mogram.
+
+### D-108 · Home is for starting and carrying on
+
+The app's home was a list with a small "New" button and a sidebar that mostly wasn't
+navigation. It's now three things in order: **Start** (blank diagram, blank deck, open files,
+templates, and the assistant's "describe it" when it's on), **Continue** (the thing worked on
+last, with Open, Preview and Present, once there are three or more things), and **Everything**
+(search, kind, where, sort, cards or a list).
+
+- **A card says what it is.** Core's `projectAbout` gives each item its kind and how far along
+  it is: a deck's slides and how much of its script is recorded, a diagram's scenes and story.
+  A deck looks like a stack. Preview and Present are on the card, not behind its menu. While a
+  diagram's card is pointed at, its picture is live.
+- **Where it lives is said only when that tells you something.** "Shared" always; "This
+  browser" only when signed in (signed out, everything is). Nothing for a private diagram in
+  the account.
+- **Pinning, not folders.** Pinned items come first and are listed in the sidebar; kept with
+  the view and sort in this browser's preferences. Folders would need a model of their own.
+- **Several at once.** A box on each card selects it; a bar deletes them or saves drafts to
+  the account.
+- **The sidebar is places.** Home, Templates, Concepts and Script. File format and Security
+  are reference, so they sit in a Help group at the bottom. Templates and Concepts are pages
+  of their own (by kind and cloud; by topic and platform), with a taste of templates on Home.
+  "Recent" is gone: it repeated the list beside it.
+- **Files dropped anywhere on the page open as a new diagram**, and `/` goes to the search.
+
+- **Script is a page, not a paste box.** It lists everything with a story (its beats are what
+  there is to say), how many have a script and how many are recorded, and opens each one's
+  Script window. Any other text can still be pasted and read below. A Script window opened
+  with no editor keeps its takes itself: in the draft, or as a new version of the account's
+  diagram.
+
+Rejected: a separate "Decks" page (a filter does it, and decks and diagrams are made in the
+same place); showing every template on Home (it pushed a person's own work below the fold).
+
+### D-109 · On a slide, the dock is its story
+
+Scenes and a story do different jobs. A scene is a state of the whole diagram a viewer switches
+to (an outage, a rollout): no order, no words. A story is told in order, with words, and is
+what a deck is made of. Outside a deck both are on offer, as before. On a deck's slide the
+editor used to open on an empty strip of scenes with Story as the second tab, which made the
+two look like rival ways to do the same thing.
+
+- A slide opens on its story, every time it's shown.
+- The Scenes/Story switch, and the Slide tab's Scene field, appear on a slide only when its
+  diagram has scenes (a diagram reused from elsewhere, shown in one of its states).
+- A slide with no story says it's still and offers "Start a story".
+- `dockOf` and `scenesOffered` in the editor store are the one answer to "which strip is
+  showing"; the arrow keys and Play follow them.
+
+Rejected: removing scenes from decks altogether. A deck can show an existing diagram in one of
+its scenes without rewriting it as steps, and the file format already allows it.
+
+### D-110 · How far the prompter may move you is a setting
+
+Following a voice (D-96) moved the reader anywhere in the script once five words lined up
+there. A script that says similar things in two places (a course does, all the time) sent
+readers from one to the other mid-sentence. The follower now has a reach, chosen in the Script
+window's "Following and microphone" menu and kept with its other settings:
+
+- **Stay in order**: only the next words move it; skipping and going back are done by key.
+- **Find me nearby** (the default): also a sentence skipped or read again, within about 45
+  words ahead and 14 back.
+- **Find me anywhere**: also anywhere else in the script, as before.
+
+The default changed from anywhere to nearby: being thrown across the script is worse than
+pressing an arrow after skipping a page. The voice bench asks for "anywhere", since its
+readings skip whole paragraphs.

@@ -16,3 +16,7 @@ apps/web/src/features/templates/*/
 # Concepts are written by hand like any project file; the catalog is generated from them.
 packages/concepts/content/
 packages/concepts/src/**/*.generated.ts
+# What Chrome's recogniser heard on the prompter's bench, kept as it came.
+packages/core/test/fixtures/
+# The deck plan's fixture is written by hand, as a project's files would be.
+docs/mogram-decks/fixtures/

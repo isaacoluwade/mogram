@@ -1,5 +1,5 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { element, openDraft, shot, viewerSettled, yaml } from "./support";
+import { element, openDraft, openProject, shot, viewerSettled, yaml } from "./support";
 
 async function centre(locator: Locator): Promise<{ x: number; y: number }> {
   const box = await locator.boundingBox();
@@ -97,4 +97,94 @@ test("a scaling component inside a nested level draws as a clean stack (Black Fr
   }
   await page.waitForTimeout(1200);
   await shot(page, "viewer/nested-scaling-checkout");
+});
+
+/** A project whose own diagram tells no story, with one in a folder that does (D-97). */
+const COURSE = {
+  "mogram.yaml": `mogram: 1
+name: Course
+shapes:
+  cover: { label: A course }
+layout:
+  cover: [0, 0]
+`,
+  "slides/flow/mogram.yaml": `mogram: 1
+name: The flow
+shapes:
+  write: { label: Write }
+  plan: { label: Plan, show: hidden }
+  apply: { label: Apply, show: hidden }
+stories:
+  main:
+    - say: You write what you want.
+    - say: Terraform plans it.
+      set: { plan: shown }
+    - say: Then it applies it.
+      set: { apply: shown }
+layout:
+  write: [0, 0]
+  plan: [30, 0]
+  apply: [60, 0]
+`,
+};
+
+test.describe("a folder by itself (D-97)", () => {
+  test("a diagram in a folder plays its own story in the viewer, by link", async ({ page }) => {
+    const id = await openProject(page, COURSE);
+    await expect(page.getByText("Draft saved in this browser")).toBeVisible({ timeout: 10_000 });
+
+    // The project's own diagram has no story to play.
+    await page.goto(`/draft/${id}/view`);
+    await viewerSettled(page);
+    await expect(page.getByTestId("story-caption")).toHaveCount(0);
+
+    // The folder, by itself, plays its own.
+    await page.goto(`/draft/${id}/view?root=slides/flow`);
+    await viewerSettled(page);
+    await expect(element(page, "write")).toBeVisible();
+    await expect(element(page, "plan")).toHaveCount(0);
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("story-caption")).toHaveText("You write what you want.");
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByTestId("story-caption")).toHaveText("Terraform plans it.");
+    await expect(element(page, "plan")).toBeVisible();
+    // The link says which folder and how far, and opens there again.
+    await expect(page).toHaveURL(/\?root=slides\/flow&story=main&beat=2$/);
+    await page.reload();
+    await viewerSettled(page);
+    await expect(page.getByTestId("story-caption")).toHaveText("Terraform plans it.");
+    // A folder that isn't there is the project's own diagram.
+    await page.goto(`/draft/${id}/view?root=slides/nowhere`);
+    await viewerSettled(page);
+    await expect(element(page, "cover")).toBeVisible();
+  });
+
+  test("the editor opens a folder by itself: its story in the dock, in exports and in the preview link", async ({
+    page,
+  }) => {
+    const id = await openProject(page, COURSE);
+    await expect(page.getByText("Draft saved in this browser")).toBeVisible({ timeout: 10_000 });
+    await page.goto(`/draft/${id}?root=slides/flow`);
+    await expect(element(page, "write")).toBeVisible();
+    await page.getByRole("radio", { name: "Story" }).click();
+    const dock = page.getByRole("region", { name: "Story" });
+    await dock.getByRole("button", { name: /^Beat 2: Terraform plans it/ }).click();
+    await expect(element(page, "plan")).toBeVisible();
+
+    await page.getByRole("button", { name: "Export" }).click();
+    const exportDialog = page.getByRole("dialog", { name: "Export" });
+    await expect(exportDialog).toContainText("The story, at the step showing");
+    await page.keyboard.press("Escape");
+
+    // The preview is of this folder, and comes back to it.
+    await page.getByRole("button", { name: "Preview" }).click();
+    await expect(page).toHaveURL(/\/view\?root=slides\/flow/);
+    // It opens at the beat showing in the editor, as Present does.
+    await expect(page).toHaveURL(/[?&]story=main&beat=2/);
+    await viewerSettled(page);
+    await expect(page.getByTestId("story-caption")).toHaveText(/^Terraform plans it/);
+    await page.getByRole("link", { name: "Back to editor" }).first().click();
+    await expect(page).toHaveURL(/\/draft\/[^/?]+\?root=slides\/flow$/);
+    await expect(element(page, "write")).toBeVisible();
+  });
 });

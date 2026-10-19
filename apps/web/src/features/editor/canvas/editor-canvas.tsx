@@ -10,7 +10,7 @@ import { DiagramSvg } from "@/features/canvas/svg/diagram-svg";
 import { LevelTransition } from "@/features/canvas/level-transition";
 import { StubsOverlay } from "@/features/canvas/svg/stubs";
 import { onReducedMotionChange, prefersReducedMotion } from "@/lib/use-reduced-motion";
-import { insertFromLibrary, zoomToFit } from "../actions";
+import { addImageFile, insertFromLibrary, zoomToFit } from "../actions";
 import { LIBRARY_DRAG_TYPE, decodeLibraryDrag } from "../dnd";
 import { useEditor, useEditorClock, useEditorShallow, useEditorStore } from "../editor-context";
 import { nestedStubs } from "../levels";
@@ -27,6 +27,7 @@ import { usePreference } from "@/lib/preferences";
 import { shownFiles } from "../store/editor-store";
 import { VersionChangesOverlay } from "../history/changes-overlay";
 import { AssistantOverlay } from "../assistant/assistant-overlay";
+import { PartDrawing } from "./part-drawing";
 
 const NO_GUIDES: readonly Guide[] = [];
 
@@ -35,7 +36,31 @@ export function EditorCanvas() {
   const store = useEditorStore();
   const clock = useEditorClock();
   const host = useRef<HTMLDivElement | null>(null);
-  const { diagram, layout, routes, scene, theme, capacity } = useEditorScene();
+  useEffect(() => {
+    const paste = (event: ClipboardEvent) => {
+      const target = event.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable || /^(INPUT|TEXTAREA)$/.test(target.tagName))
+      )
+        return;
+      const images = Array.from(event.clipboardData?.files ?? []).filter(
+        (file) => file.type.startsWith("image/") && file.type !== "image/svg+xml",
+      );
+      if (images.length === 0) return;
+      event.preventDefault();
+      void (async () => {
+        for (const file of images) await addImageFile(store, file);
+      })().catch((error: unknown) =>
+        store
+          .getState()
+          .notify(error instanceof Error ? error.message : "The image couldn't be pasted."),
+      );
+    };
+    document.addEventListener("paste", paste);
+    return () => document.removeEventListener("paste", paste);
+  }, [store]);
+  const { diagram, layout, routes, scene, frameScene, theme, capacity } = useEditorScene();
   const view = useEditorShallow((s) => ({
     camera: s.camera,
     viewport: s.viewport,
@@ -57,13 +82,17 @@ export function EditorCanvas() {
   const gridStyle = usePreference("gridStyle");
   const fitted = useRef(false);
   const gestures = useCanvasGestures(store, host);
-  const { files, levelPath } = useEditorShallow((s) => ({
+  const { files, root, levelPath } = useEditorShallow((s) => ({
     files: shownFiles(s),
+    root: s.root,
     levelPath: s.levelPath,
   }));
 
   // At a nested level, the parent's neighbours show as stubs at the edge (NE-5, NE-7).
-  const nested = useMemo(() => nestedStubs(files, levelPath, diagram), [files, levelPath, diagram]);
+  const nested = useMemo(
+    () => nestedStubs(files, levelPath, diagram, root),
+    [files, levelPath, diagram, root],
+  );
 
   // Track the canvas size; fit the diagram the first time we know it.
   useEffect(() => {
@@ -191,7 +220,8 @@ export function EditorCanvas() {
       (diagram.containers.has(name) ||
         diagram.components.get(name)?.shape != null ||
         diagram.decorations.get(name)?.variant === "zone" ||
-        diagram.decorations.get(name)?.variant === "note"),
+        diagram.decorations.get(name)?.variant === "note" ||
+        diagram.decorations.get(name)?.variant === "text"),
     [diagram, view.viewing],
   );
   const connect = useMemo(
@@ -302,6 +332,10 @@ export function EditorCanvas() {
         onPointerLeave={() => store.getState().setHovered(null)}
         onDoubleClick={gestures.onDoubleClick}
         onDragOver={(event) => {
+          if (event.dataTransfer.types.includes("Files")) {
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+          }
           if (event.dataTransfer.types.includes(LIBRARY_DRAG_TYPE)) {
             event.preventDefault();
             event.dataTransfer.dropEffect = "copy";
@@ -317,6 +351,21 @@ export function EditorCanvas() {
         }}
         onDrop={(event) => {
           setLibrarySplit(null);
+          const images = Array.from(event.dataTransfer.files).filter(
+            (file) => file.type.startsWith("image/") && file.type !== "image/svg+xml",
+          );
+          if (images.length > 0) {
+            event.preventDefault();
+            const at = worldAt(event, event.currentTarget);
+            void (async () => {
+              for (const file of images) await addImageFile(store, file, at);
+            })().catch((error: unknown) =>
+              store
+                .getState()
+                .notify(error instanceof Error ? error.message : "The image couldn't be dropped."),
+            );
+            return;
+          }
           const drag = decodeLibraryDrag(event.dataTransfer.getData(LIBRARY_DRAG_TYPE));
           if (drag === null) return;
           event.preventDefault();
@@ -329,6 +378,19 @@ export function EditorCanvas() {
           });
         }}
       >
+        {frameScene !== null ? (
+          <div className="pointer-events-none absolute inset-0" aria-hidden="true">
+            <DiagramSvg
+              scene={frameScene}
+              time={{ kind: "live", clock }}
+              mode="view"
+              fontFamily="var(--font-sans)"
+              camera={view.camera}
+              size={view.viewport}
+              className="pointer-events-none absolute inset-0"
+            />
+          </div>
+        ) : null}
         <DiagramSvg
           scene={scene}
           capacity={capacity}
@@ -368,6 +430,9 @@ export function EditorCanvas() {
         ) : null}
         <LabelEditor layout={layout} scene={scene} theme={theme} />
         {view.viewing ? null : <QuickBar layout={layout} routes={routes} theme={theme} />}
+        {view.viewing ? null : (
+          <PartDrawing diagram={diagram} layout={layout} camera={view.camera} />
+        )}
       </div>
     </CanvasContextMenu>
   );

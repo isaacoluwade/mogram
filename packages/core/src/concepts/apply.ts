@@ -6,7 +6,7 @@ import { addConnection, updateElement } from "../edit/elements";
 import { copySnippet, pasteSnippetNamed } from "../edit/files";
 import { setFlowValue, setScale, setTrafficPattern } from "../edit/capacity";
 import { EditError } from "../edit/session";
-import { addScene, setSceneEntry } from "../edit/story";
+import { addScene, setSceneEntry } from "../edit/scenes";
 import { parseDiagram } from "../format/parse";
 import { computeLayout } from "../layout/compute";
 import type { ConceptPlatform, ConceptTopic } from "../presets/concepts";

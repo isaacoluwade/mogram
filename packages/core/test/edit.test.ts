@@ -515,8 +515,8 @@ describe("cards, settings, files and clipboard", () => {
     expect(reparsed.diagram.components.has("web_vm_2")).toBe(true);
     expect(reparsed.diagram.components.has("db_2")).toBe(true);
     expect(reparsed.diagram.connections.get("web_to_db_2")).toMatchObject({
-      from: { element: "web_vm_2", port: null },
-      to: { element: "db_2", port: null },
+      from: { element: "web_vm_2", port: null, part: null },
+      to: { element: "db_2", port: null, part: null },
     });
     expect(pasted.select).toEqual(expect.arrayContaining(["web_vm_2", "db_2"]));
   });

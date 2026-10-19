@@ -141,7 +141,7 @@ test.describe("cloud icon libraries (IC-7)", () => {
   });
 
   test("lists a template for each new library in the gallery", async ({ page }) => {
-    await page.goto("/diagrams");
+    await page.goto("/templates");
     for (const name of [
       "Serverless API on AWS",
       "Event pipeline on Google Cloud",

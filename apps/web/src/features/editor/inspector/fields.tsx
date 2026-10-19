@@ -26,6 +26,7 @@ import { NEUTRAL_SWATCH } from "@/styles/colors";
 import { ColorPicker } from "@/components/ui/color/color-picker";
 import { Swatch } from "@/components/ui/color/swatch";
 import { preference, setPreference, usePreference } from "@/lib/preferences";
+import { SHOW_SECTION } from "./show-section";
 import { useEditor, useEditorStore } from "../editor-context";
 import { documentColors } from "./document-colors";
 
@@ -101,8 +102,27 @@ function FoldingSection({
 }) {
   const [open, setOpen] = usePersistedOpen(id, defaultOpen);
   const body = useId();
+  const section = useRef<HTMLElement | null>(null);
+  // Asked for by name (double-clicking a listing opens its Code): open, in view, first field.
+  useEffect(() => {
+    const show = (event: Event) => {
+      if ((event as CustomEvent<unknown>).detail !== id) return;
+      setOpen(true);
+      requestAnimationFrame(() => {
+        const node = section.current;
+        node?.scrollIntoView({ block: "nearest" });
+        node?.querySelector<HTMLElement>("textarea, input:not([type=hidden])")?.focus();
+      });
+    };
+    window.addEventListener(SHOW_SECTION, show);
+    return () => window.removeEventListener(SHOW_SECTION, show);
+  }, [id, setOpen]);
   return (
-    <section data-section={id} className="border-b border-border-subtle last:border-b-0">
+    <section
+      ref={section}
+      data-section={id}
+      className="border-b border-border-subtle last:border-b-0"
+    >
       <div className="flex h-10 items-center gap-2 px-3.5">
         <button
           type="button"

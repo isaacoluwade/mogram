@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { moveElements, updateElement } from "@mogram/core/edit";
-import { createEditorStore } from "./editor-store";
+import { moveElements, moveEntries, updateElement } from "@mogram/core/edit";
+import { parseDiagram } from "@mogram/core/format";
+import { createEditorStore, dockOf, scenesOffered } from "./editor-store";
 
 const FILES = {
   "mogram.yaml":
@@ -8,6 +9,159 @@ const FILES = {
 };
 
 describe("editor store", () => {
+  const DECK_FILES = {
+    "mogram.yaml": `mogram: 1
+name: Course
+page: 16:9
+theme: midnight
+deck:
+  slides:
+    - section: Intro
+    - slides/first
+    - slides/second
+`,
+    "slides/first/mogram.yaml": "mogram: 1\nname: First\n",
+    "slides/second/mogram.yaml":
+      "mogram: 1\nname: Second\ncomponents:\n  service: generic/server\n",
+  };
+
+  it("includes cross-folder deck errors in the editor diagnostics", () => {
+    const store = createEditorStore({
+      files: {
+        "mogram.yaml": "mogram: 1\nname: Course\ndeck:\n  slides: [lesson]\n",
+      },
+    });
+
+    expect(store.getState().parsed().diagnostics).toContainEqual(
+      expect.objectContaining({
+        file: "mogram.yaml",
+        severity: "error",
+        message: 'Slide 1 is "lesson", but no folder with that name holds a diagram.',
+      }),
+    );
+  });
+
+  it("selects deck slides as the active root and restores the slide on undo and redo", () => {
+    const store = createEditorStore({ files: DECK_FILES });
+    expect(store.getState()).toMatchObject({
+      root: "slides/first",
+      deckRoot: "",
+      slide: 1,
+      folder: "slides/first",
+      panels: { library: false },
+    });
+    expect(store.getState().parsed().diagram.settings).toMatchObject({
+      page: "16:9",
+      theme: "midnight",
+    });
+
+    store.getState().showSlide(null);
+    expect(store.getState()).toMatchObject({ root: "", deckRoot: "", slide: null, folder: "" });
+    store.getState().showSlide(2);
+    expect(store.getState()).toMatchObject({
+      root: "slides/second",
+      deckRoot: "",
+      slide: 2,
+      folder: "slides/second",
+    });
+    store
+      .getState()
+      .edit("Reorder slides", (files) =>
+        moveEntries(files, parseDiagram(files).diagram, { items: [2], to: 1 }),
+      );
+    store.getState().showSlide(2);
+    expect(store.getState()).toMatchObject({ root: "slides/first", slide: 2 });
+    store.getState().showSlide(1);
+    store.getState().showSlide(2);
+    expect(store.getState()).toMatchObject({ root: "slides/first", slide: 2 });
+    store.getState().undo();
+    expect(store.getState()).toMatchObject({ root: "slides/second", slide: 2 });
+    store.getState().redo();
+    expect(store.getState()).toMatchObject({ root: "slides/second", slide: 1 });
+    store.getState().undo();
+    store.getState().showSlide(2);
+    const edited = store
+      .getState()
+      .edit("Rename service", (files, diagram) =>
+        updateElement(files, diagram, { name: "service", set: { label: "Application host" } }),
+      );
+    expect(edited).toBe(true);
+    expect(store.getState().files["slides/second/mogram.yaml"]).toContain("Application host");
+    store.getState().showSlide(1);
+    store.getState().undo();
+    expect(store.getState()).toMatchObject({ root: "slides/second", slide: 2 });
+    expect(store.getState().files["slides/second/mogram.yaml"]).not.toContain(
+      "label: Application host",
+    );
+
+    store.getState().redo();
+    expect(store.getState()).toMatchObject({ root: "slides/second", slide: 2 });
+    expect(store.getState().files["slides/second/mogram.yaml"]).toContain(
+      "label: Application host",
+    );
+  });
+
+  it("opens a slide on its story, and offers scenes only where the slide has some (D-109)", () => {
+    const files = {
+      ...DECK_FILES,
+      "slides/second/mogram.yaml":
+        "mogram: 1\nname: Second\ncomponents:\n  service: generic/server\nscenes:\n  outage:\n    service: down\n",
+    };
+    const store = createEditorStore({ files });
+    // The first slide has no scenes: there's only its story, whatever was picked.
+    expect(dockOf(store.getState())).toBe("story");
+    expect(scenesOffered(store.getState())).toBe(false);
+    store.getState().setDock("scenes");
+    expect(dockOf(store.getState())).toBe("story");
+
+    // The second has one: scenes are on offer, and it still opens on the story.
+    store.getState().showSlide(2);
+    expect(scenesOffered(store.getState())).toBe(true);
+    expect(dockOf(store.getState())).toBe("story");
+    store.getState().setDock("scenes");
+    expect(dockOf(store.getState())).toBe("scenes");
+    store.getState().showSlide(1);
+    store.getState().showSlide(2);
+    expect(dockOf(store.getState())).toBe("story");
+
+    // A diagram on its own opens on its scenes, as before; opened files that are a deck don't.
+    const plain = createEditorStore({ files: FILES });
+    expect(dockOf(plain.getState())).toBe("scenes");
+    expect(scenesOffered(plain.getState())).toBe(true);
+    plain.getState().replaceFiles(files, "Open");
+    expect(dockOf(plain.getState())).toBe("story");
+  });
+
+  it("enters and leaves deck mode when a whole project replaces the open files", () => {
+    const store = createEditorStore({ files: FILES });
+    store.getState().replaceFiles(DECK_FILES, "Open files");
+    expect(store.getState()).toMatchObject({
+      root: "slides/first",
+      deckRoot: "",
+      slide: 1,
+      folder: "slides/first",
+      panels: { library: false },
+    });
+
+    store.getState().replaceFiles(FILES, "Open files");
+    expect(store.getState()).toMatchObject({ root: "", deckRoot: null, slide: null, folder: "" });
+  });
+
+  it("opens the deck frame for editing and returns to deck settings", () => {
+    const store = createEditorStore({
+      files: {
+        "mogram.yaml": "mogram: 1\nname: Course\ndeck:\n  frame: frame\n  slides: [slides/first]\n",
+        "frame/mogram.yaml": "mogram: 1\nname: Frame\n",
+        "slides/first/mogram.yaml": "mogram: 1\nname: First\n",
+      },
+    });
+
+    expect(store.getState().showDeckFrame()).toBe(true);
+    expect(store.getState()).toMatchObject({ root: "frame", deckRoot: "", slide: null });
+    store.getState().showSlide(null);
+    expect(store.getState()).toMatchObject({ root: "", deckRoot: "", slide: null });
+  });
+
   it("runs edits as undoable steps and marks the document unsaved", () => {
     const store = createEditorStore({ files: FILES });
     expect(store.getState().save.kind).toBe("saved");
@@ -129,7 +283,9 @@ describe("editor store", () => {
     const store = createEditorStore({ files: FILES });
     store.getState().togglePanel("code", true);
     expect(store.getState().panels).toMatchObject({ code: true, inspector: false, library: true });
+    // Narrowing the window leaves the panel in use, not both.
     store.getState().setViewport({ width: 834, height: 1112 });
+    expect(store.getState().panels).toMatchObject({ code: true, library: false });
     store.getState().togglePanel("tours", true);
     expect(store.getState().panels).toEqual({
       library: false,

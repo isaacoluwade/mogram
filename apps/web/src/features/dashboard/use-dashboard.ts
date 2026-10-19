@@ -29,6 +29,9 @@ export interface DashboardItem {
   readonly name: string;
   readonly updatedAt: string;
   readonly thumbnail: string | null;
+  readonly deck: DiagramSummary["deck"];
+  /** What it is and how far along (slides, scenes, beats written and recorded). */
+  readonly about: DiagramSummary["about"];
   readonly visibility: "private" | "link" | null;
   readonly href: string;
   readonly previewHref: string;
@@ -40,6 +43,8 @@ const fromCloud = (d: DiagramSummary): DashboardItem => ({
   name: d.name,
   updatedAt: d.updatedAt,
   thumbnail: d.thumbnail,
+  deck: d.deck,
+  about: d.about,
   visibility: d.visibility,
   href: `/edit/${d.id}`,
   previewHref: `/edit/${d.id}/view`,
@@ -51,6 +56,8 @@ const fromDraft = (d: DraftSummary): DashboardItem => ({
   name: d.name,
   updatedAt: d.updatedAt,
   thumbnail: d.thumbnail,
+  deck: d.deck,
+  about: d.about,
   visibility: null,
   href: `/draft/${d.id}`,
   previewHref: `/draft/${d.id}/view`,
@@ -63,7 +70,7 @@ const message = (error: unknown, fallback: string): string =>
  * Everything the dashboard reads and does (AC-1 … AC-4). Signed in, new diagrams go to the
  * account; signed out, they stay in this browser.
  */
-export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSummary[]) {
+export function useDashboard(signedIn: boolean, initialCloud?: readonly DiagramSummary[]) {
   const router = useRouter();
   const queryClient = useQueryClient();
   const thumbnailsTried = useRef(new Set<string>());
@@ -72,7 +79,12 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
     queryKey: ["diagrams"],
     queryFn: api.listDiagrams,
     enabled: signedIn,
-    initialData: signedIn ? [...initialCloud] : [],
+    // A page that read the account on the server shows it at once; another asks for it.
+    ...(!signedIn
+      ? { initialData: [] }
+      : initialCloud === undefined
+        ? {}
+        : { initialData: [...initialCloud] }),
   });
   const drafts = useQuery({ queryKey: ["drafts"], queryFn: listDrafts, staleTime: 0 });
 
@@ -122,6 +134,10 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
 
   const createFromFiles = (files: ProjectFiles) => create.mutate({ name: nameOf(files), files });
 
+  /** A copy of something with a name of its own: a concept, opened to read or build on. */
+  const createNamed = (name: string, files: ProjectFiles) =>
+    create.mutate({ name, files: withName(files, name) });
+
   /** A blank diagram that the assistant builds from a description. */
   const createFromDescription = (description: string) => {
     const blank = templateById("blank");
@@ -151,6 +167,25 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
       toast("Duplicated.");
     },
     onError: (error) => toast.error(message(error, "Couldn't duplicate it.")),
+  });
+
+  /** Several at once: what could be deleted is, and what couldn't is said. */
+  const removeMany = useMutation({
+    mutationFn: async (chosen: readonly DashboardItem[]) => {
+      const results = await Promise.allSettled(
+        chosen.map((item) =>
+          item.kind === "cloud" ? api.deleteDiagram(item.id) : deleteDraft(item.id),
+        ),
+      );
+      const failed = results.filter((result) => result.status === "rejected").length;
+      return { deleted: chosen.length - failed, failed };
+    },
+    onSuccess: async ({ deleted, failed }) => {
+      await refresh();
+      if (failed > 0) toast.error(`Deleted ${deleted}. ${failed} couldn't be deleted.`);
+      else toast(`Deleted ${deleted}.`);
+    },
+    onError: (error) => toast.error(message(error, "Couldn't delete them.")),
   });
 
   const remove = useMutation({
@@ -194,6 +229,36 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
     onError: (error) => toast.error(message(error, "Couldn't save it to your account.")),
   });
 
+  const moveManyToAccount = useMutation({
+    mutationFn: async (chosen: readonly DashboardItem[]) => {
+      let moved = 0;
+      for (const item of chosen) {
+        if (item.kind !== "draft") continue;
+        const draft = await getDraft(item.id);
+        if (draft === null) continue;
+        const thumbnail = item.thumbnail ?? (await renderThumbnail(draft.files).catch(() => null));
+        await api.createDiagram({ name: draft.name, files: draft.files, thumbnail });
+        await deleteDraft(item.id);
+        moved++;
+      }
+      return moved;
+    },
+    onSuccess: async (moved) => {
+      await refresh();
+      toast(`Saved ${moved} to your account. They stay private until you share them.`);
+    },
+    onError: async (error) => {
+      await refresh();
+      toast.error(message(error, "Couldn't save them all to your account."));
+    },
+  });
+
+  /** An item's files, for a live preview: from this browser or the account. */
+  const files = async (item: DashboardItem): Promise<ProjectFiles | null> =>
+    item.kind === "cloud"
+      ? (await api.getDiagram(item.id)).files
+      : ((await getDraft(item.id))?.files ?? null);
+
   /** Drafts made before thumbnails existed get one the first time the dashboard shows them. */
   const backfillThumbnail = async (item: DashboardItem) => {
     if (item.kind !== "draft" || item.thumbnail !== null || thumbnailsTried.current.has(item.id))
@@ -216,10 +281,14 @@ export function useDashboard(signedIn: boolean, initialCloud: readonly DiagramSu
     creating: create.isPending,
     createFromTemplate,
     createFromFiles,
+    createNamed,
     createFromDescription,
     rename: (item: DashboardItem, name: string) => rename.mutate({ item, name }),
     duplicate: (item: DashboardItem) => duplicate.mutate(item),
     remove: (item: DashboardItem) => remove.mutate(item),
+    removeMany: (chosen: readonly DashboardItem[]) => removeMany.mutate(chosen),
+    moveManyToAccount: (chosen: readonly DashboardItem[]) => moveManyToAccount.mutate(chosen),
+    files,
     download,
     moveToAccount: (item: DashboardItem) => moveToAccount.mutate(item),
     backfillThumbnail,

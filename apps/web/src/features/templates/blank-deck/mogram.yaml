@@ -1,0 +1,5 @@
+mogram: 1
+name: Untitled deck
+page: 16:9
+deck:
+  slides: [intro]

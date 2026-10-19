@@ -7,6 +7,7 @@ export function Toaster() {
   return (
     <Sonner
       position="bottom-center"
+      mobileOffset={{ bottom: "calc(64px + env(safe-area-inset-bottom))" }}
       theme="dark"
       gap={8}
       toastOptions={{

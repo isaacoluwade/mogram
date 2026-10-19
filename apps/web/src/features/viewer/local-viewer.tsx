@@ -1,21 +1,24 @@
 "use client";
 
+import { prompterChannel } from "@/features/prompter/channel";
 import { useEffect, useState } from "react";
 import type { ProjectFiles } from "@mogram/core/model";
 import type { DeepLink } from "@/features/share/deep-link";
 import { getDraft } from "@/features/drafts/drafts";
 import { EditorLoading, EditorUnavailable } from "@/components/screens";
-import { Viewer } from "./viewer";
+import { ProjectViewer } from "@/features/deck/project-viewer";
 
 /** Loads a browser draft and shows it in the viewer. */
 export function LocalViewer({
   id,
   initialLink,
   present,
+  record = false,
 }: {
   id: string;
   initialLink: DeepLink;
   present: boolean;
+  record?: boolean;
 }) {
   const [files, setFiles] = useState<ProjectFiles | null | undefined>(undefined);
   useEffect(() => {
@@ -42,13 +45,15 @@ export function LocalViewer({
     );
   }
   return (
-    <Viewer
+    <ProjectViewer
       files={files}
       initialLink={initialLink}
       present={present}
+      record={record}
       allowViewerState
       homeHref={`/draft/${id}`}
       editHref={`/draft/${id}`}
+      prompter={{ href: `/draft/${id}/prompter`, channel: prompterChannel(id) }}
       preview
     />
   );

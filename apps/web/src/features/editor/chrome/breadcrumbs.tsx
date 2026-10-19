@@ -15,12 +15,13 @@ import { levelsAlong, shownFiles } from "../store/editor-store";
  */
 export function Breadcrumbs() {
   const store = useEditorStore();
-  const { files, levelPath } = useEditorShallow((s) => ({
+  const { files, root, levelPath } = useEditorShallow((s) => ({
     files: shownFiles(s),
+    root: s.root,
     levelPath: s.levelPath,
   }));
   if (levelPath.length === 0) return null;
-  const crumbs = levelsAlong(files, levelPath).map((level) => ({
+  const crumbs = levelsAlong(files, levelPath, root).map((level) => ({
     label: level.label,
     depth: level.path.length,
   }));

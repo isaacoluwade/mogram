@@ -1,0 +1,14 @@
+# A still slide with one beat that only says something.  (P1: the page.  P6: script)
+mogram: 1
+name: Title
+components:
+  terraform: { type: tool/terraform, label: " " }
+stories:
+  main:
+    - script: |
+        Hey, this is the Terraform crash course for absolute beginners.
+layout:
+  terraform: [114, 30]
+  decorations:
+    heading: { text: Terraform Crash Course, style: title, font_size: 80, align: center, at: [40, 52], width: 160 }
+    sub: { text: for absolute beginners, style: heading, font_size: 40, align: center, at: [40, 68], width: 160 }

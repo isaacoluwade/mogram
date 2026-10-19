@@ -8,6 +8,7 @@ import { lintDiagram } from "@mogram/core/lint";
 import type { Diagram } from "@mogram/core/model";
 import {
   CANVAS_THEME_INFO,
+  PAGES,
   formatHex,
   formatPaint,
   paintName,
@@ -22,6 +23,7 @@ import { ColorStrip } from "@/components/ui/color/color-area";
 import { ColorPicker } from "@/components/ui/color/color-picker";
 import { SwatchFace } from "@/components/ui/color/swatch";
 import { resolveTheme } from "@/features/canvas/theme";
+import { zoomToFit } from "../actions";
 import { useEditor, useEditorStore } from "../editor-context";
 import { CommitInput, FieldRow, FieldStack, InspectorSection } from "./fields";
 import { documentColors } from "./document-colors";
@@ -31,6 +33,7 @@ import { DataSection } from "./link-data";
 import { ConceptSection } from "./concept-section";
 import { FeaturedThemes, ThemeGallery } from "./theme-picker";
 import type { DiagramTab } from "./tabs";
+import { DeckSettings } from "./slide-inspector";
 
 /**
  * Nothing selected: the diagram itself (ED-8, ED-24, FI-16). Diagram: problems, name and files.
@@ -53,7 +56,7 @@ export function DiagramSettings({ diagram, tab }: { diagram: Diagram; tab: Diagr
     return { unpinned };
   }, [diagram]);
   const setting = (
-    key: "name" | "description" | "theme" | "background" | "grid",
+    key: "name" | "description" | "theme" | "page" | "background" | "grid",
     value: string | null,
     options?: { coalesce?: boolean },
   ) =>
@@ -164,6 +167,7 @@ export function DiagramSettings({ diagram, tab }: { diagram: Diagram; tab: Diagr
               />
             </div>
           </InspectorSection>
+          {diagram.settings.deck !== null ? <DeckSettings diagram={diagram} /> : null}
           <DataSection name={null} data={diagram.settings.data} />
           <ConceptSection diagram={diagram} />
           <InspectorSection id="files" title="Files" defaultOpen={false}>
@@ -209,6 +213,23 @@ export function DiagramSettings({ diagram, tab }: { diagram: Diagram; tab: Diagr
           >
             <FeaturedThemes diagram={diagram} />
             <div className="mt-4">
+              {/* A page (D-98): a fixed frame for a slide, a video or a clean export. */}
+              <FieldRow label="Page">
+                <SegmentedControl
+                  label="Page"
+                  size="sm"
+                  value={diagram.settings.page ?? "none"}
+                  onChange={(page) => {
+                    setting("page", page);
+                    // The page is what's being composed now: bring it into view.
+                    if (page !== "none") zoomToFit(store);
+                  }}
+                  options={[
+                    { value: "none", label: "None" },
+                    ...PAGES.map((page) => ({ value: page, label: page })),
+                  ]}
+                />
+              </FieldRow>
               <FieldRow label="Background">
                 <ColorPicker
                   label="Background"

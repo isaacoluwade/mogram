@@ -22,7 +22,11 @@ export interface PlaceholderContext {
   readonly date?: Date;
 }
 
-const show = (value: DataValue): string => String(value);
+/** Whole numbers as they are, others to two places at most: a worked-out value reads cleanly. */
+const show = (value: DataValue): string =>
+  typeof value === "number" && !Number.isInteger(value)
+    ? String(Math.round(value * 100) / 100)
+    : String(value);
 
 function isoDate(date: Date): string {
   const pad = (n: number) => String(n).padStart(2, "0");

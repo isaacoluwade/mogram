@@ -24,6 +24,7 @@ const LOOK_KEYS = ["font", "font_size", "bold", "italic", "align", "color"] as c
 
 export const DECORATION_KEYS = [
   "text",
+  "width",
   "label",
   "zone",
   "note",
@@ -38,6 +39,9 @@ export const DECORATION_KEYS = [
   "locked",
   "link",
   "data",
+  "show",
+  "on",
+  "along",
 ] as const;
 
 /** Layout: positions, sizes, z-order and hand-bent paths, plus decorations (ED-11, ED-22). */
@@ -198,11 +202,29 @@ export class LayoutReader extends SectionReader {
         continue;
       }
       const fields = this.body(entry.key, entry.value, DECORATION_KEYS, "decoration");
+      // A width is what text wraps at; notes and zones have a size instead.
+      const widthEntry = fields.get("width");
+      if (widthEntry !== undefined && fields.get("text") === undefined)
+        this.sink.warning(
+          this.pos(widthEntry.keyNode),
+          `"width" only applies to text, so it is ignored on "${entry.key}".`,
+        );
       const position = fields.get("at");
-      const point = position === undefined ? null : this.readPoint(position.value, entry.key);
+      // Something that rides on an element (a branch name on a commit) needs no position.
+      const onEntry = fields.get("on");
+      const on = this.optionalString(onEntry, `What "${entry.key}" rides on`);
+      const point =
+        position === undefined
+          ? on === null && !fields.has("in")
+            ? null
+            : { x: 0, y: 0 }
+          : this.readPoint(position.value, entry.key);
       if (point === null) {
         if (position === undefined)
-          this.sink.error(at, `Decoration "${entry.key}" needs a position, like "at: [4, 6]".`);
+          this.sink.error(
+            at,
+            `Decoration "${entry.key}" needs a position, like "at: [4, 6]", or something to ride on, like "on: web".`,
+          );
         continue;
       }
       const tone = this.optionalLiteral<Tone>(fields.get("tone"), TONE_NAMES, entry.key, "tone");
@@ -218,6 +240,9 @@ export class LayoutReader extends SectionReader {
             ? 0
             : (this.readInteger(zField.value, `The z-order of "${entry.key}"`) ?? 0),
         locked: this.optionalBoolean(fields.get("locked"), entry.key, "locked") ?? false,
+        show: this.readShow(fields.get("show"), entry.key),
+        on,
+        along: this.optionalPercent(fields.get("along"), `How far along "${entry.key}" sits`),
         source: { file: at.file, line: at.line },
         ...this.readExtras(fields, entry.key),
       };
@@ -269,18 +294,38 @@ export class LayoutReader extends SectionReader {
             this.pos(fill.keyNode),
             `"fill" is for sticky notes, so it is ignored on "${entry.key}".`,
           );
+        const widthField = fields.get("width");
+        let width =
+          widthField === undefined || isNullish(widthField.value)
+            ? null
+            : this.readInteger(widthField.value, `The width of "${entry.key}"`);
+        // A width to wrap at (D-102), in cells: enough for a word, at most a page across.
+        if (width !== null && (width < 4 || width > 240)) {
+          this.sink.error(
+            this.pos(widthField?.value ?? null),
+            `"width" should be a number of cells from 4 to 240.`,
+          );
+          width = null;
+        }
         model = {
           ...base,
           variant: "text",
           text: (asString(text.value) ?? "").replace(/\s+$/, ""),
           style: style ?? "body",
+          width,
           look: this.readLook(fields, entry.key),
         };
       } else {
         this.sink.error(at, `Decoration "${entry.key}" needs "text", "note", "label" or "zone".`);
         continue;
       }
-      out.push({ model, at, parentRef });
+      out.push({
+        model,
+        needsPosition: position === undefined && on === null,
+        at,
+        parentRef,
+        onAt: onEntry === undefined ? null : this.pos(onEntry.value),
+      });
     }
   }
 

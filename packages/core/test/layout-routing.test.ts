@@ -13,6 +13,42 @@ import {
 const diagramOf = (yaml: string) => parseDiagram({ "mogram.yaml": yaml }).diagram;
 
 describe("computeLayout", () => {
+  it("places text paragraphs in an arranging column without explicit positions", () => {
+    const result = parseDiagram({
+      "mogram.yaml": `containers:\n  list: { layout: column, gap: 2 }\nlayout:\n  list: [0, 0]\n  decorations:\n    first: { text: alpha bravo charlie delta echo foxtrot, width: 12, in: list }\n    second: { text: golf hotel india juliet kilo lima, width: 12, in: list }\n`,
+    });
+    expect(result.diagnostics).toEqual([]);
+    const layout = computeLayout(result.diagram);
+    const first = layout.elements.get("first")!.box;
+    const second = layout.elements.get("second")!.box;
+    expect(first.x).toBe(second.x);
+    expect(second.y).toBeGreaterThanOrEqual(first.y + first.h + 16);
+    expect(layout.movers).toEqual(["first", "second"]);
+    expect(layout.children.get("list") ?? []).toEqual([]);
+  });
+
+  it("wraps a fixed-width paragraph while preserving unbounded text", () => {
+    const text = "alpha bravo charlie delta echo foxtrot golf hotel";
+    const read = (width: string) =>
+      parseDiagram({
+        "mogram.yaml": `layout:\n  decorations:\n    paragraph: { text: ${text}, at: [0, 0]${width} }\n`,
+      });
+    const wide = read("");
+    const narrow = read(", width: 12");
+    expect(narrow.diagnostics).toEqual([]);
+    expect(narrow.diagram.decorations.get("paragraph")).toMatchObject({ width: 12 });
+    const wideBox = computeLayout(wide.diagram).elements.get("paragraph")!.box;
+    const narrowBox = computeLayout(narrow.diagram).elements.get("paragraph")!.box;
+    expect(narrowBox.w).toBe(96);
+    expect(narrowBox.h).toBeGreaterThan(wideBox.h);
+    expect(wideBox.w).toBeGreaterThan(narrowBox.w);
+    for (const width of [0, -1, 1.5, 10001]) {
+      const invalid = read(`, width: ${width}`);
+      expect(invalid.diagnostics.some((diagnostic) => diagnostic.severity === "error")).toBe(true);
+      expect(invalid.diagram.decorations.get("paragraph")).toMatchObject({ width: null });
+    }
+  });
+
   it("stores positions relative to the parent, so moving a VNet moves its children (ED-10)", () => {
     const base = `containers:
   vnet: { type: vnet }

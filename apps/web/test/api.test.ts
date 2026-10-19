@@ -9,6 +9,11 @@ import * as restoreRoute from "@/app/api/diagrams/[id]/revisions/[revisionId]/re
 import * as shareRoute from "@/app/api/diagrams/[id]/share/route";
 import * as sharedRoute from "@/app/api/share/[shareId]/route";
 import { devMessages } from "@/server/email/mailer";
+import { createHash } from "node:crypto";
+import { formatPointer } from "@mogram/core/assets";
+import * as assetRoute from "@/app/api/assets/[hash]/route";
+import * as diagramAssetRoute from "@/app/api/diagrams/[id]/assets/[hash]/route";
+import * as sharedAssetRoute from "@/app/api/share/[shareId]/assets/[hash]/route";
 
 /**
  * The REST API end to end (D-7, AC-3 … AC-7): real route handlers, real Better Auth, an
@@ -81,6 +86,120 @@ async function create(
 
 let alice = "";
 let bob = "";
+
+describe("media assets", () => {
+  it("stores code as inert text and enforces its byte limit", async () => {
+    const code = "<script>globalThis.executed = true</script>\n  exact indentation\n";
+    const project = await create(alice, {
+      name: "Code",
+      files: { ...FILES, "example.html": code },
+    });
+    expect(project.files["example.html"]).toBe(code);
+    const response = await diagramsRoute.POST(
+      request("/api/diagrams", {
+        method: "POST",
+        cookie: alice,
+        body: { name: "Too much code", files: { ...FILES, "large.ts": "x".repeat(200_001) } },
+      }),
+    );
+    expect(response.status).toBe(400);
+  });
+  it("round-trips bytes with ownership, hash validation and immediate share revocation", async () => {
+    const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]);
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    const upload = (cookie: string, digest = hash, type = "image/png") =>
+      assetRoute.PUT(
+        new Request(`${BASE}/api/assets/${digest}`, {
+          method: "PUT",
+          headers: { Origin: BASE, Cookie: cookie, "Content-Type": type },
+          body: bytes,
+        }),
+        params({ hash: digest }),
+      );
+    expect((await upload(alice)).status).toBe(201);
+    expect((await upload(alice)).status).toBe(204);
+    expect((await upload(alice, "0".repeat(64))).status).toBe(400);
+    expect((await upload(alice, hash, "text/html")).status).toBe(400);
+    const pointer = formatPointer({
+      hash,
+      type: "image/png",
+      bytes: bytes.length,
+      width: 1,
+      height: 1,
+    });
+    const files = { ...FILES, "images/picture.png": pointer };
+    const unknown = await diagramsRoute.POST(
+      request("/api/diagrams", {
+        method: "POST",
+        cookie: bob,
+        body: { name: "Unknown assets", files },
+      }),
+    );
+    expect(unknown.status).toBe(400);
+    const project = await create(alice, { name: "Pictures", files });
+    const read = (cookie: string, digest = hash) =>
+      diagramAssetRoute.GET(
+        request(`/api/diagrams/${project.id}/assets/${digest}`, { cookie }),
+        params({ id: project.id, hash: digest }),
+      );
+    const response = await read(alice);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("Content-Type")).toBe("image/png");
+    expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
+    expect((await read(bob)).status).toBe(404);
+    expect((await read(alice, "0".repeat(64))).status).toBe(404);
+    const shared = await shareRoute.PUT(
+      request(`/api/diagrams/${project.id}/share`, {
+        method: "PUT",
+        cookie: alice,
+        body: { visibility: "link", allowViewerState: false },
+      }),
+      params({ id: project.id }),
+    );
+    const { diagram: link } = (await shared.json()) as { diagram: { shareId: string } };
+    const publicRead = () =>
+      sharedAssetRoute.GET(
+        request(`/api/share/${link.shareId}/assets/${hash}`),
+        params({ shareId: link.shareId, hash }),
+      );
+    const publicBytes = await publicRead();
+    expect(publicBytes.status).toBe(200);
+    expect(publicBytes.headers.get("Cache-Control")).toBe("no-store");
+    expect(new Uint8Array(await publicBytes.arrayBuffer())).toEqual(bytes);
+    const removed = await diagramRoute.PUT(
+      request(`/api/diagrams/${project.id}`, {
+        method: "PUT",
+        cookie: alice,
+        body: { files: FILES, baseVersion: project.version },
+      }),
+      params({ id: project.id }),
+    );
+    expect(removed.status).toBe(200);
+    expect((await read(alice)).status).toBe(200);
+    expect((await publicRead()).status).toBe(404);
+    await shareRoute.PUT(
+      request(`/api/diagrams/${project.id}/share`, {
+        method: "PUT",
+        cookie: alice,
+        body: { visibility: "private", allowViewerState: false },
+      }),
+      params({ id: project.id }),
+    );
+    expect((await publicRead()).status).toBe(404);
+  });
+
+  it("rejects oversized streamed uploads before buffering them", async () => {
+    const response = await assetRoute.PUT(
+      new Request(`${BASE}/api/assets/${"0".repeat(64)}`, {
+        method: "PUT",
+        headers: { Origin: BASE, Cookie: alice, "Content-Type": "image/png" },
+        body: new Uint8Array(8_000_001),
+      }),
+      params({ hash: "0".repeat(64) }),
+    );
+    expect(response.status).toBe(413);
+  });
+});
 
 beforeAll(async () => {
   alice = await signIn("alice@example.com");
@@ -228,7 +347,7 @@ describe("diagrams (AC-4, AC-5)", () => {
       { name: "", files: FILES },
       { name: "x".repeat(121), files: FILES },
       { name: "Bad path", files: { "../etc/passwd": "x" } },
-      { name: "Bad type", files: { "mogram.yaml": "a: 1", "run.sh": "rm -rf /" } },
+      { name: "Bad type", files: { "mogram.yaml": "a: 1", "program.exe": "binary" } },
       { name: "Extra key", files: FILES, owner: "someone-else" },
     ];
     for (const body of bad) {

@@ -12,6 +12,7 @@ import { NamedStyleSection } from "./named-style";
 import { AllProperties } from "./all-properties";
 import { CardEditor } from "./card-editor";
 import { ComponentTrafficSection, ScalingSection, StateNote } from "./capacity-section";
+import { PresenceSection } from "./presence-section";
 import { ShapePicker, ShapeStyle } from "./shape-style";
 import {
   ColorField,
@@ -33,6 +34,7 @@ import {
   useSceneView,
 } from "./shared";
 import type { InspectorTab } from "./tabs";
+import { CodeSection, ImageSection, PartsSection } from "./media-sections";
 
 /**
  * A component. Element: label, state in the current scene, motion, card, nesting, details.
@@ -123,37 +125,49 @@ export function ComponentInspector({
   if (tab !== "element") return null;
   return (
     <>
-      <InspectorSection title="Label">
-        <CommitInput
-          label="Label"
-          value={component.label}
-          onCommit={(label) => set(component.name, { label }, "Rename label")}
-        />
-      </InspectorSection>
+      {component.code === null ? (
+        <InspectorSection title="Label">
+          <CommitInput
+            label="Label"
+            value={component.label}
+            onCommit={(label) => set(component.name, { label }, "Rename label")}
+          />
+        </InspectorSection>
+      ) : null}
+      <CodeSection component={component} />
+      <ImageSection component={component} />
+      {component.code !== null || component.image !== null ? (
+        <PartsSection component={component} />
+      ) : null}
+      <PresenceSection diagram={diagram} name={component.name} />
       {component.shape !== null ? (
         <InspectorSection id="shape" title="Shape">
           <ShapePicker component={component} />
         </InspectorSection>
       ) : null}
-      <InspectorSection id="state" title={`State · ${sceneLabel(view)}`}>
-        <StatePicker
-          label="State"
-          value={effectiveState(view, component.name, component.state)}
-          onChange={(state) => setState(store, [component.name], state)}
-        />
-        <StateNote component={component} />
-      </InspectorSection>
-      <InspectorSection id="motion" title="Motion">
-        <PresetGrid
-          options={MOTION_PRESETS}
-          value={motion}
-          onChange={(m) => setMotion(store, [component.name], m)}
-          label="Motion"
-          describe={(m) => MOTION_INFO[m]}
-        />
-      </InspectorSection>
-      <ScalingSection component={component} />
-      <ComponentTrafficSection component={component} />
+      {component.code === null ? (
+        <>
+          <InspectorSection id="state" title={`State · ${sceneLabel(view)}`}>
+            <StatePicker
+              label="State"
+              value={effectiveState(view, component.name, component.state)}
+              onChange={(state) => setState(store, [component.name], state)}
+            />
+            <StateNote component={component} />
+          </InspectorSection>
+          <InspectorSection id="motion" title="Motion">
+            <PresetGrid
+              options={MOTION_PRESETS}
+              value={motion}
+              onChange={(m) => setMotion(store, [component.name], m)}
+              label="Motion"
+              describe={(m) => MOTION_INFO[m]}
+            />
+          </InspectorSection>
+          <ScalingSection component={component} />
+          <ComponentTrafficSection component={component} />
+        </>
+      ) : null}
       <InspectorSection id="card" title="Card">
         <CardEditor name={component.name} card={component.card} label={component.label} />
       </InspectorSection>

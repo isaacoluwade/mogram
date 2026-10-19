@@ -764,3 +764,406 @@ structure and the UI; adding concepts comes later (D-85).
   search), the gallery (topics, search, kind, using a concept from it), topic and tags in the
   inspector, an explainer of your own, an account concept under Yours, and both on a phone.
 - Screenshots in `docs/screenshots/`: 160.
+
+## Step 27 — Concept research, a platform plan, and stories (2026-10-09)
+
+Asked by the product owner: research every major cloud concept, plan the best animated
+explanation of each without regard to what Mogram can do, review every plan, work out what
+Mogram needs as a platform (few tools used many ways, not a feature per concept), review that
+plan, then build it. Stages 1–4 are documents; stage 5 is this and the steps after it.
+
+**Research and plans (`docs/research/concepts/`).** Sixteen area catalogs checked against their
+fields' syllabi: 1,293 concepts (293 essential). A plan for each (the aha, the misconception to
+defeat, cast, opening frame, beats, the moment, interaction, ending), then every plan read again
+by a reviewer who didn't write it: 206 kept, 1,081 improved, 16 rewritten, 23 merged. The
+techniques the plans use are counted (`tools/techniques.py`): captions in 99%, a failure in 56%,
+two versions side by side in 50%, a labelled thing travelling in 48%.
+
+**The platform plan (`docs/plans/concept-platform.md`, D-86).** Six tools (elements, layouts,
+values and controls, stories, scenes, the model), every technique made from them, what's refused
+and what that costs. Its first version was reviewed by writing ten plans in its format and
+checking it against the code (`concept-platform.review.md`); nine of the review's ten
+recommendations were taken, and the plan's last section lists what changed. Milestones K0–K9.
+
+**Built in this step (K0–K2): the picture, presence, and stories.**
+
+- **A set can change more** (scenes and steps alike): `show: shown | faded | hidden`, `label`,
+  `tone` and `mark` (eight small signs at an element's corner), beside state, flow, motion and
+  the capacity numbers. Elements take `show:` and `mark:` too, for how they start. A wrong key
+  for a kind of element is dropped with a message and the rest of the line kept.
+- **Stories**: `stories:` holds named lists of steps (`say`, `set`, `focus`, `zoom`, `pace`,
+  `hold`, `name`, `rewind`, `choices`). A step with words starts a beat; the wordless steps
+  after it carry it on. Rewind cuts back to the start or a named step; a choice plays another
+  story and comes back.
+- **`@mogram/core/picture`**: `Moment` (a scene and a cursor into a story) and `pictureAt`, the
+  one definition of what's there: the diagram, then the steps played, then the scene, key by
+  key. It returns a plain diagram with hidden things gone (and a second one with them kept, for
+  the editor). `resolveState` takes a picture; nested diagrams build their own from the lines
+  handed down. A `Moment` replaced the bare scene name through the stores, resolver, exports
+  and links.
+- **Drawing change**: the scene model carries how strongly each thing is drawn and the model
+  being left, so things fade and grow in, fade out, and crossfade when their words or look
+  change. A slow step takes twice as long. Marks are drawn on components, shapes and
+  containers. Nothing else moves: layout and routes are for the diagram as written.
+- **The viewer** opens a diagram with a story at its beginning: a bar under the diagram with
+  the words, back, play and next, a mark for every beat (click to jump), and a button per
+  choice. Arrow keys step, Space plays. The diagram is framed above the bar. Links carry
+  `?story=main&beat=3`.
+- **Previews** (the gallery, the concept window, the landing page) play a diagram's story in a
+  loop on its written times; the concept window shows the words.
+- **The editor's dock** switches between Scenes and Story. Story is a strip of beats (an
+  Opening tile, then one per beat) and, under it, the beat picked: its caption, its steps, and
+  a chip for each thing the step shown changes, with a × to take it back. The canvas shows the
+  picture at that step, with what's hidden drawn faintly. Play runs it; the arrow keys step by
+  beat; Preview opens the viewer at the same beat.
+- **Editing at a step**: state, flow, motion and traffic picked in the inspector or quick bar
+  go to the step showing, as they do to a scene, compared with how the steps before left the
+  element, so a step records only what differs. A new **Presence** section (titled _At this
+  step_ or _In <scene>_ when one is picked) sets shown, faded or hidden, the mark, and there
+  what it says and its tone, with Reset.
+- **Exports**: a still is the step showing, with its words in a band under it; PNG and JPEG can
+  export every beat, zipped; GIF and WebP can play the story at its own pace. "All scenes"
+  still plays the scenes.
+- **Concepts**: `blue-green-deployment`, the first authored from a reviewed plan, plays its
+  story (a second environment comes up, is tested privately, takes all traffic at one switch,
+  rolls back, and then the same again with a dropped column). The catalog counts a story as
+  telling one.
+
+Renames: `timeline/story.ts` → `timeline/scenes.ts` (`SCENE_HOLD`, `scenesAt`), `edit/story.ts`
+→ `edit/scenes.ts`, the export option for scenes in order is `scenes`.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit tests: `@mogram/core` 318 (new: reading show, mark and stories with their messages;
+  moving through a story by step and beat, choices, rewinds; `pictureAt`; the timeline;
+  describing changes; story edit commands and set lines in steps and scenes), web 247.
+- End to end on the dev server: the 192 existing journeys pass (concept counts now come from
+  the concept files, so the library can grow), plus 5 new story journeys: the viewer playing a
+  story with a choice and a link; play running to the end; a scene showing, relabelling and
+  marking; the Story dock writing the YAML; exports of a step and of every beat.
+
+## Step 28 — Layouts, values and controls; then a pause (2026-10-09)
+
+The next two milestones of the platform plan (K3, K4; D-87, D-88), after which the product
+owner paused the work. What's left and how to carry on:
+`docs/plans/concept-platform-status.md`.
+
+- **Containers that arrange** (`layout: row | column | grid`, `gap`, `columns`, a child's
+  `cell`): children need no positions and are placed in file order. Such a container is drawn
+  as a plain tray with a small title, and keeps room for the most it ever holds, worked out
+  from every step and scene, so it never resizes.
+- **Riders** (`on:` an element or a connection, `along:` for where on the line): they sit above
+  what they ride on and go where it goes; text can ride too. What rides on something hidden is
+  hidden with it.
+- **Copies** (`like:`): another element's type or shape, look, label, size and data, merged
+  under the copy's own keys the way a named style is. Shown, a copy grows out of what it copies.
+- **Moving**: a set puts a placed thing `in` another arranging container or `on` something
+  else. It travels there along the connection joining the two places, either way, or straight.
+  Placed things are painted over everything and routes never go round them. Things placed
+  freely never move in a story.
+- **Formulas** (`@mogram/core/values`): a value in `data:` written `= …` is worked out per
+  picture; labels show numbers cleanly. Formulas can read the model (`load`, `copies`,
+  `traffic`, `count`).
+- **Meters**: `shape: meter` with `value`, `max`, `as: bar | ring | number`, `limit`, `unit`. A
+  step can set a value or run it from one number to another (`[30, 0]`), and the meter moves
+  with it for as long as the step lasts.
+- **Controls** (`controls:`): a dial, a toggle (a scene on or off) and a pick (one of several
+  scenes), in a bar in the viewer. A connection's `traffic` can be a formula, so a dial drives
+  the capacity model. A step with `when:` plays only while its test holds; moving a control
+  plays the story again to the beat it was at.
+- **Editor**: a container's _Arranges what's in it_ section; dropping a placed thing into an
+  arranging container or onto an element places it there, at the step showing or as written; a
+  placed thing follows the pointer while dragged.
+- **Concepts**: `visibility-timeout` (a queue, a message that travels to a consumer with a
+  timer ring riding on it, a ledger that fills, rewind). Topics `fundamentals`, `observability`
+  and `ai` added. The catalog build runs a story check (at most 12 beats, captions under 150
+  characters, nothing hidden that's never shown), `scripts/check-one.ts` checks one file, and
+  the gallery's tests count from the concept files so the library can grow.
+- **For authors**: `docs/research/concepts/tools/author-brief.md` and `shots-yaml.mjs`.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit tests: `@mogram/core` 346, `@mogram/icons` 104, `@mogram/concepts` 6, web 247 — 703. New:
+  layouts, rooms, slots, grids, riders, copies and placing (13); formulas, values in pictures,
+  meters, controls and conditional steps (14).
+- End to end on the dev server: 199 journeys (192 from before, 7 for stories). The full run
+  passed 198; the one failure was the new "a message leaves the queue" journey comparing the
+  queue's exact box while the camera was still easing, since changed to compare its size, and
+  all 7 story journeys pass after that.
+- Not run: `next build` and the production e2e.
+
+## Step 29 — A prompter that follows your voice (2026-10-09)
+
+The concept library is parked (`docs/plans/concept-platform-status.md`). The deck plan in
+`docs/mogram-decks/` is next, and its script window came forward to be first, because a prompter
+that keeps pace with the speaker is wanted now. D-96.
+
+**Two faults the deck plan found, fixed first.** Renaming or deleting an element didn't follow
+into `stories:` (set lines, `in`/`on`, focus, zoom) or into `on:` and `like:`; `rewriteReferences`
+and `pruneReferences` now do, and deleting a host deletes what rides on it. `controls` was
+missing from the order sections are written in.
+
+**Core.**
+
+- `script` on a story step (`read-story.ts`, 4,000 characters), separate from `say`. A beat
+  starts on either; `Beat.script`; `spokenAt`. A beat with a script holds for its speaking time
+  (`speakingTime`: 0.4s and 3.2 words a second).
+- `packages/core/src/prompter/follow.ts`, exported as `@mogram/core/prompter`: `scriptWords`
+  turns beats into comparable words, `follow` finds the place from the last words heard, and
+  `beatAt` says which beat that is and how far through. Local alignment around the reader, then
+  across the whole script; only unsaid words are proof of moving on.
+
+**Web.**
+
+- `features/prompter/listener.ts`: opens the chosen microphone, hands its track to Chrome's
+  `SpeechRecognition` with `processLocally`, checks and installs the language pack, reports the
+  microphone's level, and starts again whenever Chrome ends the session.
+- `features/prompter/prompter.tsx`: `PrompterStage` is the reading screen (the word being read
+  between two marks, said words dimmed, beat count and a clock, text size, mirror, full screen,
+  a microphone menu, the screen kept awake, settings remembered). Keys: arrows and page keys by
+  beat, Space for listening, Home to start again, F for full screen, Esc to stop or leave.
+- Three ways in: `/prompter` for any pasted script (`script-prompter.tsx`),
+  `/draft/[id]/prompter` and `/edit/[id]/prompter` for a diagram's story. The viewer has **Open
+  the prompter** and follows it over a `BroadcastChannel` (`channel.ts`). The dashboard and the
+  footer link to `/prompter`.
+- The editor's Story strip has a **Script** field beside Caption.
+- `next.config.ts`: Permissions-Policy allows `microphone` and `on-device-speech-recognition`
+  for this origin (`docs/security.md` §7).
+
+**The bench.** `pnpm bench:prompter` (`apps/web/scripts/prompter-bench.mjs`) speaks a script with
+macOS `say`, plays the recording into the prompter as its microphone in the installed Chrome,
+and measures how far the prompter is from the reader ten times a second. Twelve readings:
+straight, fast (220 words a minute), slow, three more accents, a hiss under the voice, long
+silences, ad-libs, skipped paragraphs, a paragraph read twice, and a loosely worded reading.
+`BENCH_SCRIPT=file` reads your own. It found three faults the made-up word streams hadn't:
+
+- An ad-lib moved the prompter nine words on: words already said were being counted as proof of
+  a jump. Now only unsaid words count.
+- Skipping two paragraphs, or reading one again from its start, went outside the window the
+  follower searched, and it sat still. Now the whole script is searched when nothing nearby
+  fits, with a higher bar.
+- Vocabulary hints made the recogniser say a favoured word where it wasn't. Removed.
+
+**A person's voice.** `BENCH_SPOKEN=folder` plays recordings of people instead of `say`. Tried
+with 73 takes of one LibriSpeech reader (public domain; 40 as the script, the rest as asides):
+read straight for five minutes, then wandering, with an aside every six takes, five takes
+skipped and three read twice. Two more faults, both fixed: a small word misheard before a
+paragraph's last word left the prompter two words short, and one stray guess from the
+recogniser jumped it back twenty words and forward again (going back is now heard twice,
+`steadyFollow`). Recording yourself once and replaying it is how to check a change against
+your own voice.
+
+What the recogniser heard in four of the synthetic readings and in the person's wandering one
+is in `packages/core/test/fixtures/`, and the follower's unit tests replay it.
+
+The five cloud journeys read their sign-in code from the development mailbox, which a
+production build refuses to serve; against one they're now skipped with that reason instead of
+failing.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`: clean. `pnpm format:check` passes for
+  everything except the nine files in `docs/mogram-decks/`, left as they were written.
+- Unit tests: `@mogram/core` 372, `@mogram/icons` 104, `@mogram/concepts` 6, web 247 — 729. New:
+  the follower (24, eleven of them replaying what Chrome heard), renames and deletes following
+  into stories.
+- `pnpm bench:prompter`: all twelve synthetic readings kept their place, usually one word
+  behind the reader and three or four at worst; nothing moved during an ad-lib; a five-minute
+  script of 859 words (`BENCH_SCRIPT`) ended on its last word. Both readings of a person
+  (`BENCH_SPOKEN`) kept their place the same way.
+- The real microphone, for a few seconds on this machine: listening started, the level moved,
+  six microphones were listed, and stopping let go of it.
+- End to end on the dev server: 202 journeys pass (three for the prompter).
+- `next build`, then the journeys against the production build on port 3200: 197 pass and the
+  five cloud journeys are skipped (no development mailbox there).
+- Not tested: the owner's own voice, on the Elgato.
+
+## Step 30 — A folder by itself (2026-10-09)
+
+P0 of the deck plan (`docs/mogram-decks/decks.md`), D-97. A story played only from the project's
+own diagram; a slide needs the diagram in its folder to play its own.
+
+- **Viewer.** `ProjectLevels` takes a `root` and has `top` (the diagram being viewed); every
+  `geometry("")` became `top`. The store and `ViewerProvider` carry the root. `DeepLink.root`
+  (`?root=a/b`, folder names only, never `..`), kept in the address as the viewer moves.
+- **Editor.** `root` in the store (`EditorInit.root`); `topDiagram(files, root)` and
+  `levelsAlong(files, path, root)` take it, as do `resolveLevel`, the level transitions, the
+  breadcrumbs, Find, the scene and story strips, the tours panel and the command palette.
+  `/draft/<id>?root=…` and `/edit/<id>?root=…` open a folder by itself.
+- **Export.** `ExportRequest.root`: the story plays when the folder exported is the root.
+- The first two items of P0 (renames and deletes following into stories) were done in Step 29.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean (the deck plan's
+  documents are formatted now; its fixture is left as written).
+- Unit tests: `@mogram/core` 373, `@mogram/icons` 104, `@mogram/concepts` 6, web 248 — 731.
+- End to end on the dev server: 204 journeys pass. New: a folder plays its own story in the
+  viewer by link, and the editor opens a folder by itself (dock, export, preview and back).
+- Not run for this step: the production build.
+
+## Step 32 - Deck playback
+
+P2 of the deck plan, D-99. Deck parsing, entry validation, slide position and stepping,
+opening holds, selected story stretches, carry-on slides, skipped entries, sections, overview,
+deep links and page-only Record mode now use the existing viewer controller.
+
+## Step 33 - Deck authoring
+
+P3 of the deck plan, D-100. The editor has a desktop rail and mobile Slides sheet; slide
+settings; undoable list and section operations; linked and imported slide sources; splitting
+and joining story stretches; and a separate shared-frame destination. The dashboard offers
+a blank deck and shows slide counts. Cloud imports retain origin id and version.
+
+## Step 34 - Asset and text foundations
+
+The implemented P4 slice, D-101: canonical pointers, browser Blob storage, owner-scoped cloud
+upload/read/share routes, historical references, ZIP byte restoration, image shape rendering,
+drop and paste, explicit text width and arranging paragraphs. Code files are accepted as inert
+text with a 200 KB byte limit in preparation for P5. Picture parts and the explicit image
+export browser gate remain open, so P4 is not yet marked complete.
+
+**Verification after these changes:**
+
+- Core: 38 files, 414 tests pass; core typecheck passes.
+- Web: 46 files, 265 tests pass; typecheck, lint and UI discipline check pass.
+- Development Playwright: 12 deck-editor and 2 deck-player journeys pass. Image coverage
+  includes decoded pixels, original ZIP bytes, local and cloud reloads and anonymous sharing.
+  Required widths are 390, 834, 1280 and 1440 pixels.
+- Production Next.js build passes. Production browser journeys are not yet run.
+- Touched files were formatted. The repository-wide formatter and remaining roadmap gates
+  are still pending.
+
+## Step 31 — A page (2026-10-09)
+
+P1 of the deck plan, D-98.
+
+- **Core.** `presets/pages.ts` (`PAGES`, `pageSize`); `DiagramSettings.page`; read with
+  `"page" should be 16:9, 4:3, 1:1, 9:16 or none.`; written by `setSetting` in the settings'
+  order; `LayoutResult.page` in pixels and `frameOf(layout)`; the lint rule `off-page`.
+- **App.** `SceneModel.bounds` is the frame and `SceneModel.page` the page; `DiagramSvg` clips
+  to it when viewing or exporting and draws it, with a wash over what's off stage, when
+  editing. The viewer's `fitArea` and `fitCamera`; the editor's `fitArea`; `ExportArea` gains
+  `"page"` and `exportFrame` takes the page; a thumbnail shows the page whole; **Page** in the
+  inspector's Canvas tab; the page among the smart guides.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `pnpm format:check`: clean.
+- Unit tests: `@mogram/core` 379 (6 for the page), `@mogram/icons` 104, `@mogram/concepts` 6,
+  web 248 — 737.
+- End to end on the dev server: 206 journeys pass. New: the editor draws the page, the Canvas
+  tab sets it, and the PNG that comes out is 1920 × 1080; the viewer fits the page and fills
+  the screen with it when presenting.
+- Not run for this step: the production build.
+
+## Step 35 — Decks finished: a rewrite, words, voice, exports (2026-10-10)
+
+P2–P5 rewritten and verified; P6–P9 of the deck plan built. D-99 (revised), D-102 … D-107.
+
+- **The player** (D-99). A cut crossfades: the slide being left stays as a passive, `inert`
+  layer and fades off the new one. Handovers are checked against the deck's position, so a
+  slide cut away from can't move the deck. Presenting and Record mode survive cuts; Record is
+  a viewer state with Esc to leave. A deck plays from any folder (`?root=`); the editor and
+  the player link to each other by slide and beat. The overview is a dialog; Next stops at
+  the end.
+- **Authoring.** The rail names skipped slides by their diagrams, puts a new slide into an
+  empty section that follows, and titles an imported slide by the name it was chosen by. The
+  add-slide dialog re-reads saved diagrams each time it opens, asks the account only when
+  signed in, and offers only diagrams that can be slides (not the frame, nested levels or
+  decks). One side panel at a time below 1100 px, also when the window narrows; beside the
+  rail on tablets the zoom buttons give way to the dock.
+- **Code and pictures.** More code-file extensions (`.tfvars`, `.diff`, `.patch`, `.log`,
+  `.zsh`); the assistant can write them; the code panel lists the files listings show; exports
+  embed the mono font; double-clicking a listing or picture opens its section; a new listing
+  starts with a line saying what it's for.
+- **Words and voice** (D-105). Core: `voiceKey`, `voiceFor`, `staleVoice`, `keepVoice`;
+  `deckBeats`, `deckScript`, `deckSubtitles`, `deckChapters`; `deckTimeline` takes recording
+  lengths. The Script window reads a deck slide by slide, says what's left, follows the voice
+  and moves viewers by slide and beat; Record takes a beat at a time after a count-in, trims
+  silence by loudness, and keeps takes through the editor (or the draft). The story strip shows
+  each beat's recording: play, remove, or keep it after the words change. Playing a deck plays
+  its recordings and waits for them.
+- **Deck exports** (D-106). PDF and images a slide or a beat at a time, the script, subtitles,
+  chapters, and a WebM video (VP9 and Opus through WebCodecs, our own muxer).
+- **The assistant** (D-107). Six deck tools; each turn lists the slides; story edits count in
+  the project diff.
+- **Fixes found on the way.** Lib no longer imports the assets feature (the upload hook is
+  registered by the app's providers). A controller's `dispose` no longer stops it for good
+  (React runs effects twice in development).
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `prettier --check .`: clean.
+- Unit tests: `@mogram/core` 463, web 290, `@mogram/icons` 104, `@mogram/concepts` 6 — 863.
+- End to end, 235 journeys. Dev server: 227 pass; the 8 assistant journeys skip (it isn't
+  started with the scripted model). Production build (port 3200, a fresh database, the
+  scripted model): 227 pass, the 8 assistant journeys among them; the 8 that need the
+  development mailbox skip. Every journey passes on one server or both.
+- New specs: `media`, `script-window`, `deck-export`; `deck-player` and `deck-editor`
+  rewritten; a deck journey for the assistant. They cover the crossfade, presenting and
+  Record mode across cuts, authoring from every source, code and parts, pictures through a
+  cloud share, reading a deck in the Script window, recording (with Chrome's fake microphone)
+  into a draft with or without an editor and into an account diagram, keeping and removing
+  recordings, Play with sound, every deck export including a narrated video whose voice
+  decodes where its beats are and a 4K 60 fps video with 300 frames for 5 s, double-clicking a
+  listing, code files in the code panel, the mono font in an SVG export, and a shared deck's
+  link description. Screenshots at 390, 834, 1280 and 1440 px.
+- Found by the production run and fixed: choosing Rename (or a new Section) in the rail's menu
+  let the closing menu take focus back from the title field, so it closed before anything was
+  typed.
+- Not covered by a test: a real voice (the fake microphone plays a tone), and what a viewer
+  hears (the test sees each recording start, not its sound).
+
+## Step 36 — Home, Templates, Concepts and Script (2026-10-10)
+
+D-108. The app's home had been left behind while the editor grew.
+
+- **Shell.** `features/dashboard/app-shell.tsx`: one sidebar for every page with New (`N`),
+  the places (Home, Templates, Concepts, Script), what's pinned, Help (File format, Security)
+  and the account; files dropped anywhere open as a new diagram.
+- **Home.** Start tiles, Continue, and Everything with search (`/`), kind, where, sort, cards
+  or a list, pinning and several-at-once delete or save to the account.
+- **Cards.** Core `projectAbout` on every draft and account summary; a deck looks like a stack
+  and says its slides and recording; Preview and Present on the card; a live picture while a
+  diagram's card is pointed at.
+- **Templates and Concepts** as pages, filtered by kind and cloud, topic and platform.
+- **Script.** What has a story, how much is recorded, a way into each Script window, and any
+  text to read. A Script window with no editor saves takes to the draft or the account.
+- **Editor, found while testing it.** The empty canvas's "Start with a component" words took
+  the pointer, so a shape dropped on them went nowhere; they sat in the middle of the window
+  rather than the canvas; and on a slide they belong in the middle of the page. They now let
+  drops through, sit on the page (or between the panels without one), and are drawn under the
+  panels.
+
+**Verification at the end of this step:**
+
+- `pnpm lint`, `pnpm typecheck`, `pnpm check:ui`, `prettier --check .`: clean.
+- Unit tests: `@mogram/core` 465, web 292, `@mogram/icons` 104, `@mogram/concepts` 6 — 867.
+- End to end, 252 journeys. Dev server: 244 pass, the 8 assistant journeys skip. Production
+  build (port 3200, a fresh database, the scripted model): 244 pass, the 8 that need the
+  development mailbox skip. New: `home.spec.ts` (start, continue, cards, filter, sort, list,
+  pin, several at once, dropped files, templates, concepts, Script, every width) and two
+  journeys for the empty canvas's words.
+- Two runs sharing one results folder lose each other's traces and report failures that
+  aren't: full runs are made one at a time. Five sign-in codes a minute is the limit, so
+  sign-in journeys rerun back to back can trip it.
+
+## Step 37 — On a slide, the dock is its story (2026-10-11)
+
+D-109. A slide opens on its story; the Scenes/Story switch and the Slide tab's Scene field show
+only where the slide's diagram has scenes; a still slide offers "Start a story". Diagrams
+outside a deck are unchanged.
+
+**Verification at the end of this step:** lint, typecheck, UI check and formatting clean; web
+unit tests 293; end to end 253 journeys, 245 passing on the dev server and 245 on a production
+build, none failing (the 8 skipped on each pass on the other).
+
+## Step 38 — The prompter's reach (2026-10-12)
+
+D-110. `FollowOptions.reach` in core (`order`, `nearby`, `anywhere`), a setting for it in the
+Script window, and nearby as the default. Core prompter tests 26 (2 new); e2e prompter covers
+the setting and that it's kept. The voice bench (real speech into Chrome) wasn't re-run: it
+needs a quiet machine and is set to "anywhere", the behaviour it measured before.

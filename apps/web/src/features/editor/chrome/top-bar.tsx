@@ -14,6 +14,7 @@ import {
   MoreHorizontal,
   MonitorPlay,
   Route,
+  ScrollText,
   Share2,
   Sparkles,
 } from "lucide-react";
@@ -23,7 +24,8 @@ import { IconButton, IconLink } from "@/components/ui/icon-button";
 import { LogoMark } from "@/components/ui/logo";
 import { Menu, MenuContent, MenuTrigger } from "@/components/ui/menu";
 import { Panel, ToolbarDivider } from "@/components/ui/panel";
-import { deepLinkQuery } from "@/features/share/deep-link";
+import { viewerQuery } from "../viewer-link";
+import { scriptWindowHref } from "../script-window";
 import { useEditor, useEditorShallow, useEditorStore } from "../editor-context";
 import { useEditorHost, useOpenViewer } from "../persistence/host";
 import { useCommandContext, useCommandHost } from "../commands/context";
@@ -31,7 +33,7 @@ import { shortcutLabel } from "../commands/keys";
 import { CommandMenuItems } from "../commands/menu-items";
 import { DIAGRAM_MENU, resolveMenu } from "../commands/menus";
 import type { CommandContext } from "../commands/types";
-import type { SaveStatus } from "../store/editor-store";
+import { topDiagram, type SaveStatus } from "../store/editor-store";
 
 function statusText(save: SaveStatus, kind: "local" | "cloud"): string {
   if (save.kind === "error") return `Couldn't save: ${save.message}`;
@@ -215,6 +217,11 @@ export function TopRightBar() {
   const commands = useCommandHost();
   const panels = useEditor((s) => s.panels);
   const assistantShowing = useEditor((s) => s.panels.library && s.leftTab === "assistant");
+  const host = useEditorHost();
+  // A deck, or a diagram with a story, has words to read and record.
+  const hasWords = useEditor(
+    (s) => s.deckRoot !== null || topDiagram(s.files, s.root).stories.length > 0,
+  );
   return (
     <Panel className="flex h-11 items-center gap-1 px-1.5">
       <IconButton
@@ -251,10 +258,7 @@ export function TopRightBar() {
         size="sm"
         aria-label="Preview"
         title={`Preview as viewers see it (${shortcutLabel("shift+p")})`}
-        onClick={() => {
-          const { levelPath, scene } = store.getState();
-          void openViewer(deepLinkQuery({ level: levelPath, scene }));
-        }}
+        onClick={() => void openViewer(viewerQuery(store.getState()))}
       >
         <Eye />
         <span className="max-lg:hidden">Preview</span>
@@ -262,14 +266,26 @@ export function TopRightBar() {
       <IconButton
         label="Present"
         tooltipSide="bottom"
-        onClick={() => {
-          const { levelPath, scene } = store.getState();
-          const query = deepLinkQuery({ level: levelPath, scene });
-          void openViewer(`${query.length > 0 ? `${query}&` : "?"}present=1`);
-        }}
+        onClick={() => void openViewer(viewerQuery(store.getState(), { present: true }))}
       >
         <MonitorPlay />
       </IconButton>
+      {hasWords ? (
+        <IconButton
+          label="Script window: read and record"
+          tooltipSide="bottom"
+          className="max-md:hidden"
+          onClick={() =>
+            window.open(
+              scriptWindowHref(host.viewerHref, store.getState()),
+              "mogram-script",
+              "popup,width=1024,height=640",
+            )
+          }
+        >
+          <ScrollText />
+        </IconButton>
+      ) : null}
       <ToolbarDivider className="max-md:hidden" />
       {/* Phones keep it in the diagram menu: both bars have to fit across the screen. */}
       <Button

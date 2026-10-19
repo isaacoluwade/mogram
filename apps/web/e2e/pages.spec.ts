@@ -6,6 +6,8 @@ const PAGES = [
   { path: "/", name: "landing" },
   { path: "/sign-in", name: "sign-in" },
   { path: "/diagrams", name: "dashboard" },
+  { path: "/templates", name: "templates" },
+  { path: "/concepts", name: "concepts" },
   { path: "/security", name: "security" },
   { path: "/docs/format", name: "file-format" },
   { path: "/this-does-not-exist", name: "not-found" },

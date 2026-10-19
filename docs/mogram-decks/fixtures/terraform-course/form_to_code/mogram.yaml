@@ -1,0 +1,75 @@
+# A screenshot and a listing side by side, joined part to part.
+# (P4: image, assets, parts as regions.  P5: code from a file, parts as lines, a connection between parts)
+mogram: 1
+name: The form tells you what Terraform will ask for
+shapes:
+  portal:
+    shape: image
+    src: images/storage-basics.png
+    corner: 10
+    shadow: true
+    parts:
+      group_field: [0.30, 0.27, 0.62, 0.07]
+      name_field: [0.30, 0.37, 0.62, 0.07]
+      region_field: [0.30, 0.47, 0.62, 0.07]
+      performance_field: [0.30, 0.61, 0.62, 0.07]
+      redundancy_field: [0.30, 0.71, 0.62, 0.07]
+  main_tf:
+    shape: code
+    file: ../code/main.tf
+    lines: 14-20
+    title: main.tf
+    font_size: 24
+    parts:
+      name: 15
+      group: 16
+      location: 17
+      tier: 18
+      replication: 19
+  docs:
+    shape: rounded
+    label: "\"Changing this forces a new resource to be created.\""
+    tone: rose
+    bold: true
+    font_size: 26
+    show: hidden
+connections:
+  name_is: { from: portal.name_field, to: main_tf.name, show: hidden }
+  group_is: { from: portal.group_field, to: main_tf.group, show: hidden }
+  region_is: { from: portal.region_field, to: main_tf.location, show: hidden }
+  tier_is: { from: portal.performance_field, to: main_tf.tier, show: hidden }
+  replication_is: { from: portal.redundancy_field, to: main_tf.replication, show: hidden }
+stories:
+  main:
+    - say: Five fields the form insists on.
+      script: |
+        So before I write anything, I look at the form. And the form insists on five things.
+      focus: [portal]
+    - say: The name.
+      script: The name.
+      set: { name_is: shown }
+      focus: [portal.name_field, main_tf.name, name_is]
+    - say: The resource group.
+      script: The resource group it lives in.
+      set: { group_is: shown }
+      focus: [portal.group_field, main_tf.group, group_is]
+    - say: The region.
+      script: The region.
+      set: { region_is: shown }
+      focus: [portal.region_field, main_tf.location, region_is]
+    - say: Performance and redundancy.
+      script: And then performance, and redundancy.
+      set: { tier_is: shown }
+      focus: [portal.performance_field, portal.redundancy_field, main_tf.tier, main_tf.replication, tier_is, replication_is]
+    - set: { replication_is: shown }
+    - say: And one sentence on the provider page.
+      script: |
+        And then the provider page tells you something the form doesn't. Changing the name forces a new resource to be created.
+      set: { docs: shown, main_tf.name: { tone: rose, mark: warn } }
+      focus: [docs, main_tf.name]
+layout:
+  portal: { at: [10, 26], size: [96, 64] }
+  main_tf: { at: [124, 30], size: [106, 34] }
+  docs: { at: [124, 72], size: [106, 12] }
+  decorations:
+    title: { text: The form tells you what Terraform will ask for, style: title, font_size: 52, at: [10, 9] }

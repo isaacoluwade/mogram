@@ -15,6 +15,29 @@ writer implement (`packages/core/src/format`).
 | `docs/*.md`               | Card markdown.                                                                       |
 | `icons/*.svg`             | Uploaded icons.                                                                      |
 | `<subfolder>/mogram.yaml` | A nested diagram.                                                                    |
+| `images/*`                | Pictures an `image` shows (any folder works).                                        |
+| `code/*`                  | Files a `code` element shows (any folder works).                                     |
+| `voice/*`                 | Recordings of a story's script, named by Mogram (see Stories).                       |
+
+**Code files.** These are read as text, anywhere in a project, up to 200 KB each, never run and
+never read as Mogram files: `.tf`, `.tfvars`, `.hcl`, `.sh`, `.bash`, `.zsh`, `.json`, `.toml`,
+`.ini`, `.py`, `.go`, `.rs`, `.java`, `.c`, `.cpp`, `.h`, `.hpp`, `.cs`, `.rb`, `.js`, `.jsx`,
+`.mjs`, `.cjs`, `.ts`, `.tsx`, `.html`, `.css`, `.scss`, `.sql`, `.diff`, `.patch`, `.log`,
+`.txt`, and `Dockerfile`.
+
+**Binary files.** A picture or a recording is held by the hash of its bytes (D-101). In the
+project's files its path holds one line:
+
+```
+mogram-asset 1 sha256:<64 hex> <media type> <bytes>[ <width>x<height>][ <seconds>s][ skip=<seconds>]
+```
+
+`<width>x<height>` is a picture's size in pixels; `<seconds>s` is where a recording's voice ends
+and `skip=` where it starts (the silence at either end isn't played). In a repository or a zip
+the path is the file itself: Mogram writes the pointer when it opens the folder, and the bytes
+when it downloads it. Media types: `image/png`, `image/jpeg`, `image/webp`, `image/gif`,
+`audio/webm`, `audio/mp4`, `audio/mpeg`, `audio/wav`, `audio/ogg`. SVG pictures are text, cleaned
+as uploaded icons are. A picture written as a `data:` URL is still read.
 
 **Single-file mode** — a folder with one Mogram file. Layout sits at the bottom of that file.
 **Folder mode** — a folder with `mogram.yaml` plus other Mogram files (or a `layout.mogram.yaml`).
@@ -37,6 +60,8 @@ name: Checkout # diagram title (default: folder/file name)
 description: Payments and order flow
 concept: { summary: …, topic: …, roles: … } # makes the diagram a concept (see Concepts)
 theme: midnight # canvas theme preset (default midnight)
+page: 16:9 # optional: a fixed frame (see Page; default: none)
+deck: { slides: [intro, flow] } # optional: makes the folder a deck (see Decks)
 background: "#101418" # optional: a colour, or a gradient (below)
 grid: "#ffffff26" # optional grid colour; the default follows the background (the grid's
 # style, dots or lines, and whether it's shown are each person's own setting, not the file's)
@@ -59,6 +84,24 @@ Put gradients in quotes: in YAML, ` #` starts a comment, so an unquoted gradient
 colours (Mogram says so if it happens). Text, lines and the grid follow the background's
 lightness, so a light gradient on a dark theme still reads well.
 
+### Page
+
+A diagram is as big as what's in it. Give it a page and it has a fixed frame instead, for a
+slide, a video, or an export that has to come out at a known size (D-98).
+
+| Value            | Cells                  | Pixels at 100% |
+| ---------------- | ---------------------- | -------------- |
+| `none` (default) | the diagram's contents |                |
+| `16:9`           | 240 × 135              | 1920 × 1080    |
+| `4:3`            | 180 × 135              | 1440 × 1080    |
+| `1:1`            | 135 × 135              | 1080 × 1080    |
+| `9:16`           | 135 × 240              | 1080 × 1920    |
+
+The page's top-left corner is `[0, 0]`, and positions are in cells from there, as always. With
+a page, the viewer fits the page to the screen (edge to edge when presenting), an export's
+**Page** area is exactly the page, and a thumbnail shows the page. What lies outside the page
+is off stage: the editor draws it dimmed, and nothing else draws it.
+
 The 30 themes, by family (each sets the background and the tiles, lines, labels and grid that go
 with it):
 
@@ -70,6 +113,87 @@ with it):
 | Drafting        | `blueprint`, `chalkboard`                                           |
 | Light           | `paper`, `snow`, `mist`, `sand`                                     |
 | Pastel          | `sky`, `mint`, `blush`, `lilac`, `butter`, `dawn`, `seafoam`        |
+
+## Decks
+
+```yaml
+mogram: 1
+name: Terraform Crash Course for Absolute Beginners
+page: 16:9
+theme: midnight
+deck:
+  frame: frame
+  captions: off
+  slides:
+    - section: What Terraform is
+    - title: { frame: false }
+    - before_terraform
+    - terraform_flow: { to: applied }
+    - reading_a_plan: { title: What is Terraform about to do? }
+    - section: State and drift
+    - terraform_flow: { from: applied }
+    - drift: { scene: tag_added }
+```
+
+| Key        | Values                                                                     | Default |
+| ---------- | -------------------------------------------------------------------------- | ------- |
+| `frame`    | A folder whose diagram is drawn under every slide                          | none    |
+| `captions` | `on`, `off`: whether someone watching sees each beat's `say` to begin with | `on`    |
+| `slides`   | The list, in order                                                         |         |
+
+**An entry in `slides`** is one of:
+
+- `- section: <title>`: a section starts here.
+- `- <folder>`: a slide showing that folder's diagram and playing its first story.
+- `- <folder>: { … }`: the same, with keys.
+
+| Key     | Means                                                                                | Default            |
+| ------- | ------------------------------------------------------------------------------------ | ------------------ |
+| `story` | Which of the diagram's stories it plays                                              | the first          |
+| `from`  | A step's `name`: begin with the picture as it stood once that step's beat had played | the story's start  |
+| `to`    | A step's `name`: stop once that step's beat has played                               | the story's end    |
+| `scene` | A scene laid over it throughout                                                      | none               |
+| `title` | What the rail, the overview and exports call it                                      | the diagram's name |
+| `frame` | `false`: this slide is drawn without the deck's frame                                | `true`             |
+| `skip`  | `true`: kept in the file, not shown or counted                                       | `false`            |
+
+- A folder is written relative to the deck's folder (`title`, `./title`, `../shared/checkout`) and must stay inside the project.
+- The same folder can appear on several slides. When two next to each other show the same folder and story and the second's `from` is the first's `to`, the story carries on with no cut.
+- A diagram with no story is a still slide.
+- Slides are counted from 1, skipping the skipped. Sections aren't counted.
+- A deck's own file holds settings, `styles:` and `deck:` only.
+- Up to 400 slides.
+
+**What a slide takes from the deck.** `page`, `theme`, `background` and `grid` unless it sets its own. `styles` and `data` are merged key by key, the slide's own winning.
+
+**Built-in values**, for any label on a slide or in the frame, beside `%name%`, `%type%`, `%diagram%` and `%date%`:
+
+| Token       | Shows                                   |
+| ----------- | --------------------------------------- |
+| `%deck%`    | The deck's name                         |
+| `%section%` | The section the slide is in, or nothing |
+| `%slide%`   | The slide's number                      |
+| `%slides%`  | How many slides there are               |
+
+A `data:` value of the same name wins, as with the other built-ins.
+
+**Stories and scenes belong to the slide's diagram.** In a deck, each slide's diagram is "the top diagram, the one people open": its `stories:` play and its `scenes:` apply, and they reach into diagrams it opens by path. (Outside a deck this is unchanged.)
+
+Messages:
+
+- `Slide 3 is "terraform_flo", but no folder with that name holds a diagram. Did you mean "terraform_flow"?` (error; the slide is left out)
+- `Slide 3 is "../../elsewhere", which is outside the project.` (error)
+- `Slide 4 is "lesson_2", which is a deck. A deck's slides are diagrams.` (error)
+- `Slide 3 plays "terraform_flow" from "aplied", but its story "main" has no step with that name. Did you mean "applied"?` (error; the slide plays the whole story)
+- `Slide 5 stops at "applied", which comes before "drift", where it starts.` (error; the slide plays from "drift" to the end)
+- `Slide 6 names the story "rollback", but "terraform_flow" has no story with that name.` (error)
+- `"frame" is "frme", but no folder with that name holds a diagram.` (error; no frame)
+- `"captions" should be on or off.`
+- `"box" is an element in a deck's own file. A deck's file holds its settings and its slides; put "box" on a slide or in the frame.` (warning; ignored)
+- `The deck has no slides yet.` (warning)
+- `"deck" belongs in mogram.yaml. Mogram ignores it in slides.mogram.yaml.` (warning, as for other settings)
+
+A link can open a deck part-way: `?slide=12&beat=3`, where `beat` counts within the slide's stretch. A deck in a folder is opened with `?root=<folder>`.
 
 ## Architecture
 
@@ -204,6 +328,180 @@ Shapes also take every component key (`label`, `in`, `state`, `motion`, `intensi
 `color` for the state colour, `card`, `opens`). Their size lives in the layout like a container's
 (`orders_db: { at: [30, 6], size: [10, 12] }`); without one they take their kind's default.
 
+### Pictures and code
+
+Two more values for `shape:`.
+
+#### Image
+
+```yaml
+shapes:
+  portal:
+    shape: image
+    src: images/storage-basics.png
+    fit: contain
+    corner: 10
+    shadow: true
+    parts:
+      name_field: [0.36, 0.42, 0.50, 0.08]
+      region: { area: [0.36, 0.60, 0.50, 0.08], show: hidden }
+layout:
+  portal: { at: [8, 22], size: [104, 72] }
+```
+
+| Key                                                   | Values (default first)                                                                        |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `src`                                                 | A picture in the project (required): `.png`, `.jpg`, `.jpeg`, `.webp`, `.gif`, `.svg`         |
+| `fit`                                                 | `contain`, `cover`                                                                            |
+| `corner`                                              | 8, or a radius in px                                                                          |
+| `stroke`, `stroke_width`, `dash`, `shadow`, `opacity` | as for any shape (`stroke` defaults to `none`)                                                |
+| `label`                                               | none. When written it is the caption under the picture and its description for screen readers |
+| `parts`                                               | see Parts                                                                                     |
+
+- Without a size in the layout it is 80 cells wide at the picture's own proportions (16:9 when they aren't known).
+- It takes every component key (`in`, `show`, `card`, `link`, `data`, `mark`). It has no `tone`, `fill` or typography keys, and no `state` or `motion`.
+- A GIF shows its first frame. An SVG is cleaned as an uploaded icon is.
+
+Messages:
+
+- `"portal" shows "images/portl.png", but there is no such file. Did you mean "images/portal.png"?` (error; drawn as a missing picture)
+- `"portal" shows "notes.md", which isn't a picture Mogram can show. Use PNG, JPEG, WebP, GIF or SVG.`
+- `"portal" is an image, so it needs "src", like src: images/portal.png.`
+- `"fit" should be contain or cover.`
+
+#### Code
+
+```yaml
+shapes:
+  main_tf:
+    shape: code
+    file: code/main.tf
+    lines: 1-7
+    language: hcl
+    title: main.tf
+    numbers: true
+    font_size: 22
+    parts:
+      name: 2
+      required: 2-6
+  plan:
+    shape: code
+    language: plan
+    title: none
+    text: |
+      # azurerm_storage_account.storage must be replaced
+      -/+ resource "azurerm_storage_account" "storage" {
+            ~ name = "tfcoursedeveusabc12st" -> "tfdemodeveusabc12st" # forces replacement
+          }
+
+      Plan: 9 to add, 0 to change, 9 to destroy.
+    parts:
+      block: 1-4
+      summary: { lines: 6, show: hidden }
+```
+
+| Key                                                             | Values (default first)                                                                                             |
+| --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `text` or `file`                                                | The lines, written in place (a block, `text: \|`), or a code file in the project. Exactly one of the two           |
+| `lines`                                                         | All of it, or a slice like `12-31`. Line numbers stay the file's own                                               |
+| `language`                                                      | From the file's extension, else `plain`. One of `hcl`, `console`, `plan`, `yaml`, `json`, `shell`, `diff`, `plain` |
+| `title`                                                         | The file's name (nothing for `text:`), or words for the header, or `none` for no header                            |
+| `numbers`                                                       | `false`, `true`: line numbers down the left                                                                        |
+| `font_size`                                                     | 20, or 10–64 (px). The font is always the mono one                                                                 |
+| `fill`, `stroke`, `stroke_width`, `corner`, `shadow`, `opacity` | as for any shape; the fill and stroke default to the theme's code panel                                            |
+| `parts`                                                         | see Parts                                                                                                          |
+
+- Every space, tab (shown as two spaces) and blank line is kept. Lines never wrap.
+- Without a size in the layout it fits its text. With one, a line too long for it is cut with `…` and a suggestion says which.
+- It takes `in`, `show`, `card`, `link`, `data` and `mark`. It has no `label`, `tone`, `state` or `motion`.
+
+**Languages.**
+
+| `language`              | Coloured as                                                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `hcl`                   | block types, labels, attribute names, strings, numbers, comments                                                                                                                           |
+| `console`               | a line starting `$ ` or `> ` is a command; the rest is its output. Colour codes in captured output are dropped                                                                             |
+| `plan`                  | Terraform's plan: a line whose first mark is `+` is added, `-` removed, `~` changed, `-/+` or `+/-` replaced, `<=` read; `#` lines are comments; `Plan:` and `No changes.` are the summary |
+| `yaml`, `json`, `shell` | keys, strings, numbers, comments, commands                                                                                                                                                 |
+| `diff`                  | `+` and `-` lines                                                                                                                                                                          |
+| `plain`                 | one colour                                                                                                                                                                                 |
+
+Extensions: `.tf`, `.tfvars`, `.hcl` are `hcl`; `.yaml`, `.yml` are `yaml`; `.json` is `json`; `.sh`, `.bash` are `shell`; `.diff`, `.patch` are `diff`; everything else is `plain`. `console` and `plan` are always written.
+
+Messages:
+
+- `"main_tf" is code, so it needs "text" or "file", like file: code/main.tf.`
+- `"main_tf" has both "text" and "file". Use one.`
+- `"main_tf" shows "code/mian.tf", but there is no such file. Did you mean "code/main.tf"?`
+- `"main_tf" shows lines 12-31 of "code/plan.txt", which has 20 lines.` (warning; shows what there is)
+- `"lines" should be a line or a range, like 12 or 12-31.`
+- `"language" is "terraform", which isn't one Mogram colours, so it is shown plain. Did you mean "hcl"?` (warning)
+- Suggestion: `Line 14 of "plan" is wider than the element at this size, so its end is cut.`
+
+### Parts
+
+An element can name sub-areas of itself. Today that is `image` and `code`.
+
+```yaml
+parts:
+  name: 2 # code: a line
+  required: 2-6 # code: a range of lines
+  summary: { lines: 31, show: hidden } # the long form, with how it starts
+  name_field: [0.36, 0.42, 0.50, 0.08] # image: x, y, w, h, each 0–1 of the picture
+  region: { area: [0.36, 0.60, 0.50, 0.08], show: faded }
+```
+
+| On      | Short form                     | Long form keys                  |
+| ------- | ------------------------------ | ------------------------------- |
+| `code`  | a line number, or `first-last` | `lines`, `show`, `tone`, `mark` |
+| `image` | `[x, y, w, h]`                 | `area`, `show`, `tone`, `mark`  |
+
+- A part's name follows the rules for any name and is unique within its element. Up to 64 parts an element.
+- Parts can overlap.
+- A code part's lines are the file's own numbers, whatever slice is shown.
+- **A part is addressed `element.part`**: in a scene or a step's `set`, in `focus`, in `zoom`, and as an end of a connection.
+
+```yaml
+connections:
+  same_thing: { from: portal.name_field, to: main_tf.name }
+scenes:
+  reviewed:
+    main_tf.required: { mark: check }
+stories:
+  main:
+    - say: The form tells you what Terraform will ask for.
+      focus: [portal.name_field, main_tf.name]
+    - set:
+        plan.summary: shown
+        main_tf.name: { tone: amber, mark: warn }
+      zoom: plan.summary
+```
+
+**What a set can change on a part**
+
+| Key    | Means                                                                   |
+| ------ | ----------------------------------------------------------------------- |
+| `show` | `shown`, `faded` or `hidden`. One word is enough: `plan.summary: shown` |
+| `tone` | A wash of that colour behind the lines, or an outline round the region  |
+| `mark` | A sign at the start of the first line, or at the region's corner        |
+
+- `focus` on a part keeps it bright. The rest of its element dims along with everything else that isn't in focus.
+- `zoom` on a part frames it.
+- A connection that ends on a part attaches to the part's box.
+- Hiding an element hides its parts. A hidden code part leaves its lines blank, so nothing below it moves.
+
+**An element with parts can't open a nested diagram**, so `a.b` is a part when `a` has parts and a path into a nested diagram when `a` opens one.
+
+Messages:
+
+- `"main_tf" has parts, so it can't also open a nested diagram.` (error; `opens` is ignored)
+- `In story "main", "main_tf.nam" names a part of "main_tf" that isn't there. Did you mean "name"?` (error; the line is ignored)
+- `In scene "reviewed", "web.name" points inside "web", but "web" has no parts and doesn't open a nested diagram.` (replaces today's message for this case)
+- `Part "summary" of "plan" is line 40, but "code/plan.txt" has 31 lines.` (warning)
+- `Part "name_field" of "portal" should be four numbers from 0 to 1: x, y, width, height.`
+- `A part can change "show", "tone" and "mark". "label" is ignored on "main_tf.name".` (warning)
+- `Connection "same_thing" ends on "portal.nme_field", but "portal" has no part with that name.`
+
 ### Links and data
 
 Any element — component, shape, container, group, connection, text or note — can link somewhere
@@ -322,7 +620,7 @@ Common short forms work too and are kept as written: `azure/aks`, `azure/vm`, `a
 
 ## Scenes
 
-A scene records only what differs from normal.
+A scene is a named **set**: it records only what differs from normal.
 
 ```yaml
 scenes:
@@ -333,6 +631,9 @@ scenes:
     aks.ingress: degraded # an element inside a nested diagram, by path
   traffic_spike:
     web_vm: { state: overloaded, motion: shake }
+  sale:
+    banner: shown # something that isn't there until this scene
+    web_vm: { label: Web (busy), mark: warn }
 ```
 
 The base state (no scene) is shown as **Normal**. Scene order is the order of keys.
@@ -342,6 +643,218 @@ Scenes belong to the top diagram, the one people open: they reach inside nested 
 `scenes:` are used only when that folder is opened on its own. In the editor, choosing a state
 inside a nested diagram while a scene is selected writes the path line into the top diagram's
 scene.
+
+### What a set can change
+
+Scenes and the steps of a story (below) share one vocabulary. Each line names an element and
+gives it one word, or keys:
+
+| Key                                         | On                          | Means                                                             |
+| ------------------------------------------- | --------------------------- | ----------------------------------------------------------------- |
+| `state`                                     | components, containers      | `healthy`, `active`, `scaling`, `degraded`, `overloaded`, `down`  |
+| `flow`                                      | connections                 | `traffic`, `slow`, `blocked`, `rerouted`, `idle`                  |
+| `motion`                                    | components                  | `none`, `pulse`, `bounce`, `rotate`, `shake`, `glow`              |
+| `traffic`, `share`, `hit`, `copies`, `size` | as in [Capacity](#capacity) | the numbers the capacity model works from                         |
+| `show`                                      | anything but a group        | `shown`, `faded` or `hidden`                                      |
+| `label`                                     | anything with words         | what it says                                                      |
+| `tone`                                      | shapes, text                | its colour scheme                                                 |
+| `mark`                                      | components, containers      | the sign at its corner, or `none`                                 |
+| `in`, `on`, `cell`, `along`                 | things a layout places      | where it goes: see [Layouts](#layouts)                            |
+| a number, `[30, 0]` or `= formula`          | a value in `data:`          | what the value becomes: see [Values](#values-meters-and-controls) |
+
+One word is enough when it can only mean one thing: `db: down`, `a_to_b: blocked`,
+`banner: shown`, `users_to_lb: 5x`. A set can't change what something _is_: its kind, shape,
+style, size, place or what it connects.
+
+### Presence and marks
+
+`show:` says whether an element is there: `shown` (the default), `faded` (still there, drawn
+pale: a commit nothing points at, a version being retired) or `hidden` (absent: nothing draws
+it, and the capacity model doesn't see it). Written on an element, it's how the element
+starts; in a set, it's what happens to it.
+
+```yaml
+shapes:
+  lease: { label: Lease, show: hidden } # appears when a step or scene shows it
+containers:
+  green: { label: GREEN, show: faded }
+```
+
+What's inside a hidden container is hidden with it, and so is a connection with a hidden end;
+`faded` carries the same way. The diagram is laid out once with everything shown, so nothing
+shifts when something appears. In the editor, hidden things are drawn faintly so they can still
+be selected and edited.
+
+`mark:` puts a small sign at the corner of a component or container: `check`, `cross`, `warn`,
+`lock`, `key`, `clock`, `star` or `question`. A mark means nothing to the capacity model; it's
+for a gate that passed, a request refused, a secret held.
+
+### Layouts
+
+A container can arrange what's in it (D-87). Its children then need no positions, and a story
+can move things in and out.
+
+```yaml
+containers:
+  queue: { label: Queue, layout: row }
+  ledger: { label: Charges, layout: column, gap: 1 }
+  crowd: { layout: grid, columns: 4 }
+shapes:
+  msg: { shape: rounded, label: "#7", in: queue }
+  again: { like: msg, in: queue, show: hidden } # a copy: same shape, look, label and data
+  lease: { label: Lease, on: msg } # rides on the message, wherever it goes
+  breaker: { label: Closed, on: app_to_db, along: 30% } # rides on an arrow
+```
+
+| Key       | Means                                                                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------ |
+| `layout`  | On a container: `row` (left to right), `column` (top to bottom) or `grid`. Children are in file order. |
+| `gap`     | Space between children, in grid units (2 unless written; `none` for flush layers).                     |
+| `columns` | A grid's columns. Left out: from its written cells, or a block as square as it can be.                 |
+| `cell`    | On a grid's child: its `[column, row]`, from 0. Left out: the next free cell.                          |
+| `on`      | The element or connection something rides on: it sits above it (on a connection, on its line).         |
+| `along`   | How far along the connection it rides on (`30%`). Left out: half-way.                                  |
+| `like`    | A copy of another element of its kind: its type or shape, look, label, size and data. Not its place.   |
+
+- **Room is kept.** A container with a layout is as big as the most it ever holds, in any step
+  of any story or any scene, so it never resizes and nothing around it shifts. When something
+  leaves a row, the rest close up inside that room.
+- **Moving.** Only what a layout places can change place. In a set, `msg: { on: worker_a }` puts
+  it on the worker; `msg: { in: done }` puts it in another container that arranges its contents.
+  It travels there, along the connection between the two places when there is one. Things placed
+  freely on the canvas never move in a story.
+- **On top.** What a layout places is drawn over everything else, and routes never go round it.
+- **Copies** (`like:`) grow out of what they copy when they're shown.
+- Text can ride too (`layout.decorations.name: { label: main, on: commit_c }`), with no position
+  of its own: a branch name on a commit.
+
+### Values, meters and controls
+
+A value in `data:` written as text starting with `=` is a formula (D-88): worked out, never
+typed twice. Labels show it with `%name%`.
+
+```yaml
+data:
+  allowed: 120
+  errors: 30
+  left: "= round((1 - errors / allowed) * 100)"
+shapes:
+  budget: { shape: meter, label: Error budget, value: left, max: 100, limit: 20, unit: "%" }
+  timer: { shape: meter, as: ring, label: Lease, value: lease_left, max: 30, unit: " s" }
+connections:
+  users_to_lb: { from: users, to: lb, traffic: "= rps" } # a dial drives the capacity model
+controls:
+  rps: { dial: [1, 10], start: 2, step: 1, unit: "×", label: Traffic }
+  retries: { toggle: retry_storm, label: Retries }
+  model: { pick: [normal, paas, saas], label: Service model }
+```
+
+- **Formulas** take numbers, text in quotes, other values' names, `+ - * / %`, comparisons,
+  `and`, `or`, `not`, and `min`, `max`, `round`, `floor`, `ceil`, `abs`, `log2`, `if(test, a, b)`.
+  They can read the model: `load(web)`, `copies(web)`, `traffic(a_to_b)`, and `count(queue)`
+  (what's in or on it now). A formula that feeds the model (a connection's `traffic`) can't
+  read it back.
+- **A set can change a value**: `errors: 90`, or run it across the step with `errors: [30, 90]`
+  (a timer running down is `left: [30, 0]`).
+- **A meter** is a shape that shows a `value` against a `max`: `as: bar` (the default), `ring`
+  (a timer) or `number`. With a `limit` it turns amber near it and red at it; a limit in the
+  lower half of the range is one not to fall to (a budget left).
+- **Controls** are what the viewer can set. A **dial** is a number formulas read by its name; a
+  **toggle** turns a scene on (and reads as 1 or 0); a **pick** chooses one of several scenes
+  (`normal` is the diagram as it is). Scenes that controls turn on are laid over the scene picked,
+  in the order the controls are written.
+- **A step can depend on values**: `when: "= work > lease"` plays the step only while that
+  holds, so a dial changes what happens, not just what's shown. Moving a control plays the story
+  again to where it was.
+
+## Stories
+
+A story plays a diagram step by step, with words (D-86). Each step is a set, like a scene's,
+and the picture at a step is the diagram plus every step before it.
+
+```yaml
+stories:
+  main:
+    - say: A full copy of the new version comes up beside the old one.
+      set:
+        green: shown
+        v2: shown
+    - say: Test it before anyone sees it.
+      set: { tester: shown }
+      focus: [tester, v2]
+    - set: { v2: { mark: check } } # no words: carries on the beat above
+    - say: One switch, and everyone moves at once.
+      pace: slow
+      name: switched
+      set:
+        router_to_blue: idle
+        router_to_green: traffic
+    - say: The same again, but this release also dropped a column the old version reads.
+      rewind: switched
+      set: { db: { mark: warn } }
+      choices:
+        - { label: Roll back anyway, play: rolled_back }
+  rolled_back:
+    - say: The switch back lands on a version that can't read its data.
+      set: { v1: down }
+```
+
+| Key       | Means                                                                                             |
+| --------- | ------------------------------------------------------------------------------------------------- |
+| `say`     | The caption. A step with `say` starts a **beat**; steps after it without one belong to that beat. |
+| `script`  | What is spoken over the beat, for the prompter (D-96). Never drawn. Also starts a beat.           |
+| `set`     | What changes: the same lines a scene takes.                                                       |
+| `focus`   | Elements that stay bright while the rest dims, for this beat.                                     |
+| `zoom`    | An element the camera frames, for this beat.                                                      |
+| `pace`    | `slow`: the change takes twice as long, for the moment it all turns on.                           |
+| `hold`    | Seconds the step stays once changed (`3s`). Left out: long enough to read its beat's words.       |
+| `name`    | A name another step can rewind to.                                                                |
+| `rewind`  | Begin this step from an earlier picture: `start`, or a step's `name`. A cut, not a replay.        |
+| `choices` | Stories the viewer can play from here; when one ends, the story carries on.                       |
+
+A caption on its own (`- Here is a web server.`) is a step that only says something.
+
+`script` is the words you say aloud while the beat plays, up to 4,000 characters. The prompter
+shows it (falling back to `say` when a beat has none), and a beat with a script holds for as
+long as the script takes to say rather than as long as its caption takes to read.
+
+- **Beats.** A viewer moves by beat: the words appear with the first step, and the wordless
+  steps after it play on by themselves, in order. So "A is copied, lands on main, and is
+  stamped" is one caption and three things happening in turn.
+- **The first story** is the one a diagram plays. Others are played by a choice. A story a
+  choice plays can rewind to a named step of the story that offered it.
+- **Scenes still work.** A scene picked while a story plays is laid over the story's picture,
+  key by key. The viewer's own "what if" changes go over both.
+- **Stories belong to the top diagram**, like scenes, and reach into nested diagrams by path.
+- **Timing.** A step is its change (0.6 s, or 1.2 s when slow), then its hold. Exports and
+  previews follow these times; someone stepping through by hand moves on when they're ready.
+
+In the viewer the words show in a bar under the diagram, with back, play and next (the arrow
+keys step, Space plays), a mark for every beat, and a button for each choice. A link can open a
+story part-way: `?story=main&beat=3`.
+
+#### The voice
+
+A beat's recording isn't written in the YAML (D-105). It's the file `voice/<key>.<ext>` in the
+deck's folder (or the diagram's), where `<key>` is the script's first words and a hash of all of
+them, lower-cased, with punctuation and accents dropped: `voice/the-plan-is-the-difference-3fa9c2d1.webm`.
+Beside it, `voice/<key>.txt` holds the words it was recorded saying.
+
+- Mogram writes these files when a beat is recorded in the Script window. Nobody names them.
+- Moving a beat, reordering slides or renaming anything never loses a recording. Changing a word
+  makes it out of date: the editor offers **Keep this recording**, which files it under the new
+  words. Changing the words back finds it again. Punctuation and capitals don't matter.
+
+| A beat                           | Lasts                                                                      |
+| -------------------------------- | -------------------------------------------------------------------------- |
+| with a recording                 | the recording, then 0.4 s; its wordless steps are spaced evenly through it |
+| with a `script` and no recording | 0.4 s, then about 3.2 words a second                                       |
+| with only `say`                  | the time it takes to read                                                  |
+
+Playing a deck or a story by itself plays each beat's recording; stepping by hand plays none.
+In a deck, a slide's opening picture holds 0.6 s, a still slide 4 s, and a cut takes 0.45 s.
+A script is at most 4,000 characters, and a beat that takes more than about 25 seconds to say
+earns a suggestion to split it.
 
 ## Capacity
 
@@ -569,6 +1082,12 @@ lists. Write several lines with `|`. Both take the same typography settings, all
 A note also takes `fill` (a colour or gradient) and `size`. Exports embed the fonts a diagram
 uses, so text looks the same in a PNG or SVG as on screen.
 
+Free text also takes `width`, 4–240 cells: it wraps at spaces to fit, its height follows, and
+`align` works within it. Without one it's as wide as its longest line. A text whose `in:` is a
+container that arranges its contents (`layout: column`, `row` or `grid`) is placed by it like
+any other child and needs no `at`. `"width" only applies to text, so it is ignored on "zone".`
+is a warning on anything else.
+
 ## Validation
 
 Problems are reported in plain language with the file and line:
@@ -588,5 +1107,6 @@ a size it doesn't have, traffic on a component) is ignored with a warning.
 Beyond what's valid, the editor's **Suggestions** (the diagram's inspector) review the
 architecture: a subnet outside any network, containers nested the wrong way round for the
 diagram's cloud, an AWS subnet outside an Availability Zone when the diagram has zones, icons
-from two clouds, components nothing connects to, empty containers. They're advice, never errors:
-the file is fine as written.
+from two clouds, components nothing connects to, empty containers, something that sits outside
+the page, a code line cut off at its element's size, and a beat that takes over 25 seconds to say.
+They're advice, never errors: the file is fine as written.

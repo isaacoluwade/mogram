@@ -22,6 +22,7 @@ import {
   type RichDecoration,
 } from "../text-look-controls";
 import { AllProperties } from "./all-properties";
+import { PresenceSection } from "./presence-section";
 import { CommitInput, FieldRow, InspectorSection } from "./fields";
 import { StyleClipboard, useEdit } from "./shared";
 import type { InspectorTab } from "./tabs";
@@ -57,6 +58,20 @@ export function DecorationInspector({
             </p>
           ) : null}
         </InspectorSection>
+        {decoration.variant === "text" ? (
+          <InspectorSection title="Width">
+            <CommitInput
+              label="Width (cells)"
+              value={decoration.width === null ? "" : String(decoration.width)}
+              onCommit={(value) => {
+                const width = value.trim() === "" ? null : Number(value);
+                if (width === null || (Number.isInteger(width) && width >= 1 && width <= 10000))
+                  set(decoration.name, { width }, "Wrap text");
+              }}
+            />
+          </InspectorSection>
+        ) : null}
+        <PresenceSection diagram={diagram} name={decoration.name} />
         <InspectorSection id="about" title="About" defaultOpen={false}>
           <p className="text-caption text-fg-muted">
             Decorations carry no architectural meaning, so they live with the layout, not the

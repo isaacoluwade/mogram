@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
 import type { ElementLink } from "@mogram/core/model";
 import type { RenderMode } from "./render-context";
-import type { StateBadge } from "@mogram/core/presets";
+import { MARK_INFO, type Mark, type StateBadge, type ThemeMode } from "@mogram/core/presets";
+import { tone } from "../theme";
 
 /** State badge glyphs, drawn in a 16×16 box centred on (0, 0). */
 export function BadgeGlyph({ badge, color }: { badge: StateBadge; color: string }) {
@@ -54,6 +55,101 @@ export function Badge({
         strokeWidth={1}
       />
       <BadgeGlyph badge={badge} color={color} />
+    </g>
+  );
+}
+
+/** Mark glyphs (D-86), drawn in a 16×16 box centred on (0, 0). */
+function MarkGlyph({ mark, color }: { mark: Mark; color: string }) {
+  const line = {
+    fill: "none",
+    stroke: color,
+    strokeWidth: 1.7,
+    strokeLinecap: "round",
+    strokeLinejoin: "round",
+  } as const;
+  switch (mark) {
+    case "check":
+      return <path d="M-3.6 0.3 -1.1 2.9 3.7 -2.7" {...line} />;
+    case "cross":
+      return <path d="M-3 -3l6 6M3 -3l-6 6" {...line} />;
+    case "warn":
+      return (
+        <>
+          <path d="M0 -4.4 4.6 3.5H-4.6z" {...line} strokeWidth={1.4} />
+          <path d="M0 -1.3v2.1M0 2v0.1" {...line} strokeWidth={1.4} />
+        </>
+      );
+    case "lock":
+      return (
+        <>
+          <rect x={-3.4} y={-0.8} width={6.8} height={5} rx={1.2} fill={color} />
+          <path d="M-2 -0.8v-1.4a2 2 0 0 1 4 0v1.4" {...line} strokeWidth={1.4} />
+        </>
+      );
+    case "key":
+      return (
+        <>
+          <circle cx={-2.2} cy={0} r={2} {...line} strokeWidth={1.4} />
+          <path d="M-0.2 0h4.6M2.6 0v1.9M4.4 0v1.3" {...line} strokeWidth={1.4} />
+        </>
+      );
+    case "clock":
+      return (
+        <>
+          <circle r={4.2} {...line} strokeWidth={1.4} />
+          <path d="M0 -2.3V0l1.7 1.1" {...line} strokeWidth={1.4} />
+        </>
+      );
+    case "star":
+      return (
+        <path
+          d="M0 -4.6 1.35 -1.5 4.7 -1.2 2.15 1.05 2.9 4.35 0 2.6 -2.9 4.35 -2.15 1.05 -4.7 -1.2 -1.35 -1.5z"
+          fill={color}
+        />
+      );
+    case "question":
+      return (
+        <path
+          d="M-1.9 -1.9a1.95 1.95 0 1 1 2.9 1.7c-.7.4-1 .8-1 1.5M0 3.7v0.1"
+          {...line}
+          strokeWidth={1.6}
+        />
+      );
+  }
+}
+
+/** The sign at an element's corner (D-86): a round badge like the state's, on the other side. */
+export function MarkBadge({
+  mark,
+  mode,
+  muted,
+  background,
+  x,
+  y,
+}: {
+  mark: Mark;
+  mode: ThemeMode;
+  /** The colour of a neutral mark. */
+  muted: string;
+  background: string;
+  x: number;
+  y: number;
+}) {
+  const name = MARK_INFO[mark].tone;
+  const color = name === "neutral" ? muted : tone(name, mode).solid;
+  return (
+    <g transform={`translate(${x} ${y})`} data-mark={mark}>
+      <circle r={9.5} fill={background} />
+      <circle
+        r={8.5}
+        fill={color}
+        fillOpacity={0.16}
+        stroke={color}
+        strokeOpacity={0.7}
+        strokeWidth={1}
+      />
+      <MarkGlyph mark={mark} color={color} />
     </g>
   );
 }

@@ -1,0 +1,22 @@
+mogram: 1
+name: Terraform Crash Course for Absolute Beginners
+description: A seven-slide slice of the course, built to exercise deck playback and code reveals.
+page: 16:9
+theme: midnight
+data: { course: Terraform Crash Course }
+styles:
+  panel: { fill: "#0a0c15", stroke: "#2c3158", corner: 12 }
+deck:
+  frame: frame
+  captions: off
+  slides:
+    - section: What Terraform is
+    - title: { frame: false }
+    - terraform_flow: { to: applied }
+    - section: Your first resources
+    - form_to_code
+    - first_apply
+    - reading_a_plan: { title: What is Terraform about to do? }
+    - section: State and drift
+    - why_state
+    - terraform_flow: { from: applied }

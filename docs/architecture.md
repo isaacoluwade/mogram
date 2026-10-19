@@ -35,7 +35,10 @@ pnpm workspaces + Turborepo. Each package owns its scripts (`build`, `lint`, `ty
      │  parseProject()        @mogram/core/format
      ▼
  Diagram model (+ diagnostics with file:line)
-     │  resolveState(scene)   @mogram/core/state      cascade, roll-up, backups, nested paths,
+     │  pictureAt(moment)     @mogram/core/picture    what's there at a scene and a step of a
+     │                                                 story: hidden things gone, labels and
+     │                                                 looks as they stand (D-86)
+     │  resolveState(picture) @mogram/core/state      cascade, roll-up, backups, nested paths,
      │                                                 capacity (@mogram/core/capacity)
      │  computeLayout()       @mogram/core/layout     grid units → boxes, auto-size, auto-place
      │  routeConnections()    @mogram/core/routing    orthogonal routing around obstacles
@@ -64,7 +67,10 @@ Transient interaction (dragging, resizing, drawing a connection) never touches Y
 | `state/`      | Effective state: base → scene override → ancestor cascade → roll-up → backup connections → nested instance paths                                                                                                                                             |
 | `layout/`     | Grid units ↔ pixels, component and container geometry, auto-size, auto-placement of unpinned elements, group boundaries, z-order                                                                                                                             |
 | `routing/`    | Orthogonal connector routing (sparse visibility grid + A* with bend penalty), manual waypoints, curved/straight styles, path sampling                                                                                                                        |
-| `timeline/`   | Shared-clock maths, motion functions `f(t)`, flow dash offsets, scene transitions, story timelines for export                                                                                                                                                |
+| `timeline/`   | Shared-clock maths, motion functions `f(t)`, flow dash offsets, scene transitions, playing the scenes in order                                                                                                                                               |
+| `picture/`    | Where someone is (`Moment`: a scene and a cursor into a story) and what's there then (`pictureAt`); moving through a story by step and beat, rewinds and choices; a story's written times (`storyTimeline`); plain words for what a step changes             |
+| `values/`     | The formula language (D-88): parse, evaluate, which formulas read the model; small on purpose (no loops, no assignment)                                                                                                                                      |
+| `prompter/`   | Following a reader through a known script (D-96): the last words heard are lined up against the script and a position comes out; pure, so it's tested by replaying what a recogniser really heard                                                            |
 | `tours/`      | Tour graph, validation, traversal, choices                                                                                                                                                                                                                   |
 | `nested/`     | Folder graph, `opens:` resolution, loop detection, ports, stubs, instance paths                                                                                                                                                                              |
 | `capacity/`   | Traffic through the graph, copies and sizes for each moment (`planCapacity`), traffic patterns (`patterns.ts`), and the deterministic timeline that turns plans into motion, following patterns as time is asked about (`CapacityTimeline`); scaling presets |
@@ -81,7 +87,8 @@ src/
 │  ├─ sign-in/                   Email + one-time code                 (features/auth)
 │  ├─ diagrams/                  Dashboard: cloud diagrams + drafts    (features/dashboard)
 │  ├─ draft/new/                 New browser draft from a template
-│  ├─ draft/[id]/  …/view        Draft editor (IndexedDB) and preview  (features/editor, viewer)
+│  ├─ draft/[id]/  …/view …/prompter  Draft editor (IndexedDB), preview and prompter
+│  ├─ prompter/                  A prompter for any pasted script  (features/prompter)
 │  ├─ edit/[id]/   …/view        Cloud editor (owner only) and preview
 │  ├─ s/[shareId]/               Public share viewer
 │  ├─ security/  docs/format/    Long-form pages (the format page renders docs/file-format.md)
@@ -111,6 +118,7 @@ src/
 │  ├─ cards/  code/              Markdown cards; the CodeMirror YAML editor
 │  ├─ export/                    Static render, rasteriser, PNG/JPEG/SVG, GIF worker, WebP muxer
 │  ├─ share/                     The deep-link format
+│  ├─ prompter/                  The prompter (D-96): Chrome's on-device recogniser, the reading screen
 │  ├─ files/                     Open from computer (files, folders, zips), download, names
 │  ├─ dashboard/  marketing/     Dashboard; landing page, long-form page layout
 │  ├─ auth/                      Sign-in form
@@ -159,6 +167,19 @@ Rules that keep this clean (enforced by lint and review, see `engineering-standa
   driven by the clock: one attribute per connection per frame.
 - Scene changes tween numeric "visual vectors" (ring colour, desaturation, dimming, glow,
   ghosting, dot opacity) over 600ms, also as a function of `t`.
+- A change of picture (D-86) is drawn from two scene models: the one being left and the one
+  arrived at. Each painted thing sits in a `PresenceGroup` that eases its strength between the
+  two (arriving from nothing, leaving to nothing, or more or less faded); something whose words
+  or look changed has its old self drawn fading out underneath. Geometry and paint order come
+  from the diagram as written, so they're the same in both. In the editor, what's hidden is
+  drawn faintly (`ghosts`) so it can be selected.
+- What a layout places (D-87: the contents of rows, columns and grids, and riders) is laid out
+  for the diagram as written by `computeLayout`, then put where each picture has it by
+  `placeMovers`, which the scene builder calls (`settle`), re-routing only the connections that
+  touch those things. They're painted last, and something whose place changed is drawn at its
+  new place and shifted back along its route for the length of the change (`travel`).
+- Meters (D-88) are worked out in the scene builder, where the capacity model is known, at both
+  ends of a step's run; `MeterNode` moves between them for as long as the step lasts.
 - Capacity (D-82): each live canvas follows its resolved state with one `CapacityTimeline`
   (`features/canvas/capacity.ts`), updated when the plan changes and queried at the clock's `t`.
   Scale sets and machines (`fleet-node`, `machine-node`) draw from pure frame functions

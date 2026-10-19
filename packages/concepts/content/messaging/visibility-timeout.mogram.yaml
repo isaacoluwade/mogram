@@ -1,0 +1,94 @@
+mogram: 1
+name: Visibility timeout
+description: Receiving a message leases it. If the lease runs out, someone else gets it too.
+concept:
+  summary: A received message isn't deleted, only hidden from other consumers for a set time. If it hasn't been acknowledged when that time is up, it comes back and another consumer does the work again.
+  topic: messaging
+  tags: [queue, lease, peek-lock, ack, redelivery, at-least-once]
+data:
+  left: 30
+containers:
+  queue: { label: Queue, layout: row }
+  ledger: { label: Charges made, layout: column, gap: 1 }
+shapes:
+  a: { shape: rounded, label: Consumer A }
+  b: { shape: rounded, label: Consumer B }
+  msg: { shape: rounded, label: "#7 Charge $20", tone: blue, in: queue }
+  again: { like: msg, in: queue, show: hidden }
+  lease:
+    {
+      shape: meter,
+      as: ring,
+      label: Lease,
+      value: left,
+      max: 30,
+      unit: " s",
+      limit: 5,
+      on: msg,
+      show: hidden,
+    }
+  charge: { label: "$20", tone: green, in: ledger, show: hidden }
+  twice: { label: "$20 again", tone: rose, in: ledger, show: hidden }
+connections:
+  queue_to_a: { from: queue, to: a }
+  queue_to_b: { from: queue, to: b }
+  a_to_ledger: { from: a, to: ledger }
+  b_to_ledger: { from: b, to: ledger }
+stories:
+  main:
+    - say: Consumer A receives message 7. It isn't deleted, only leased to A and hidden from everyone else.
+      name: leased
+      set:
+        msg: { on: a }
+        lease: shown
+        a: active
+    - say: A finishes in ten seconds and acknowledges.
+      set:
+        left: [30, 20]
+    - say: Only now is the message deleted.
+      set:
+        msg: hidden
+        charge: shown
+        a: healthy
+    - say: The same again, but this time A's work is slow. The lease runs down.
+      rewind: leased
+      hold: 3s
+      set:
+        left: [30, 0]
+    - say: At thirty seconds it runs out, and the message is back in the queue.
+      name: expired
+      set:
+        lease: { label: Lease expired, mark: cross }
+        again: shown
+    - say: Consumer B receives it and starts charging too, while A is still working.
+      pace: slow
+      set:
+        again: { on: b }
+        b: active
+    - say: Both finish. A's late acknowledgement is refused, but the card has already been charged twice.
+      set:
+        charge: shown
+        twice: shown
+        msg: { mark: cross }
+        a: healthy
+        b: healthy
+    - say: The fix is a lease longer than the slowest job, or renewing it. At 25 seconds A renews.
+      rewind: leased
+      hold: 2.5s
+      set:
+        left: [5, 30]
+        lease: { label: Renewed, mark: check }
+    - say: A finishes, acknowledges, and there is one charge.
+      set:
+        msg: hidden
+        charge: shown
+        a: healthy
+layout:
+  queue: [0, 11]
+  a: { at: [36, 4], size: [16, 6] }
+  b: { at: [36, 20], size: [16, 6] }
+  ledger: [66, 9]
+  msg: { size: [16, 4] }
+  lease: { size: [15, 5] }
+  charge: { size: [11, 3] }
+  twice: { size: [11, 3] }

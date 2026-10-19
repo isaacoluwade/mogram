@@ -1,3 +1,8 @@
+import { columnsThatFit } from "../code/size";
+import { computeLayout } from "../layout/compute";
+import { codeFontSize } from "../layout/media";
+import { beatsOf } from "../picture/moment";
+import { speakingTime } from "../picture/timeline";
 import type { Diagram } from "../model/types";
 import type { ContainerStyleName } from "../presets/names";
 import {
@@ -24,7 +29,10 @@ export type LintRule =
   | "nesting-order"
   | "mixed-clouds"
   | "unconnected"
-  | "empty-container";
+  | "empty-container"
+  | "off-page"
+  | "code-cut"
+  | "long-beat";
 
 export interface LintFinding {
   readonly rule: LintRule;
@@ -52,6 +60,9 @@ function rankIn(cloud: Cloud, type: ContainerStyleName): number {
   const ranks = [...SUBNETS].map((kind) => order.indexOf(kind)).filter((i) => i >= 0);
   return ranks.length === 0 ? -1 : Math.min(...ranks);
 }
+
+/** A beat longer than this, in seconds, is worth splitting. */
+const LONG_BEAT = 25;
 
 /** Every finding for one diagram (one folder), most important first. */
 export function lintDiagram(diagram: Diagram): LintFinding[] {
@@ -198,6 +209,67 @@ export function lintDiagram(diagram: Diagram): LintFinding[] {
       });
     }
   }
+
+  // With a page (D-98), what lies wholly outside it is never seen by anyone watching.
+  if (diagram.settings.page !== null) {
+    const layout = computeLayout(diagram);
+    const page = layout.page;
+    for (const [name, placed] of layout.elements) {
+      if (page === null) break;
+      const box = placed.box;
+      const outside =
+        box.x >= page.x + page.w ||
+        box.y >= page.y + page.h ||
+        box.x + box.w <= page.x ||
+        box.y + box.h <= page.y;
+      if (!outside) continue;
+      // Something inside a container that's off the page goes with it: say it once.
+      const parent = containers.get(name)?.parent ?? diagram.components.get(name)?.parent ?? null;
+      if (parent !== null) continue;
+      out.push({
+        rule: "off-page",
+        severity: "note",
+        elements: [name],
+        message: `"${nameOf(name)}" sits outside the page, so nobody watching will see it.`,
+        fix: "Move it onto the page, or delete it if it was only a note to yourself.",
+      });
+    }
+  }
+  // A code listing sized by hand (D-103): a line too long for it is cut, and drawn with `…`.
+  for (const component of diagram.components.values()) {
+    const code = component.code;
+    const size = diagram.layout.get(component.name)?.size;
+    if (code === null || size === undefined || size === null || code.listing.missing) continue;
+    const fits = columnsThatFit(code.listing, size.w * 8, {
+      fontSize: codeFontSize(component),
+      numbers: code.numbers,
+    });
+    const shown = code.listing.lines.slice(code.listing.first - 1, code.listing.last);
+    const cut = shown.findIndex((line) => line.length > fits);
+    if (cut === -1) continue;
+    out.push({
+      rule: "code-cut",
+      severity: "note",
+      elements: [component.name],
+      message: `Line ${code.listing.first + cut} of "${component.name}" is wider than the element at this size, so its end is cut.`,
+      fix: "Make it wider, make its text smaller, or show fewer lines.",
+    });
+  }
+
+  // A beat that takes long to say is hard to record and hard to follow (D-105).
+  for (const story of diagram.stories)
+    beatsOf(story).forEach((beat, index) => {
+      if (beat.script === null) return;
+      const seconds = speakingTime(beat.script);
+      if (seconds <= LONG_BEAT) return;
+      out.push({
+        rule: "long-beat",
+        severity: "note",
+        elements: [],
+        message: `Beat ${index + 1} of "${story.name}" takes about ${Math.round(seconds / 5) * 5} seconds to say. Beats under ${LONG_BEAT} seconds are easier to record and to follow.`,
+        fix: "Split its script across two beats.",
+      });
+    });
 
   return out.sort((a, b) => (a.severity === b.severity ? 0 : a.severity === "warning" ? -1 : 1));
 }

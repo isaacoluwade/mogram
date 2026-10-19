@@ -1,4 +1,4 @@
-import type { Connection, Diagram, GridPoint } from "../model/types";
+import type { Connection, Diagram, GridPoint, Endpoint } from "../model/types";
 import { ancestorsOf, type LayoutResult } from "../layout/compute";
 import { GRID, type Box, type Point } from "../layout/geometry";
 import {
@@ -18,6 +18,7 @@ import { anchorPoint, anchorPort, anchorSide, centreOf, clipToBox, outward } fro
 import { CORNER_RADIUS, curvePath, curveThrough, polylinePath, type RoutedPath } from "./path";
 import { endsMoved, followVia, type Ends as EndBoxes } from "./follow";
 import { shapeGeometry, shapePerimeter } from "../presets/shapes";
+import { partBox } from "../layout/parts";
 
 export interface RouteOptions {
   /** Connections to draw as quick elbows (e.g. while their ends are being dragged). */
@@ -57,6 +58,19 @@ export function endpointBox(layout: LayoutResult, element: string): Box | null {
   return layout.tiles.get(element) ?? layout.elements.get(element)?.box ?? null;
 }
 
+/** The box a connection end attaches to: a part's box (D-104), or the element's. */
+function connectionBox(
+  diagram: Diagram | undefined,
+  layout: LayoutResult,
+  endpoint: Endpoint,
+): Box | null {
+  const component = diagram?.components.get(endpoint.element);
+  const part = endpoint.part === null ? undefined : component?.parts.get(endpoint.part);
+  if (component === undefined || part === undefined) return endpointBox(layout, endpoint.element);
+  // A part that shows nowhere (outside its slice) is met at its element instead.
+  return partBox(layout, component, part) ?? endpointBox(layout, endpoint.element);
+}
+
 /** The innermost container holding both ends, whose origin `via` points are relative to (D-11). */
 export function viaOrigin(layout: LayoutResult, connection: Connection): Point {
   const fromAncestors = ancestorsOf(layout, connection.from.element);
@@ -76,9 +90,10 @@ export function followedVia(
   stored: readonly GridPoint[],
   now: EndBoxes,
   origin: Point,
+  diagram?: Diagram,
 ): Point[] | null {
-  const source = endpointBox(before, connection.from.element);
-  const target = endpointBox(before, connection.to.element);
+  const source = connectionBox(diagram, before, connection.from);
+  const target = connectionBox(diagram, before, connection.to);
   if (source === null || target === null || !endsMoved({ source, target }, now)) return null;
   const from = viaOrigin(before, connection);
   const absolute = stored.map((p) => ({ x: from.x + p.x * GRID, y: from.y + p.y * GRID }));
@@ -96,12 +111,17 @@ export function routeConnections(
 ): Map<string, RoutedPath> {
   const routes = new Map<string, RoutedPath>();
   const auto: AutoRoute[] = [];
-  const components = [...layout.elements.values()].filter((e) => e.kind === "component");
+  // What a layout places (a token, a label riding on something) is small and may move: routes
+  // never go round it.
+  const movers = new Set(layout.movers);
+  const components = [...layout.elements.values()].filter(
+    (e) => e.kind === "component" && !movers.has(e.name),
+  );
   const containers = [...layout.elements.values()].filter((e) => e.kind === "container");
 
   for (const connection of diagram.connections.values()) {
-    const source = endpointBox(layout, connection.from.element);
-    const target = endpointBox(layout, connection.to.element);
+    const source = connectionBox(diagram, layout, connection.from);
+    const target = connectionBox(diagram, layout, connection.to);
     if (source === null || target === null) continue;
     const entry = diagram.layout.get(connection.name);
     const fromAnchor = options.anchors?.get(connection.name)?.from ?? entry?.fromAnchor ?? null;
@@ -118,7 +138,7 @@ export function routeConnections(
       const followed =
         options.follow === undefined
           ? null
-          : followedVia(options.follow, connection, stored, { source, target }, origin);
+          : followedVia(options.follow, connection, stored, { source, target }, origin, diagram);
       if (followed !== null) via = followed;
     }
     const ends = { source, target, fromAnchor, toAnchor, via };
@@ -226,8 +246,9 @@ function fitEndsToShapes(
   for (const connection of diagram.connections.values()) {
     const path = routes.get(connection.name);
     if (path === undefined || path.kind !== "polyline" || path.points.length < 2) continue;
-    const from = outlineOf(connection.from.element);
-    const to = outlineOf(connection.to.element);
+    // An end on a part meets the part's box, not the element's outline.
+    const from = connection.from.part === null ? outlineOf(connection.from.element) : null;
+    const to = connection.to.part === null ? outlineOf(connection.to.element) : null;
     if (from === null && to === null) continue;
     const points = [...path.points];
     const onto = (end: number, next: number, outline: { box: Box; polygon: readonly Point[] }) => {

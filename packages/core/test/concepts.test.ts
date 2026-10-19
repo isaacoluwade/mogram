@@ -289,7 +289,7 @@ components:
       roles: [],
     });
     expect(diagnostics.map((d) => d.message)).toEqual([
-      `"netwrking" isn't a concept topic, so it's left out. Did you mean "networking"? Topics: scaling, reliability, networking, security, data, messaging, containers, delivery, git or architecture.`,
+      `"netwrking" isn't a concept topic, so it's left out. Did you mean "networking"? Topics: fundamentals, scaling, reliability, networking, security, data, messaging, containers, delivery, git, architecture, observability or ai.`,
       `"azur" isn't a platform, so the concept is for any. Did you mean "azure"? Platforms: any, azure, aws, gcp or kubernetes.`,
     ]);
   });

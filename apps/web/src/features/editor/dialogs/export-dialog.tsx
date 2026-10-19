@@ -23,12 +23,18 @@ import { buildScene } from "@/features/canvas/scene";
 import { DiagramSvg } from "@/features/canvas/svg/diagram-svg";
 import { resolveTheme } from "@/features/canvas/theme";
 import { resolveFor, useRoutes } from "@/features/canvas/use-diagram";
+import { captionAt } from "@mogram/core/picture";
 import { useEditor, useEditorClock, useEditorShallow, useEditorStore } from "../editor-context";
+import { storyCursor } from "../store/editor-store";
+import { useEditorMoment } from "../use-editor-scene";
 import { saveBlob } from "@/features/files/download";
+import { DeckExportBody } from "./deck-export";
 import {
+  CAPTION_BAND,
   exportFrame,
   hasAnimation,
   runExport,
+  storySeconds,
   supportsWebp,
   type ExportArea,
   type ExportFormat,
@@ -73,6 +79,7 @@ const FORMATS: readonly FormatInfo[] = [
   },
 ];
 
+const PAGE_AREA = { value: "page", label: "Page" } as const;
 const AREAS: readonly { value: ExportArea; label: string }[] = [
   { value: "fit", label: "Fit" },
   { value: "1:1", label: "1:1" },
@@ -87,31 +94,57 @@ const PREVIEW_RATIO = 16 / 10;
 export function ExportDialog() {
   const store = useEditorStore();
   const open = useEditor((s) => s.dialog === "export");
+  const deckRoot = useEditor((s) => s.deckRoot);
+  // In a deck, the whole deck is what's usually wanted; one slide is still a picture away.
+  const [whole, setWhole] = useState(true);
+  const top =
+    deckRoot === null ? null : (
+      <SegmentedControl
+        label="What to export"
+        value={whole ? "deck" : "slide"}
+        onChange={(value) => setWhole(value === "deck")}
+        options={[
+          { value: "deck", label: "The whole deck" },
+          { value: "slide", label: "This slide" },
+        ]}
+      />
+    );
   return (
     <Dialog open={open} onOpenChange={(next) => store.getState().setDialog(next ? "export" : null)}>
-      {open ? <ExportDialogBody /> : null}
+      {!open ? null : deckRoot !== null && whole ? (
+        <DeckExportBody deckRoot={deckRoot} top={top} />
+      ) : (
+        <ExportDialogBody top={top} />
+      )}
     </Dialog>
   );
 }
 
-function ExportDialogBody() {
+function ExportDialogBody({ top }: { top: ReactNode }) {
   const store = useEditorStore();
-  const { files, folder, scene } = useEditorShallow((s) => ({
+  const { files, root, folder, scene, step } = useEditorShallow((s) => ({
     files: s.files,
+    root: s.root,
     folder: s.folder,
     scene: s.scene,
+    step: s.story,
   }));
   const diagram = useEditor((s) => s.parsed().diagram);
   const animated = useMemo(() => hasAnimation(files, folder, scene), [files, folder, scene]);
   const [webp] = useState(supportsWebp);
   const nameId = useId();
+  // A story belongs to the diagram the editor is on: a level inside it is exported as it stands.
+  const storyLength = useMemo(() => storySeconds(files, folder, root), [files, folder, root]);
+  const hasStory = storyLength !== null;
 
+  const paged = diagram.settings.page !== null;
   const [options, setOptions] = useState<ExportOptions>(() => ({
     format: "png",
-    scale: 2,
+    // A page is already the size it's meant to be seen at: 1920 × 1080 for 16:9.
+    scale: paged ? 1 : 2,
     transparent: false,
-    area: "fit",
-    animation: "loop",
+    area: paged ? "page" : "fit",
+    animation: hasStory ? "story" : "loop",
     fps: 20,
     fileName: diagram.settings.name,
   }));
@@ -127,14 +160,28 @@ function ExportDialogBody() {
   const canBeTransparent =
     options.format === "png" || options.format === "svg" || options.format === "webp";
   const layout = useMemo(() => computeLayout(diagram), [diagram]);
-  const frame = exportFrame(layout.bounds, options.area);
+  const captions = options.captions !== false;
+  const eachBeat =
+    hasStory && options.each === "beats" && (options.format === "png" || options.format === "jpeg");
+  const playsStory = isAnimated && hasStory && options.animation === "story";
+  const playsScenes = isAnimated && options.animation === "scenes" && diagram.scenes.length > 0;
+  // The words showing on the canvas go under a still; a played story keeps room for them all.
+  const cursor = folder === root ? storyCursor(diagram, step) : null;
+  const worded = captions && (playsStory || eachBeat || captionAt(diagram, cursor) !== null);
+  const base = exportFrame(layout.bounds, options.area, layout.page);
+  const frame =
+    worded && (playsStory || !isAnimated) ? { ...base, h: base.h + CAPTION_BAND } : base;
   const scale = isAnimated ? Math.min(options.scale, 1280 / frame.w) : options.scale;
   const width = Math.round(frame.w * (options.format === "svg" ? 1 : scale));
   const height = Math.round(frame.h * (options.format === "svg" ? 1 : scale));
   const sceneLabel =
     scene === null ? "Normal" : (diagram.scenes.find((s) => s.name === scene)?.label ?? scene);
-  const story = options.animation === "story" && diagram.scenes.length > 0;
-  const seconds = story ? (diagram.scenes.length + 1) * 4 : 4;
+  const seconds = playsStory
+    ? Math.round(storyLength ?? 0)
+    : playsScenes
+      ? (diagram.scenes.length + 1) * 4
+      : 4;
+  const plays = playsStory ? "story" : playsScenes ? "scenes" : "loop";
   const nameMissing = options.fileName.trim().length === 0;
   const busy = progress !== null;
 
@@ -146,7 +193,7 @@ function ExportDialogBody() {
     setProgress(0);
     try {
       const result = await runExport(
-        { files, folder, scene, options },
+        { files, folder, root, scene, story: step, options },
         setProgress,
         controller.signal,
       );
@@ -170,23 +217,28 @@ function ExportDialogBody() {
       title="Export"
       description={
         <>
-          {folder.length > 0 ? <>This level ({folder}) · </> : null}
-          Scene: {sceneLabel}
+          {folder !== root ? <>This level ({folder}) · </> : null}
+          {cursor !== null && step !== null && step.index >= 0
+            ? "The story, at the step showing"
+            : `Scene: ${sceneLabel}`}
         </>
       }
       onInteractOutside={(event) => {
         if (busy) event.preventDefault();
       }}
     >
+      {top !== null ? <div className="mb-5">{top}</div> : null}
       <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_320px]">
         <div className="flex min-w-0 flex-col gap-3">
           <ExportPreview
             area={options.area}
             transparent={canBeTransparent && options.transparent}
+            words={worded && !eachBeat}
           />
           <p className="text-caption text-fg-muted tabular-nums">
             {width} × {height} {options.format === "svg" ? "units" : "px"}
-            {isAnimated ? ` · ${seconds}s ${story ? "story" : "loop"} · ${options.fps} fps` : null}
+            {isAnimated ? ` · ${seconds}s ${plays} · ${options.fps} fps` : null}
+            {eachBeat ? " · one image per beat, zipped" : null}
           </p>
         </div>
 
@@ -265,7 +317,7 @@ function ExportDialogBody() {
               size="sm"
               value={options.area}
               onChange={(area) => set({ area })}
-              options={AREAS}
+              options={paged ? [PAGE_AREA, ...AREAS] : AREAS}
             />
           </Row>
 
@@ -306,9 +358,34 @@ function ExportDialogBody() {
             </Row>
           ) : null}
 
+          {hasStory && !isAnimated && (options.format === "png" || options.format === "jpeg") ? (
+            <Row label="Export">
+              <SegmentedControl
+                label="What to export"
+                size="sm"
+                value={options.each ?? "one"}
+                onChange={(each) => set({ each })}
+                options={[
+                  { value: "one", label: "This picture" },
+                  { value: "beats", label: "Every beat" },
+                ]}
+              />
+            </Row>
+          ) : null}
+
+          {hasStory ? (
+            <Row label="Story's words">
+              <Switch
+                checked={captions}
+                onCheckedChange={(next) => set({ captions: next })}
+                aria-label="Show the story's words under the picture"
+              />
+            </Row>
+          ) : null}
+
           {isAnimated ? (
             <>
-              {diagram.scenes.length > 0 ? (
+              {diagram.scenes.length > 0 || hasStory ? (
                 <Row label="Plays">
                   <SegmentedControl
                     label="Animation"
@@ -316,8 +393,11 @@ function ExportDialogBody() {
                     value={options.animation}
                     onChange={(animation) => set({ animation })}
                     options={[
-                      { value: "loop", label: "This scene" },
-                      { value: "story", label: "All scenes" },
+                      ...(hasStory ? [{ value: "story" as const, label: "The story" }] : []),
+                      { value: "loop" as const, label: "This picture" },
+                      ...(diagram.scenes.length > 0
+                        ? [{ value: "scenes" as const, label: "All scenes" }]
+                        : []),
                     ]}
                   />
                 </Row>
@@ -336,7 +416,9 @@ function ExportDialogBody() {
                 />
               </Row>
               <p className="text-caption text-fg-muted">
-                Every animation repeats every 4 seconds, so the file loops without a jump.
+                {playsStory
+                  ? "The story plays through once at its own pace, then starts over."
+                  : "Every animation repeats every 4 seconds, so the file loops without a jump."}
               </p>
             </>
           ) : null}
@@ -388,13 +470,23 @@ function Row({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /** Live, animated preview of exactly the frame that will be exported. */
-function ExportPreview({ area, transparent }: { area: ExportArea; transparent: boolean }) {
+function ExportPreview({
+  area,
+  transparent,
+  words,
+}: {
+  area: ExportArea;
+  transparent: boolean;
+  /** Room for the story's words under the picture, with the words showing now in it. */
+  words: boolean;
+}) {
   const clock = useEditorClock();
-  const { files, folder, scene } = useEditorShallow((s) => ({
+  const { files, root, folder } = useEditorShallow((s) => ({
     files: s.files,
+    root: s.root,
     folder: s.folder,
-    scene: s.scene,
   }));
+  const moment = useEditorMoment();
   const diagram = useEditor((s) => s.parsed().diagram);
   const layout = useMemo(() => computeLayout(diagram), [diagram]);
   const routes = useRoutes(diagram, layout);
@@ -406,13 +498,21 @@ function ExportPreview({ area, transparent }: { area: ExportArea; transparent: b
         files,
         layout,
         routes,
-        current: resolveFor(files, folder, diagram, scene),
+        current: resolveFor(files, folder, diagram, moment),
         theme,
         fontFamily: "Inter",
       }),
-    [diagram, files, folder, layout, routes, scene, theme],
+    [diagram, files, folder, layout, routes, moment, theme],
   );
-  const frame = exportFrame(layout.bounds, area);
+  const base = exportFrame(layout.bounds, area, layout.page);
+  const frame = words ? { ...base, h: base.h + CAPTION_BAND } : base;
+  const caption = words
+    ? {
+        text: folder === root ? captionAt(diagram, moment.story) : null,
+        opacity: 1,
+        box: { x: frame.x, y: frame.y + frame.h - CAPTION_BAND, w: frame.w, h: CAPTION_BAND },
+      }
+    : undefined;
   const wide = frame.w / frame.h >= PREVIEW_RATIO;
 
   return (
@@ -436,6 +536,7 @@ function ExportPreview({ area, transparent }: { area: ExportArea; transparent: b
           frame={frame}
           transparent={transparent}
           className="size-full"
+          {...(caption === undefined ? {} : { caption })}
         />
       </div>
     </div>

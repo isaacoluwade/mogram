@@ -101,6 +101,12 @@ export const MUTATING_TOOLS = [
   "write_file",
   "set_scaling",
   "apply_concept",
+  "add_slide",
+  "move_slide",
+  "remove_slide",
+  "add_section",
+  "set_slide",
+  "set_beat_words",
 ] as const;
 export type MutatingTool = (typeof MUTATING_TOOLS)[number];
 

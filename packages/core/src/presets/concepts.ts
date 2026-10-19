@@ -3,6 +3,7 @@
  * platform). Fixed lists, so a library of hundreds stays navigable; tags add the rest for search.
  */
 export const CONCEPT_TOPICS = [
+  { id: "fundamentals", label: "Cloud fundamentals" },
   { id: "scaling", label: "Scaling & performance" },
   { id: "reliability", label: "Reliability" },
   { id: "networking", label: "Networking" },
@@ -13,6 +14,8 @@ export const CONCEPT_TOPICS = [
   { id: "delivery", label: "Delivery" },
   { id: "git", label: "Git" },
   { id: "architecture", label: "Architecture patterns" },
+  { id: "observability", label: "Observability" },
+  { id: "ai", label: "AI systems" },
 ] as const;
 
 export type ConceptTopic = (typeof CONCEPT_TOPICS)[number]["id"];

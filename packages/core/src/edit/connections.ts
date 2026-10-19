@@ -383,8 +383,8 @@ function splitBends(
     if (kept.length === 0) return null;
     const origin = viaOrigin(layout, {
       ...connection,
-      from: { element: from, port: null },
-      to: { element: to, port: null },
+      from: { element: from, port: null, part: null },
+      to: { element: to, port: null, part: null },
     });
     return toGridVia(kept, origin);
   };

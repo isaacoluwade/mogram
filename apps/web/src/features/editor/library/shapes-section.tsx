@@ -14,7 +14,7 @@ import {
   type ShapeId,
 } from "@mogram/core/presets";
 import { Tooltip } from "@/components/ui/tooltip";
-import { addComponentAt, insertFromLibrary } from "../actions";
+import { addComponentAt, addImageFile, insertFromLibrary } from "../actions";
 import { LIBRARY_DRAG_TYPE, encodeLibraryDrag } from "../dnd";
 import { useEditorStore } from "../editor-context";
 
@@ -66,6 +66,21 @@ export function ShapeThumb({ shape, className }: { shape: ShapeId; className?: s
  */
 export function ShapeGrid({ shapes }: { shapes: readonly ShapeId[] }) {
   const store = useEditorStore();
+  const chooseImage = () => {
+    const field = document.createElement("input");
+    field.type = "file";
+    field.accept = "image/png,image/jpeg,image/webp,image/gif";
+    field.onchange = () => {
+      const file = field.files?.[0];
+      if (file !== undefined)
+        void addImageFile(store, file).catch((error: unknown) =>
+          store
+            .getState()
+            .notify(error instanceof Error ? error.message : "The image couldn't be added."),
+        );
+    };
+    field.click();
+  };
   return (
     <ul className="grid grid-cols-3 gap-1.5" role="list" aria-label="Shapes">
       {shapes.map((shape) => {
@@ -78,7 +93,7 @@ export function ShapeGrid({ shapes }: { shapes: readonly ShapeId[] }) {
             >
               <button
                 type="button"
-                draggable
+                draggable={shape !== "image"}
                 onDragStart={(event) => {
                   event.dataTransfer.setData(
                     LIBRARY_DRAG_TYPE,
@@ -86,7 +101,11 @@ export function ShapeGrid({ shapes }: { shapes: readonly ShapeId[] }) {
                   );
                   event.dataTransfer.effectAllowed = "copy";
                 }}
-                onClick={() => addComponentAt(store, `shape/${shape}`, info.label, null)}
+                onClick={() =>
+                  shape === "image"
+                    ? chooseImage()
+                    : addComponentAt(store, `shape/${shape}`, info.label, null)
+                }
                 aria-label={`Add ${info.label}`}
                 className={TILE}
               >

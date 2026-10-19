@@ -13,3 +13,7 @@ export * from "./clouds";
 export * from "./themes";
 export * from "./shapes";
 export * from "./concepts";
+export * from "./marks";
+export * from "./pages";
+export * from "./code";
+export * from "./media";

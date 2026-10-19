@@ -11,6 +11,8 @@ export interface RenderSettings {
   /** CSS font-family for diagram text (a CSS variable live, "Inter" in exports). */
   readonly fontFamily: string;
   readonly transitionStart: number | null;
+  /** How long the change of scene or step under way takes, in seconds. */
+  readonly transitionSeconds: number;
   readonly mode: RenderMode;
   /** Elements in focus during a tour or card (TO-1); everything else fades. Null = no focus. */
   readonly focus: ReadonlySet<string> | null;
@@ -22,6 +24,8 @@ export interface RenderSettings {
   readonly editingText: string | null;
   /** Capacity over time (D-82), when the diagram models it. */
   readonly capacity: CapacityRuntime | null;
+  /** When the step showing began and how long its values take to run (D-88); null: settled. */
+  readonly ramp: { readonly start: number; readonly seconds: number } | null;
 }
 
 /** Makes an element a keyboard stop in an interactive diagram; nothing anywhere else. */
@@ -41,6 +45,8 @@ export interface SvgIds {
   readonly sheen: string;
   readonly background: string;
   readonly grid: string;
+  /** Clips the diagram to its page (D-98). */
+  readonly page: string;
 }
 
 export function svgIds(prefix: string): SvgIds {
@@ -50,6 +56,7 @@ export function svgIds(prefix: string): SvgIds {
     sheen: `${prefix}-sheen`,
     background: `${prefix}-background`,
     grid: `${prefix}-grid`,
+    page: `${prefix}-page`,
   };
 }
 
@@ -61,8 +68,22 @@ export function useRender(): RenderSettings {
   return settings;
 }
 
-/** Opacity for an element given the current focus set (TO-1: focused stays full strength). */
+/** How strongly something out of focus is drawn while a step or tour focuses on others. */
+export const FOCUS_DIM = 0.22;
+
+/** Whether one of an element's parts (`element.part`, D-104) is in focus. */
+export function focusWithin(focus: ReadonlySet<string> | null, name: string): boolean {
+  if (focus === null) return false;
+  for (const target of focus) if (target.startsWith(`${name}.`)) return true;
+  return false;
+}
+
+/**
+ * Opacity for an element given the current focus set (TO-1): full strength when it, or one of
+ * its parts, is in focus. Within the element, what isn't in focus dims itself.
+ */
 export function focusOpacity(settings: RenderSettings, ...names: string[]): number {
-  if (settings.focus === null) return 1;
-  return names.some((name) => settings.focus?.has(name) === true) ? 1 : 0.22;
+  const { focus } = settings;
+  if (focus === null) return 1;
+  return names.some((name) => focus.has(name) || focusWithin(focus, name)) ? 1 : FOCUS_DIM;
 }

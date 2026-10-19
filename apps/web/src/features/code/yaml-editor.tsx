@@ -108,7 +108,8 @@ export function YamlEditor({
   diagnostics: readonly LineDiagnostic[];
   readOnly?: boolean;
   label: string;
-  language?: "yaml" | "markdown";
+  /** YAML is highlighted; markdown and a code listing's own file are edited as they are. */
+  language?: "yaml" | "markdown" | "plain";
   /** A line to select and scroll to ("Show in YAML"); a new object each time it's asked for. */
   reveal?: { readonly line: number } | null;
 }) {

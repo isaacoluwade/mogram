@@ -3,10 +3,12 @@ import {
   AKS_FILES,
   AWS_SERVERLESS_FILES,
   BLANK_FILES,
+  BLANK_DECK_FILES,
   FAILOVER_FILES,
   GCP_PIPELINE_FILES,
   KUBERNETES_APP_FILES,
   WEB_APP_FILES,
+  WEB_APP_TOUR_FILES,
 } from "./files";
 
 export interface Template {
@@ -21,11 +23,26 @@ export interface Template {
 export const TEMPLATES: readonly Template[] = [
   { id: "blank", name: "Blank", description: "An empty canvas.", files: BLANK_FILES, features: [] },
   {
+    id: "blank-deck",
+    name: "Blank deck",
+    description: "A deck with one empty 16:9 slide.",
+    files: BLANK_DECK_FILES,
+    features: ["Deck", "16:9"],
+  },
+  {
     id: "web-app",
     name: "Three-tier web app",
     description: "Front Door, App Gateway, VMs and SQL with a cache and a geo-replica.",
     files: WEB_APP_FILES,
     features: ["Scenes", "Cards", "Tour"],
+  },
+  {
+    id: "web-app-tour",
+    name: "Three-tier web app tour",
+    description:
+      "An overview, a traffic spike and a regional outage, built from one linked diagram.",
+    files: WEB_APP_TOUR_FILES,
+    features: ["Deck", "Scenes", "16:9"],
   },
   {
     id: "aks",

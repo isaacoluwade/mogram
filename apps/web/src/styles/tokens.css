@@ -154,10 +154,13 @@
 
   /* Editor side panels and the space each takes with its 12px margins (editor/panel-sizes.ts). */
   --spacing-panel-library: 288px;
+  --spacing-panel-deck-rail: 192px;
   --spacing-panel-right: 316px;
   --spacing-panel-code: 360px;
   --spacing-panel-code-xl: 440px;
   --spacing-clear-library: 312px;
+  --spacing-clear-deck-rail: 216px;
+  --spacing-clear-deck-library: 516px;
   --spacing-clear-right: 340px;
   --spacing-clear-code: 384px;
   --spacing-clear-code-xl: 464px;
@@ -204,6 +207,8 @@
   --ease-thumb: cubic-bezier(0.2, 0.8, 0.2, 1);
   --animate-reveal: reveal 0.7s var(--ease-reveal) both;
   --animate-fade-in: fade-in 0.2s ease-out both;
+  /* A deck's cut (D-99): the slide going fades off the one that's come. */
+  --animate-fade-out: fade-out 0.45s ease-in-out both;
   --animate-pop-in: pop-in 0.18s var(--ease-thumb) both;
 
   @keyframes reveal {
@@ -223,6 +228,15 @@
     }
     to {
       opacity: 1;
+    }
+  }
+
+  @keyframes fade-out {
+    from {
+      opacity: 1;
+    }
+    to {
+      opacity: 0;
     }
   }
 

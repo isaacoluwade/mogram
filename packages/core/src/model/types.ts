@@ -12,11 +12,14 @@ import type {
   MotionPreset,
   StatePreset,
 } from "../presets/names";
+import type { PageName } from "../presets/pages";
 import type { Paint } from "../presets/paint";
 import type { FontName, TextAlign } from "../presets/text";
 import type { Anchor, ArrowEnds, CornerStyle, JumpStyle, LinePattern } from "../presets/connectors";
 import type { ShapeId } from "../presets/shapes";
 import type { ConceptPlatform, ConceptTopic } from "../presets/concepts";
+import type { Mark, Presence } from "../presets/marks";
+import type { CodeLanguage } from "../presets/code";
 
 /** Path → file contents. Paths use `/`, are relative to the project root, never start with `./`. */
 export type ProjectFiles = Readonly<Record<string, string>>;
@@ -149,6 +152,154 @@ export interface Component extends ElementBase, FlowBehaviour {
    */
   readonly shape: ShapeId | null;
   readonly look: ShapeLook | null;
+  /** What an image shows (`shape: image`, D-102); null for every other shape. */
+  readonly image: ImageContent | null;
+  /** What a code listing shows (`shape: code`, D-103); null for every other shape. */
+  readonly code: CodeContent | null;
+  /** Named regions of a picture or lines of a listing (`parts:`, D-104), by name. */
+  readonly parts: ReadonlyMap<string, Part>;
+  /** Whether it's there before any story or scene says otherwise (`show:`, D-86). */
+  readonly show: Presence;
+  /** A small sign at its corner (`mark:`); it means nothing to the model. */
+  readonly mark: Mark | null;
+  /** The element or connection it rides on (`on:`, D-87): it sits beside it and goes where it goes. */
+  readonly on: string | null;
+  /** How far along the connection it rides on (0–1); null: half-way. */
+  readonly along: number | null;
+  /** Its cell in a grid container, as [column, row] from 0; null: the next free one. */
+  readonly cell: GridPoint | null;
+  /** The element it was written as a copy of (`like:`); it grows out of it when shown. */
+  readonly like: string | null;
+  /** What a meter shows (D-88); null for every other shape. */
+  readonly meter: Meter | null;
+}
+
+/**
+ * A meter (D-88): a shape that shows a value against a most, as a bar, a ring (a timer) or a
+ * number. The value and the most are formulas, so nothing on screen is typed twice.
+ */
+/** A picture in the project, shown by an image element (D-102). */
+export interface ImageContent {
+  /** As written. */
+  readonly src: string;
+  /** The file in the project it names; null when it names nothing there. */
+  readonly path: string | null;
+  readonly fit: "contain" | "cover";
+  /** The picture's own width and height in px, when its file says (a pointer or an SVG). */
+  readonly natural: { readonly width: number; readonly height: number } | null;
+}
+
+/** A code listing (D-103): lines of text kept exactly, coloured by language. */
+export interface CodeContent {
+  /** Written in place (`text:`), or a text file in the project (`file:`, as written). */
+  readonly text: string | null;
+  readonly file: string | null;
+  /** The file in the project `file:` names; null for `text:`, or when it names nothing there. */
+  readonly path: string | null;
+  /** `lines:`: the slice shown, in the file's own numbers; null for all of it. */
+  readonly slice: readonly [number, number] | null;
+  readonly language: CodeLanguage;
+  /** The header's words; null for no header. */
+  readonly title: string | null;
+  /** Line numbers down the left. */
+  readonly numbers: boolean;
+  /** Every line of the text, as shown, and which of them are shown. */
+  readonly listing: CodeListing;
+}
+
+/** A listing's lines (see `@mogram/core/code`). */
+export interface CodeListing {
+  readonly lines: readonly string[];
+  readonly first: number;
+  readonly last: number;
+  readonly missing: boolean;
+}
+
+/**
+ * A part (D-104): a named sub-area of an element that a set can show, tone and mark, that
+ * `focus` and `zoom` can name, and that a connection can end on. Addressed `element.part`.
+ */
+export type Part = PartLook & (LinesPart | AreaPart);
+
+interface PartLook {
+  readonly name: string;
+  readonly show: Presence;
+  readonly tone: Tone | null;
+  readonly mark: Mark | null;
+  readonly source: SourceRef;
+}
+
+/** Lines of a code listing, in the file's own numbers. */
+export interface LinesPart {
+  readonly kind: "lines";
+  readonly first: number;
+  readonly last: number;
+}
+
+/** A region of a picture: x, y, width and height, each a share (0–1) of the picture. */
+export interface AreaPart {
+  readonly kind: "area";
+  readonly x: number;
+  readonly y: number;
+  readonly w: number;
+  readonly h: number;
+}
+
+export interface Meter {
+  /** A formula (without its `=`): a number, a value's name, or something worked out. */
+  readonly value: string;
+  readonly max: string;
+  readonly as: "bar" | "ring" | "number";
+  /** The value it turns amber near and red at; null: it never warns. */
+  readonly limit: number | null;
+  /** Written after the number (`%`, ` s`). */
+  readonly unit: string;
+}
+
+/**
+ * Something the viewer can set (D-88): a dial is a number that formulas read; a toggle turns a
+ * scene on; a pick chooses one of several scenes.
+ */
+export type Control =
+  | (ControlBase & {
+      readonly kind: "dial";
+      readonly min: number;
+      readonly max: number;
+      readonly step: number;
+      readonly start: number;
+      readonly unit: string;
+    })
+  | (ControlBase & { readonly kind: "toggle"; readonly scene: string; readonly start: boolean })
+  | (ControlBase & {
+      readonly kind: "pick";
+      readonly scenes: readonly string[];
+      readonly start: string;
+    });
+
+interface ControlBase {
+  readonly name: string;
+  readonly label: string;
+  readonly source: SourceRef;
+}
+
+/**
+ * How a container arranges what's in it (D-87). Its children need no positions, it keeps room
+ * for the most it ever holds, and a story can move things in and out of it.
+ */
+export interface ContainerLayout {
+  readonly kind: "row" | "column" | "grid";
+  /** Space between children, in grid units. */
+  readonly gap: number;
+  /** A grid's columns; null: from its written cells, or a block as square as it can be. */
+  readonly columns: number | null;
+}
+
+/** Where something placed by a layout is put: in a container that arranges it, or on something. */
+export interface Place {
+  readonly in?: string;
+  readonly on?: string;
+  readonly cell?: GridPoint;
+  readonly along?: number;
 }
 
 /** How a shape is drawn (03-shapes-styles-library §5 P0-2). Written only when not the default. */
@@ -188,6 +339,10 @@ export interface Container extends ElementBase {
   readonly rollup: Rollup;
   readonly color: string | null;
   readonly card: CardRef | null;
+  readonly show: Presence;
+  readonly mark: Mark | null;
+  /** How it arranges what's in it; null: its children are placed freely. */
+  readonly layout: ContainerLayout | null;
 }
 
 export interface Group extends ElementBase {
@@ -198,7 +353,10 @@ export interface Group extends ElementBase {
 /** One end of a connection. `port` is set for `aks.web` style endpoints (NE-4). */
 export interface Endpoint {
   readonly element: string;
+  /** A port of a component that opens a nested diagram (`aks.web`, NE-3). */
   readonly port: string | null;
+  /** A part of an image or code element (`portal.name_field`, D-104). */
+  readonly part: string | null;
 }
 
 export interface Connection extends ElementBase {
@@ -235,6 +393,9 @@ export interface Connection extends ElementBase {
   readonly pattern: TrafficPattern | null;
   /** This connection's part (0–1) when its source splits traffic; null = an even share. */
   readonly share: number | null;
+  readonly show: Presence;
+  /** Its traffic as a formula (`= rps`, D-88): worked out for each picture; null when a number. */
+  readonly trafficFormula: string | null;
 }
 
 /**
@@ -272,6 +433,7 @@ export type Decoration =
   | (DecorationBase & {
       readonly variant: "text";
       readonly style: TextStyle;
+      readonly width: number | null;
       readonly look: TextLook;
     })
   | (DecorationBase & { readonly variant: "label" })
@@ -293,6 +455,10 @@ interface DecorationBase extends ElementExtras {
   readonly z: number;
   /** Locked against moving, resizing and deleting by hand (`locked: true`). */
   readonly locked: boolean;
+  readonly show: Presence;
+  /** The element or connection it rides on (a branch name on a commit); null: placed at `at`. */
+  readonly on: string | null;
+  readonly along: number | null;
   readonly source: SourceRef;
 }
 
@@ -320,7 +486,10 @@ export interface ConnectionLabelPlace {
   readonly offset: number;
 }
 
-/** One line of a scene: what differs from normal for one element (SC-5). */
+/**
+ * One line of a `set` (D-86): what differs for one element, in a scene (SC-5) or at a step of a
+ * story. Scenes and steps share this vocabulary; a key left out leaves that property alone.
+ */
 export interface SceneEntry {
   /** Element name, or a nested path such as `aks.ingress` (SC-10). */
   readonly target: string;
@@ -329,6 +498,21 @@ export interface SceneEntry {
   readonly motion: MotionPreset | null;
   /** Capacity in this scene: traffic, shares, hit rates, or copies and sizes set by hand. */
   readonly capacity?: SceneCapacity;
+  /** Whether it's there: `shown`, `faded` or `hidden`. */
+  readonly show?: Presence;
+  /** What it says. */
+  readonly label?: string;
+  /** A shape's or a text's colour scheme. */
+  readonly tone?: Tone;
+  /** The sign at its corner; `none` takes it away. */
+  readonly mark?: Mark | "none";
+  /** Where it goes, for something placed by a layout (`in`, `on`, `cell`, `along`). */
+  readonly place?: Place;
+  /**
+   * When the target is a value (a key of the diagram's `data:`) and not an element: what it
+   * becomes, and where it runs from when it changes across the step (`[30, 0]`).
+   */
+  readonly value?: { readonly to: DataValue; readonly from?: number };
   readonly source: SourceRef;
 }
 
@@ -346,6 +530,48 @@ export interface Scene {
   readonly label: string;
   readonly entries: readonly SceneEntry[];
   readonly source: SourceRef;
+}
+
+/**
+ * A story (D-86): a named run of steps, each a `set` with words. A step with `say` starts a
+ * beat; the steps after it without one belong to that beat and play on by themselves.
+ */
+export interface Story {
+  readonly name: string;
+  readonly label: string;
+  readonly steps: readonly StoryStep[];
+  readonly source: SourceRef;
+}
+
+export interface StoryStep {
+  /** A name another step can rewind to. */
+  readonly name: string | null;
+  /** The caption; it starts a beat. */
+  readonly say: string | null;
+  /** What's spoken (D-93): read from the prompter. It starts a beat too. */
+  readonly script: string | null;
+  /** What changes (`set:`). */
+  readonly entries: readonly SceneEntry[];
+  /** What stays bright while the rest dims; empty = nothing dims. */
+  readonly focus: readonly string[];
+  /** An element the camera frames. */
+  readonly zoom: string | null;
+  /** Seconds it stays once changed; null = long enough to read its words. */
+  readonly hold: number | null;
+  readonly pace: "normal" | "slow";
+  /** Begin from an earlier picture: `start`, or a step's name. */
+  readonly rewind: string | null;
+  /** Stories the viewer can play from here, then come back. */
+  readonly choices: readonly StoryChoice[];
+  /** A formula (D-88): the step plays only while it holds, so a dial can change what happens. */
+  readonly when: string | null;
+  readonly source: SourceRef;
+}
+
+export interface StoryChoice {
+  readonly label: string;
+  /** The story it plays. */
+  readonly play: string;
 }
 
 export interface TourChoice {
@@ -397,12 +623,64 @@ export interface ConceptRole {
   readonly optional: boolean;
 }
 
+/**
+ * A deck (D-99): an ordered list of slides, in sections. A slide is a diagram in a folder, on a
+ * page; the deck adds order and nothing else.
+ */
+export interface Deck {
+  /** A folder whose diagram is drawn under every slide; null for none. */
+  readonly frame: string | null;
+  /** Whether someone watching sees each beat's caption to begin with. */
+  readonly captions: boolean;
+  readonly entries: readonly DeckEntry[];
+  readonly source: SourceRef;
+}
+
+/**
+ * An entry in a deck's `slides` list. `item` is where it is in the list as written, counting
+ * entries that couldn't be read: what an edit to the deck works from, so a bad line elsewhere
+ * never makes it change the wrong one.
+ */
+export type DeckEntry =
+  | {
+      readonly kind: "section";
+      readonly item: number;
+      readonly title: string;
+      readonly source: SourceRef;
+    }
+  | {
+      readonly kind: "slide";
+      readonly item: number;
+      /** The folder of the diagram shown, from the project's root. */
+      readonly folder: string;
+      /** Which of its stories plays; null for the first. */
+      readonly story: string | null;
+      /** Names of steps: begin as things stood after `from`'s beat, stop after `to`'s. */
+      readonly from: string | null;
+      readonly to: string | null;
+      /** A scene laid over it throughout. */
+      readonly scene: string | null;
+      /** What the rail, the overview and exports call it; null for the diagram's name. */
+      readonly title: string | null;
+      /** Whether the deck's frame is drawn under it. */
+      readonly frame: boolean;
+      /** Kept in the file, not shown or counted. */
+      readonly skip: boolean;
+      readonly source: SourceRef;
+    };
+
 export interface DiagramSettings {
   readonly name: string;
   readonly description: string | null;
   /** Present when this diagram is a concept (`concept:`). */
   readonly concept: Concept | null;
+  /** Present when this folder is a deck (`deck:`): its own file then holds no elements. */
+  readonly deck: Deck | null;
   readonly theme: CanvasThemeName;
+  /** Whether the theme is written here, or is only the default (a slide takes its deck's). */
+  readonly themeSet: boolean;
+  /** A fixed frame (D-98): what a viewer, a thumbnail and an export show. Null: the contents. */
+  readonly page: PageName | null;
   /** A custom canvas fill, solid or gradient, over the theme's own (ED-24). */
   readonly background: Paint | null;
   /** Grid dot colour with opacity (`#rrggbbaa`); null works one out from the background. */
@@ -443,6 +721,10 @@ export interface Diagram {
   readonly styles: ReadonlyMap<string, StyleDefinition>;
   readonly layout: ReadonlyMap<string, LayoutEntry>;
   readonly scenes: readonly Scene[];
+  /** Stories, in file order: the first is the one a diagram plays (D-86). */
+  readonly stories: readonly Story[];
+  /** What the viewer can set (D-88), in the order written. */
+  readonly controls: readonly Control[];
   readonly tours: readonly Tour[];
 }
 

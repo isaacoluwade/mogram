@@ -1,5 +1,7 @@
 import {
+  Activity,
   Blocks,
+  Cloud,
   Container,
   Database,
   Gauge,
@@ -10,11 +12,13 @@ import {
   Network,
   Rocket,
   ShieldCheck,
+  Sparkles,
   type LucideIcon,
 } from "lucide-react";
 import type { ConceptTopic } from "@mogram/core/presets";
 
 const TOPIC_ICONS: Readonly<Record<ConceptTopic, LucideIcon>> = {
+  fundamentals: Cloud,
   scaling: Gauge,
   reliability: LifeBuoy,
   networking: Network,
@@ -25,6 +29,8 @@ const TOPIC_ICONS: Readonly<Record<ConceptTopic, LucideIcon>> = {
   delivery: Rocket,
   git: GitBranch,
   architecture: Blocks,
+  observability: Activity,
+  ai: Sparkles,
 };
 
 /** A concept topic's icon; a lightbulb for a concept without one. */

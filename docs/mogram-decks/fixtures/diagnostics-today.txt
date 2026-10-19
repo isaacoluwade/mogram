@@ -1,0 +1,110 @@
+What Mogram's parser said about fixtures/terraform-course on 2026-10-09 (working tree, K0 to K4 built).
+Every line below is about something decks.md adds. When a milestone lands, its lines should go.
+
+== (deck root): 2 diagnostics
+  [warning] mogram.yaml:4 "page" isn't a section Mogram knows, so it is ignored.
+  [warning] mogram.yaml:9 "deck" isn't a section Mogram knows, so it is ignored.
+
+== first_apply: 14 diagnostics
+  [error] first_apply/mogram.yaml:7 "code" isn't a shape preset for "terminal". Choose one of rectangle, rounded, ellipse, circle, diamond, cylinder, queue, cloud, hexagon, document, person or meter.
+  [warning] first_apply/mogram.yaml:8 "file" isn't a shape setting, so it is ignored. Did you mean "fill"?
+  [warning] first_apply/mogram.yaml:9 "language" isn't a shape setting, so it is ignored.
+  [warning] first_apply/mogram.yaml:10 "title" isn't a shape setting, so it is ignored.
+  [warning] first_apply/mogram.yaml:12 "parts" isn't a shape setting, so it is ignored.
+  [warning] first_apply/mogram.yaml:20 "script" isn't a step setting, so it is ignored.
+  [error] first_apply/mogram.yaml:21 In story "main", a step focuses on "terminal.command", but there is no such element.
+  [warning] first_apply/mogram.yaml:23 "script" isn't a step setting, so it is ignored.
+  [error] first_apply/mogram.yaml:24 In story "main", "terminal.plan" points inside "terminal", but "terminal" doesn't open a nested diagram.
+  [warning] first_apply/mogram.yaml:26 "script" isn't a step setting, so it is ignored.
+  [error] first_apply/mogram.yaml:27 In story "main", "terminal.question" points inside "terminal", but "terminal" doesn't open a nested diagram.
+  [error] first_apply/mogram.yaml:28 In story "main", a step focuses on "terminal.question", but there is no such element.
+  [warning] first_apply/mogram.yaml:30 "script" isn't a step setting, so it is ignored.
+  [error] first_apply/mogram.yaml:31 In story "main", "terminal.answer" points inside "terminal", but "terminal" doesn't open a nested diagram.
+
+== form_to_code: 36 diagnostics
+  [error] form_to_code/mogram.yaml:7 "image" isn't a shape preset for "portal". Choose one of rectangle, rounded, ellipse, circle, diamond, cylinder, queue, cloud, hexagon, document, person or meter.
+  [warning] form_to_code/mogram.yaml:8 "src" isn't a shape setting, so it is ignored.
+  [warning] form_to_code/mogram.yaml:11 "parts" isn't a shape setting, so it is ignored.
+  [error] form_to_code/mogram.yaml:18 "code" isn't a shape preset for "main_tf". Choose one of rectangle, rounded, ellipse, circle, diamond, cylinder, queue, cloud, hexagon, document, person or meter.
+  [warning] form_to_code/mogram.yaml:19 "file" isn't a shape setting, so it is ignored. Did you mean "fill"?
+  [warning] form_to_code/mogram.yaml:20 "lines" isn't a shape setting, so it is ignored.
+  [warning] form_to_code/mogram.yaml:21 "title" isn't a shape setting, so it is ignored.
+  [warning] form_to_code/mogram.yaml:23 "parts" isn't a shape setting, so it is ignored.
+  [error] form_to_code/mogram.yaml:37 Connection "name_is" uses port "name_field" on "portal", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:37 Connection "name_is" uses port "name" on "main_tf", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:38 Connection "group_is" uses port "group_field" on "portal", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:38 Connection "group_is" uses port "group" on "main_tf", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:39 Connection "region_is" uses port "region_field" on "portal", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:39 Connection "region_is" uses port "location" on "main_tf", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:40 Connection "tier_is" uses port "performance_field" on "portal", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:40 Connection "tier_is" uses port "tier" on "main_tf", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:41 Connection "replication_is" uses port "redundancy_field" on "portal", but only components that open a nested diagram have ports.
+  [error] form_to_code/mogram.yaml:41 Connection "replication_is" uses port "replication" on "main_tf", but only components that open a nested diagram have ports.
+  [warning] form_to_code/mogram.yaml:45 "script" isn't a step setting, so it is ignored.
+  [warning] form_to_code/mogram.yaml:49 "script" isn't a step setting, so it is ignored.
+  [error] form_to_code/mogram.yaml:51 In story "main", a step focuses on "portal.name_field", but there is no such element.
+  [error] form_to_code/mogram.yaml:51 In story "main", a step focuses on "main_tf.name", but there is no such element.
+  [warning] form_to_code/mogram.yaml:53 "script" isn't a step setting, so it is ignored.
+  [error] form_to_code/mogram.yaml:55 In story "main", a step focuses on "portal.group_field", but there is no such element.
+  [error] form_to_code/mogram.yaml:55 In story "main", a step focuses on "main_tf.group", but there is no such element.
+  [warning] form_to_code/mogram.yaml:57 "script" isn't a step setting, so it is ignored.
+  [error] form_to_code/mogram.yaml:59 In story "main", a step focuses on "portal.region_field", but there is no such element.
+  [error] form_to_code/mogram.yaml:59 In story "main", a step focuses on "main_tf.location", but there is no such element.
+  [warning] form_to_code/mogram.yaml:61 "script" isn't a step setting, so it is ignored.
+  [error] form_to_code/mogram.yaml:63 In story "main", a step focuses on "portal.performance_field", but there is no such element.
+  [error] form_to_code/mogram.yaml:63 In story "main", a step focuses on "portal.redundancy_field", but there is no such element.
+  [error] form_to_code/mogram.yaml:63 In story "main", a step focuses on "main_tf.tier", but there is no such element.
+  [error] form_to_code/mogram.yaml:63 In story "main", a step focuses on "main_tf.replication", but there is no such element.
+  [warning] form_to_code/mogram.yaml:66 "script" isn't a step setting, so it is ignored.
+  [error] form_to_code/mogram.yaml:68 In story "main", "main_tf.name" points inside "main_tf", but "main_tf" doesn't open a nested diagram.
+  [error] form_to_code/mogram.yaml:69 In story "main", a step focuses on "main_tf.name", but there is no such element.
+
+== frame: 1 diagnostics
+  [warning] frame/mogram.yaml:7 "width" isn't a decoration setting, so it is ignored.
+
+== reading_a_plan: 15 diagnostics
+  [error] reading_a_plan/mogram.yaml:7 "code" isn't a shape preset for "plan". Choose one of rectangle, rounded, ellipse, circle, diamond, cylinder, queue, cloud, hexagon, document, person or meter.
+  [warning] reading_a_plan/mogram.yaml:8 "file" isn't a shape setting, so it is ignored. Did you mean "fill"?
+  [warning] reading_a_plan/mogram.yaml:9 "language" isn't a shape setting, so it is ignored.
+  [warning] reading_a_plan/mogram.yaml:10 "title" isn't a shape setting, so it is ignored.
+  [warning] reading_a_plan/mogram.yaml:12 "parts" isn't a shape setting, so it is ignored.
+  [warning] reading_a_plan/mogram.yaml:19 "script" isn't a step setting, so it is ignored.
+  [error] reading_a_plan/mogram.yaml:21 In story "main", a step focuses on "plan.block", but there is no such element.
+  [warning] reading_a_plan/mogram.yaml:23 "script" isn't a step setting, so it is ignored.
+  [error] reading_a_plan/mogram.yaml:24 In story "main", "plan.reason" points inside "plan", but "plan" doesn't open a nested diagram.
+  [error] reading_a_plan/mogram.yaml:25 In story "main", a step focuses on "plan.reason", but there is no such element.
+  [warning] reading_a_plan/mogram.yaml:27 "script" isn't a step setting, so it is ignored.
+  [error] reading_a_plan/mogram.yaml:29 In story "main", "plan.summary" points inside "plan", but "plan" doesn't open a nested diagram.
+  [error] reading_a_plan/mogram.yaml:30 In story "main", a step focuses on "plan.summary", but there is no such element.
+  [error] reading_a_plan/mogram.yaml:31 In story "main", a step zooms to "plan.summary", but there is no such element.
+  [warning] reading_a_plan/mogram.yaml:36 "width" isn't a decoration setting, so it is ignored.
+
+== terraform_flow: 7 diagnostics
+  [warning] terraform_flow/mogram.yaml:30 "script" isn't a step setting, so it is ignored.
+  [warning] terraform_flow/mogram.yaml:35 "script" isn't a step setting, so it is ignored.
+  [warning] terraform_flow/mogram.yaml:39 "script" isn't a step setting, so it is ignored.
+  [warning] terraform_flow/mogram.yaml:44 "script" isn't a step setting, so it is ignored.
+  [warning] terraform_flow/mogram.yaml:52 "script" isn't a step setting, so it is ignored.
+  [warning] terraform_flow/mogram.yaml:57 "script" isn't a step setting, so it is ignored.
+  [warning] terraform_flow/mogram.yaml:62 "script" isn't a step setting, so it is ignored.
+
+== title: 5 diagnostics
+  [warning] title/mogram.yaml:7 Story "main" has no steps yet.
+  [warning] title/mogram.yaml:8 "script" isn't a step setting, so it is ignored.
+  [warning] title/mogram.yaml:8 This step of story "main" says and changes nothing, so it's left out.
+  [warning] title/mogram.yaml:13 "width" isn't a decoration setting, so it is ignored.
+  [warning] title/mogram.yaml:14 "width" isn't a decoration setting, so it is ignored.
+
+== why_state: 12 diagnostics
+  [warning] why_state/mogram.yaml:10 "script" isn't a step setting, so it is ignored.
+  [error] why_state/mogram.yaml:11 Story "main" changes "p1", but there is no such element.
+  [warning] why_state/mogram.yaml:13 "script" isn't a step setting, so it is ignored.
+  [error] why_state/mogram.yaml:14 Story "main" changes "p2", but there is no such element.
+  [warning] why_state/mogram.yaml:16 "script" isn't a step setting, so it is ignored.
+  [error] why_state/mogram.yaml:17 Story "main" changes "p3", but there is no such element.
+  [error] why_state/mogram.yaml:22 Decoration "p1" needs a position, like "at: [4, 6]", or something to ride on, like "on: web".
+  [warning] why_state/mogram.yaml:22 "width" isn't a decoration setting, so it is ignored.
+  [error] why_state/mogram.yaml:23 Decoration "p2" needs a position, like "at: [4, 6]", or something to ride on, like "on: web".
+  [warning] why_state/mogram.yaml:23 "width" isn't a decoration setting, so it is ignored.
+  [error] why_state/mogram.yaml:24 Decoration "p3" needs a position, like "at: [4, 6]", or something to ride on, like "on: web".
+  [warning] why_state/mogram.yaml:24 "width" isn't a decoration setting, so it is ignored.

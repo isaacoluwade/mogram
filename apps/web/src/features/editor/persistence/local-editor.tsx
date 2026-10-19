@@ -27,7 +27,7 @@ import {
   setDraftThumbnail,
   type Draft,
 } from "../../drafts/drafts";
-import { EditorHostContext, initialPanels, type EditorHost } from "./host";
+import { EditorHostContext, initialPanels, rootIn, type EditorHost } from "./host";
 import { EditorLoading, EditorUnavailable } from "../../../components/screens";
 import { useThumbnails } from "./thumbnails";
 
@@ -37,7 +37,16 @@ type Loaded =
   | { kind: "ready"; draft: Draft; hasThumbnail: boolean };
 
 /** The editor for a draft stored in this browser (AC-1). No account needed. */
-export function LocalEditor({ id }: { id: string }) {
+export function LocalEditor({
+  id,
+  root = "",
+  slide = null,
+}: {
+  id: string;
+  root?: string;
+  /** In a deck, the slide to open on, by its number (`?slide=3`). */
+  slide?: number | null;
+}) {
   const [loaded, setLoaded] = useState<Loaded>({ kind: "loading" });
   useEffect(() => {
     let alive = true;
@@ -68,7 +77,14 @@ export function LocalEditor({ id }: { id: string }) {
     );
   }
   return (
-    <EditorProvider init={{ files: loaded.draft.files, panels: initialPanels() }}>
+    <EditorProvider
+      init={{
+        files: loaded.draft.files,
+        root: rootIn(loaded.draft.files, root),
+        ...(slide === null ? {} : { slide }),
+        panels: initialPanels(),
+      }}
+    >
       <LocalHost draft={loaded.draft} hasThumbnail={loaded.hasThumbnail}>
         <EditorShell />
       </LocalHost>

@@ -11,7 +11,10 @@ const SECURITY_HEADERS = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
     key: "Permissions-Policy",
-    value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()",
+    // The microphone is for the prompter following a reader's voice, on Mogram's own pages
+    // only; Chrome recognises the speech on the device (D-96).
+    value:
+      "camera=(), microphone=(self), on-device-speech-recognition=(self), geolocation=(), payment=(), usb=(), interest-cohort=()",
   },
   { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
   { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains" },

@@ -1,5 +1,16 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
-import { element, openDraft, openYaml, shot, watchErrors, yaml } from "./support";
+import {
+  conceptCount,
+  conceptLibrary,
+  element,
+  openDraft,
+  openYaml,
+  shot,
+  watchErrors,
+  yaml,
+} from "./support";
+
+const LIBRARY = conceptLibrary();
 
 /**
  * Concepts (D-83, D-85): ideas in the Concepts tab and the gallery, found by topic, platform and
@@ -94,7 +105,11 @@ test.describe("concepts (D-83, D-85)", () => {
     // Every concept here is general, so there's no platform filter that would change anything.
     await expect(panel.getByRole("combobox", { name: "Platform" })).toHaveCount(0);
     await shot(page, "editor/concepts-tab");
-    await panel.getByRole("button", { name: "Scaling & performance, 5 concepts" }).click();
+    await panel
+      .getByRole("button", {
+        name: `Scaling & performance, ${conceptCount(LIBRARY.inTopic("scaling"))}`,
+      })
+      .click();
     const concept = panel.getByRole("button", { name: "Concept: Horizontal scaling" });
     // Cards, two to a row, each drawing its diagram as it comes into view.
     await expect(concept.locator("[data-element]").first()).toBeVisible();
@@ -167,7 +182,7 @@ test.describe("concepts (D-83, D-85)", () => {
     const gallery = page.getByRole("dialog", { name: "Concepts" });
     await expect(gallery).toBeVisible();
     const count = gallery.getByTestId("gallery-count");
-    await expect(count).toHaveText("9 concepts");
+    await expect(count).toHaveText(conceptCount(LIBRARY.all));
     // Previews are drawn as cards come into view.
     await expect(
       gallery.getByTestId("concept-card-preview").first().locator("[data-element]").first(),
@@ -176,17 +191,19 @@ test.describe("concepts (D-83, D-85)", () => {
 
     const topics = gallery.getByRole("navigation", { name: "Concept topics" });
     await topics.getByRole("button", { name: /Reliability/ }).click();
-    await expect(count).toHaveText("1 concept");
+    await expect(count).toHaveText(conceptCount(LIBRARY.inTopic("reliability")));
     await topics.getByRole("button", { name: /All concepts/ }).click();
     await gallery.getByRole("searchbox", { name: "Search all concepts" }).fill("queue");
     await expect(
       gallery.getByRole("button", { name: "Concept: Queue load levelling" }),
     ).toBeVisible();
     await gallery.getByRole("searchbox", { name: "Search all concepts" }).fill("");
-    await expect(count).toHaveText("9 concepts");
-    // All general patterns: no platform or kind to filter by.
+    await expect(count).toHaveText(conceptCount(LIBRARY.all));
+    // All for any platform: nothing to filter by there. Patterns and explainers: a kind filter.
     await expect(gallery.getByRole("combobox", { name: "Platform" })).toHaveCount(0);
-    await expect(gallery.getByRole("radiogroup", { name: "Kind" })).toHaveCount(0);
+    await expect(gallery.getByRole("radiogroup", { name: "Kind" })).toHaveCount(
+      LIBRARY.explainers > 0 ? 1 : 0,
+    );
 
     // Opening one shows it over the gallery; using it closes both.
     await gallery.getByRole("button", { name: "Concept: Caching" }).click();
@@ -284,7 +301,11 @@ test.describe("concepts (D-83, D-85)", () => {
     await platform.click();
     await expect(page.getByRole("option")).toHaveText(["All platforms", "AWS (1)"]);
     await page.getByRole("option", { name: "AWS (1)" }).click();
-    await panel.getByRole("button", { name: /^Networking, 2 concepts/ }).click();
+    await panel
+      .getByRole("button", {
+        name: new RegExp(`^Networking, ${LIBRARY.inTopic("networking") + 1} concepts`),
+      })
+      .click();
     await expect(panel.getByRole("button", { name: /^Concept: / }).first()).toHaveAccessibleName(
       "Concept: How DNS resolves",
     );
@@ -294,7 +315,9 @@ test.describe("concepts (D-83, D-85)", () => {
     await panel.getByRole("button", { name: "Browse all" }).click();
     const gallery = page.getByRole("dialog", { name: "Concepts" });
     await gallery.getByRole("radio", { name: "Explainers to insert or open" }).click();
-    await expect(gallery.getByTestId("gallery-count")).toHaveText("1 concept");
+    await expect(gallery.getByTestId("gallery-count")).toHaveText(
+      conceptCount(LIBRARY.explainers + 1),
+    );
     await page.keyboard.press("Escape");
     await expect(gallery).toHaveCount(0);
 

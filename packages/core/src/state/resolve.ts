@@ -1,8 +1,10 @@
+import { partOf } from "../model/parts";
 import type { Diagram, SceneCapacity, SceneEntry } from "../model/types";
 import { planCapacity, type CapacityInput, type CapacityPlan } from "../capacity/plan";
 import { nextPatternChange, patternCycle, type CapacityOverTime } from "../capacity/patterns";
 import { severityOf } from "../presets/state";
 import type { FlowPreset, MotionPreset, StatePreset } from "../presets/names";
+import type { Picture } from "../picture/picture";
 
 /**
  * Effective state of every element for one moment (SC-1 … SC-4, NE-11, NE-12, D-12).
@@ -43,6 +45,11 @@ export interface ResolvedState {
     string,
     { readonly scene: readonly SceneEntry[]; readonly viewer: readonly SceneEntry[] }
   >;
+  /**
+   * The picture this was resolved from (D-86): what's there, with labels and looks as they
+   * stand. Null when a diagram was resolved as written.
+   */
+  readonly picture: Picture | null;
 }
 
 /** The plan over time when connections carry patterns, else null. */
@@ -78,6 +85,11 @@ export interface ResolveInput {
   readonly diagram: Diagram;
   /** Entries of the active scene (empty for Normal). */
   readonly scene?: readonly SceneEntry[];
+  /**
+   * The picture to resolve (D-86), in place of `diagram` and `scene`: what's hidden in it is
+   * already gone, so nothing here sees it.
+   */
+  readonly picture?: Picture;
   /** Changes made by a viewer when the share allows it (SH-3). */
   readonly viewer?: readonly SceneEntry[];
   /** True when the component that opens this nested diagram is down (NE-11). */
@@ -101,12 +113,13 @@ interface Split {
   readonly nested: Map<string, SceneEntry[]>;
 }
 
-function split(entries: readonly SceneEntry[]): Split {
+function split(entries: readonly SceneEntry[], diagram: Diagram): Split {
   const own = new Map<string, SceneEntry>();
   const nested = new Map<string, SceneEntry[]>();
   for (const entry of entries) {
     const dot = entry.target.indexOf(".");
-    if (dot === -1) {
+    // A part (D-104) is the element's own; anything else after a dot is inside a nested one.
+    if (dot === -1 || partOf(diagram.components, entry.target) !== null) {
       own.set(entry.target, entry);
       continue;
     }
@@ -132,9 +145,9 @@ export function rollupState(
 }
 
 export function resolveState(input: ResolveInput): ResolvedState {
-  const { diagram } = input;
-  const scene = split(input.scene ?? []);
-  const viewer = split(input.viewer ?? []);
+  const diagram = input.picture?.diagram ?? input.diagram;
+  const scene = split(input.picture?.entries ?? input.scene ?? [], diagram);
+  const viewer = split(input.viewer ?? [], diagram);
 
   // 1. Own state: viewer > scene > base.
   const own = new Map<string, ElementStatus & { explicit: boolean }>();
@@ -313,6 +326,7 @@ export function resolveState(input: ResolveInput): ResolvedState {
   }
 
   return {
+    picture: input.picture ?? null,
     elements: status,
     capacity,
     capacityOverTime,

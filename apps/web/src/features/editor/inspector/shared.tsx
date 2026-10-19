@@ -1,8 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { FileCode2, PaintRoller, Paintbrush, Pin } from "lucide-react";
-import { moveToFile, renameElement, updateElement, type PropertyValue } from "@mogram/core/edit";
+import {
+  moveToFile,
+  renameElement,
+  updateElement,
+  type PropertyValue,
+  type SetRef,
+} from "@mogram/core/edit";
+import { pictureAt } from "@mogram/core/picture";
 import { elementNames, isValidName, type Diagram, type SceneEntry } from "@mogram/core/model";
 import { modelsCapacity } from "@mogram/core/capacity";
 import { FLOW_PRESETS, type FlowPreset, type StatePreset } from "@mogram/core/presets";
@@ -10,9 +17,9 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu";
 import { PropertyRow } from "@/components/ui/property-row";
-import { copyStyle, hasCopiedStyle, pasteStyle, sceneEntry } from "../actions";
+import { copyStyle, editingSet, hasCopiedStyle, pasteStyle } from "../actions";
 import { useEditor, useEditorShallow, useEditorStore } from "../editor-context";
-import { sceneTarget, storyDiagram } from "../store/editor-store";
+import { sceneTarget, storyCursor, topDiagram } from "../store/editor-store";
 import { CommitInput, InspectorSection } from "./fields";
 
 /** Writes element properties to the files as one undo step. */
@@ -163,34 +170,57 @@ export function PositionRow({ name }: { name: string }) {
 }
 
 /**
- * The scene being edited as this level sees it: scenes belong to the top diagram (NE-14), and
- * name an element inside a nested diagram by its path (`aks.checkout`).
+ * The set being edited as this level sees it (D-86): the scene picked, or the step of the story
+ * being shown. Scenes and stories belong to the top diagram (NE-14), and name an element inside
+ * a nested diagram by its path (`aks.checkout`).
  */
 export interface SceneView {
-  readonly scene: string | null;
+  /** The set changes are written to; null: the diagram itself (Normal, or a story's opening). */
+  readonly scene: SetRef | null;
   readonly story: Diagram;
   readonly levelPath: readonly string[];
+  /**
+   * What's set for each target at this moment: a scene's lines, or everything the steps played
+   * so far have said.
+   */
+  readonly lines: ReadonlyMap<string, SceneEntry>;
 }
 
+const NO_LINES: ReadonlyMap<string, SceneEntry> = new Map();
+
 export function useSceneView(): SceneView {
-  const { scene, files, levelPath } = useEditorShallow((s) => ({
+  const { scene, step, files, root, levelPath } = useEditorShallow((s) => ({
     scene: s.scene,
+    step: s.story,
     files: s.files,
+    root: s.root,
     levelPath: s.levelPath,
   }));
   const diagram = useEditor((s) => s.parsed().diagram);
-  return { scene, story: levelPath.length === 0 ? diagram : storyDiagram(files), levelPath };
+  const story = levelPath.length === 0 ? diagram : topDiagram(files, root);
+  const set = editingSet({ story: step, scene });
+  const lines = useMemo(
+    () =>
+      step === null && scene === null
+        ? NO_LINES
+        : pictureAt(story, { scene, story: storyCursor(story, step) }).lines,
+    [story, scene, step],
+  );
+  return { scene: set, story, levelPath, lines };
 }
 
+/** The set's name as people read it: "Normal", a scene's label, or "this step". */
 export function sceneLabel(view: SceneView): string {
   const { scene, story } = view;
-  return scene === null ? "Normal" : (story.scenes.find((s) => s.name === scene)?.label ?? scene);
+  if (scene === null) return "Normal";
+  if (typeof scene !== "string") return "this step";
+  return story.scenes.find((s) => s.name === scene)?.label ?? scene;
 }
 
-/** This element's line in the current scene, if it has one. */
+/** What's set for this element at this moment, if anything. */
 export function sceneValue(view: SceneView, name: string): SceneEntry | undefined {
   if (view.scene === null) return undefined;
-  return sceneEntry(view.story, view.scene, sceneTarget(view.levelPath, name));
+  return view.lines.get(sceneTarget(view.levelPath, name));
 }
 
 /**

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   addShape,
+  NEW_LISTING,
   copySnippet,
   pasteSnippet,
   renameElement,
@@ -33,6 +34,32 @@ layout:
 };
 
 describe("shapes (M4)", () => {
+  it("sizes images from pointer proportions and preserves source and fit through edits", () => {
+    const source: ProjectFiles = {
+      "mogram.yaml":
+        "mogram: 1\nshapes:\n  picture: { shape: image, src: images/test.png, fit: cover }\n",
+      "images/test.png": `mogram-asset 1 sha256:${"a".repeat(64)} image/png 16 1200x600`,
+    };
+    const { diagram, diagnostics } = parseDiagram(source);
+    expect(diagnostics).toEqual([]);
+    expect(diagram.components.get("picture")?.image).toEqual({
+      src: "images/test.png",
+      path: "images/test.png",
+      fit: "cover",
+      natural: { width: 1200, height: 600 },
+    });
+    // 80 cells wide at the picture's own proportions (D-102).
+    expect(computeLayout(diagram).elements.get("picture")?.size).toEqual({ w: 80, h: 40 });
+    const added = addShape(source, diagram, {
+      shape: "image",
+      label: "Second",
+      src: "images/test.png",
+      fit: "contain",
+    });
+    expect(parseDiagram(added.files).diagram.components.get("second")?.image?.src).toBe(
+      "images/test.png",
+    );
+  });
   it("reads shapes as components drawn as outlines, with their look", () => {
     const { diagram, diagnostics } = parseDiagram(files);
     expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
@@ -75,6 +102,14 @@ describe("shapes (M4)", () => {
     const cy = box.y + box.h / 2;
     const onOutline = Math.abs(end.x - cx) / (box.w / 2) + Math.abs(end.y - cy) / (box.h / 2);
     expect(onOutline).toBeCloseTo(1, 1);
+  });
+
+  it("adds a listing that says what it's for, with no label", () => {
+    const { diagram } = parseDiagram(files);
+    const added = addShape(files, diagram, { shape: "code", label: "", at: { x: 2, y: 60 } });
+    const listing = parseDiagram(added.files).diagram.components.get("code");
+    expect(listing?.code?.listing.lines).toEqual([NEW_LISTING]);
+    expect(listing?.hasExplicitLabel).toBe(false);
   });
 
   it("adds, resizes, restyles and renames shapes in the shapes section", () => {

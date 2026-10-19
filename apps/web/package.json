@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "bench:prompter": "node scripts/prompter-bench.mjs",
     "eval:ai": "AI_EVAL=1 vitest run test/ai-eval.test.ts",
     "check:ui": "node scripts/check-ui.mjs",
     "db:generate": "drizzle-kit generate",

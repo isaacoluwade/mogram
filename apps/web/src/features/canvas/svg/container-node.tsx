@@ -2,7 +2,6 @@
 
 import { memo, useRef } from "react";
 import { CONTAINER_STYLE_INFO } from "@mogram/core/presets";
-import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import { currentTime, useFrame, useTimeSource } from "../clock";
 import { containerFrame, progressAt } from "../frames";
 import { fleetFrame } from "../capacity-frames";
@@ -10,7 +9,7 @@ import { iconHref, iconSource, useIconCacheVersion } from "../icons";
 import type { SceneContainer } from "../scene";
 import { ellipsize } from "../text";
 import { containerColors } from "../theme";
-import { Badge, CardMark } from "./glyphs";
+import { Badge, CardMark, MarkBadge } from "./glyphs";
 import { actionProps, focusOpacity, useRender } from "./render-context";
 
 const RADIUS = 14;
@@ -22,14 +21,19 @@ export const ContainerNode = memo(function ContainerNode({
   container: SceneContainer;
 }) {
   const settings = useRender();
-  const { theme, fontFamily, transitionStart } = settings;
+  const { theme, fontFamily, transitionStart, transitionSeconds } = settings;
   const source = useTimeSource();
   useIconCacheVersion();
   const now = currentTime(source);
   const colors = containerColors(container.type, theme, container.color);
-  const frame = containerFrame(container, colors, theme, progressAt(now, transitionStart));
+  const frame = containerFrame(
+    container,
+    colors,
+    theme,
+    progressAt(now, transitionStart, transitionSeconds),
+  );
   const rect = useRef<SVGRectElement | null>(null);
-  const transitioning = transitionStart !== null && now - transitionStart < SCENE_TRANSITION + 0.1;
+  const transitioning = transitionStart !== null && now - transitionStart < transitionSeconds + 0.1;
   // A scale set grows and shrinks with its copies (D-82), inside the room it keeps for its most.
   const timeline = settings.capacity?.timeline ?? null;
   const frames = timeline === null ? null : container.frames;
@@ -44,7 +48,12 @@ export const ContainerNode = memo(function ContainerNode({
   };
 
   useFrame(transitioning || frames !== null, (t) => {
-    const next = containerFrame(container, colors, theme, progressAt(t, transitionStart));
+    const next = containerFrame(
+      container,
+      colors,
+      theme,
+      progressAt(t, transitionStart, transitionSeconds),
+    );
     rect.current?.setAttribute("stroke", next.borderColor);
     rect.current?.setAttribute("fill", next.fillColor);
     if (frames !== null) {
@@ -91,25 +100,42 @@ export const ContainerNode = memo(function ContainerNode({
         y={box.y}
         width={box.w}
         height={box.h}
-        rx={RADIUS}
+        rx={container.tray ? 10 : RADIUS}
         fill={frame.fillColor}
         stroke={frame.borderColor}
         strokeWidth={1.25}
         strokeDasharray={colors.dash}
       />
-      {href != null ? (
-        <image href={href} x={box.x + 12} y={box.y + 11} width={15} height={15} />
-      ) : null}
-      <text
-        x={labelX}
-        y={box.y + 23}
-        fontSize={12.5}
-        fontWeight={500}
-        fill={colors.label}
-        style={{ fontFamily }}
-      >
-        {ellipsize(container.label, maxLabel, 12.5, 500)}
-      </text>
+      {container.tray ? (
+        // A container that arranges its contents (D-87): a small title, and room for them.
+        <text
+          x={box.x + 12}
+          y={box.y + 16}
+          fontSize={11}
+          fontWeight={500}
+          fill={colors.label}
+          opacity={0.85}
+          style={{ fontFamily }}
+        >
+          {ellipsize(container.label, Math.max(24, box.w - 24), 11, 500)}
+        </text>
+      ) : (
+        <>
+          {href != null ? (
+            <image href={href} x={box.x + 12} y={box.y + 11} width={15} height={15} />
+          ) : null}
+          <text
+            x={labelX}
+            y={box.y + 23}
+            fontSize={12.5}
+            fontWeight={500}
+            fill={colors.label}
+            style={{ fontFamily }}
+          >
+            {ellipsize(container.label, maxLabel, 12.5, 500)}
+          </text>
+        </>
+      )}
       {frame.badge.badge !== "none" ? (
         <Badge
           badge={frame.badge.badge}
@@ -118,6 +144,16 @@ export const ContainerNode = memo(function ContainerNode({
           opacity={frame.badge.opacity}
           x={box.x + box.w - 18}
           y={box.y + 18}
+        />
+      ) : null}
+      {container.mark !== null ? (
+        <MarkBadge
+          mark={container.mark}
+          mode={theme.mode}
+          muted={theme.textMuted}
+          background={theme.base}
+          x={box.x + 2}
+          y={box.y + 2}
         />
       ) : null}
       {container.hasCard ? (

@@ -4,6 +4,7 @@ import { useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import {
   Lightbulb,
+  Layers,
   MousePointerClick,
   PanelLeftOpen,
   PanelRightOpen,
@@ -13,6 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { stepScene } from "@mogram/core/timeline";
+import { beatsOf } from "@mogram/core/picture";
 import { Banner } from "@/components/ui/banner";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -20,6 +22,7 @@ import { Panel } from "@/components/ui/panel";
 import { Spinner } from "@/components/ui/skeleton";
 import { cn } from "@/lib/cn";
 import { useScrollFade } from "@/lib/use-scroll-fade";
+import { toScreen } from "@/features/canvas/camera";
 import { resolveTheme } from "@/features/canvas/theme";
 import { useLayout, useRoutes } from "@/features/canvas/use-diagram";
 import { LibraryPanel } from "./library/library-panel";
@@ -31,7 +34,7 @@ import { ToursPanel } from "./tours/tours-panel";
 import { EditorCanvas, useIsEmptyDiagram } from "./canvas/editor-canvas";
 import { Breadcrumbs } from "./chrome/breadcrumbs";
 import { FindPanel } from "./chrome/find-panel";
-import { SceneStrip } from "./chrome/scene-strip";
+import { Dock } from "./chrome/scene-strip";
 import { Toolbar } from "./chrome/toolbar";
 import { TopLeftBar, TopRightBar } from "./chrome/top-bar";
 import { ZoomControls } from "./chrome/zoom-controls";
@@ -47,14 +50,16 @@ import { AssistantProvider, useAssistant, useConversation } from "./assistant/as
 import { AssistantPanel } from "./assistant/assistant-panel";
 import { VersionBanner } from "./history/version-banner";
 import { useEditorHost, useOpenViewer } from "./persistence/host";
-import { deepLinkQuery } from "@/features/share/deep-link";
+import { viewerQuery } from "./viewer-link";
+import { useScriptWindow } from "./script-window";
 import { useEditorShortcuts } from "./shortcuts";
 import { RightPanelGrip, useRightPanelWidth } from "./panel-resize";
 import { CommandHostProvider } from "./commands/context";
+import { SlideRail } from "./slide-rail";
 import { shortcutLabel } from "./commands/keys";
 import type { CommandHost } from "./commands/types";
 import { downloadProject } from "@/features/files/download";
-import { storyDiagram } from "./store/editor-store";
+import { dockOf, topDiagram } from "./store/editor-store";
 
 // Heavy and only needed once opened: loaded on demand, not with the editor.
 const ExportDialog = dynamic(
@@ -84,7 +89,10 @@ function ShellBody() {
   const clock = useEditorClock();
   const host = useEditorHost();
   const openViewer = useOpenViewer();
+  // A Script window of this diagram reads its words from here, and keeps its recordings here.
+  useScriptWindow(store, host.id);
   const panels = useEditor((s) => s.panels);
+  const deckRoot = useEditor((s) => s.deckRoot);
   const leftTab = useEditor((s) => s.leftTab);
   const dialog = useEditor((s) => s.dialog);
   const showMinimap = useEditor((s) => s.showMinimap);
@@ -108,22 +116,35 @@ function ShellBody() {
       },
       nextScene: (direction: 1 | -1) => {
         const state = store.getState();
-        const scenes = storyDiagram(state.files).scenes.map((s) => s.name);
+        const top = topDiagram(state.files, state.root);
+        // With the Story dock showing, the arrows step through the story's beats (D-86).
+        if (dockOf(state) === "story") {
+          const story = top.stories.find((s) => s.name === state.story?.story) ?? top.stories[0];
+          if (story === undefined) return;
+          const ends = [-1, ...beatsOf(story).map((beat) => beat.first + beat.steps.length - 1)];
+          const at = state.story?.story === story.name ? state.story.index : -1;
+          const index =
+            direction === 1
+              ? (ends.find((end) => end > at) ?? ends.at(-1) ?? -1)
+              : ([...ends].reverse().find((end) => end < at) ?? -1);
+          state.setStory({ story: story.name, index }, clock.time());
+          return;
+        }
+        const scenes = top.scenes.map((s) => s.name);
         state.setScene(stepScene(scenes, state.scene, direction), clock.time());
       },
       goToScene: (scene: string | null) => store.getState().setScene(scene, clock.time()),
-      preview: () => {
-        const { levelPath, scene } = store.getState();
-        void openViewer(deepLinkQuery({ level: levelPath, scene }));
-      },
-      present: () => {
-        const { levelPath, scene } = store.getState();
-        const query = deepLinkQuery({ level: levelPath, scene });
-        void openViewer(`${query.length > 0 ? `${query}&` : "?"}present=1`);
-      },
+      preview: () => void openViewer(viewerQuery(store.getState())),
+      present: () => void openViewer(viewerQuery(store.getState(), { present: true })),
       togglePlay: () => {
         const state = store.getState();
-        if (storyDiagram(state.files).scenes.length === 0) {
+        if (dockOf(state) === "story") {
+          if (topDiagram(state.files, state.root).stories.length > 0)
+            state.setPlaying(!state.playing);
+          else state.notify("Start a story first: its beats are what plays.");
+          return;
+        }
+        if (topDiagram(state.files, state.root).scenes.length === 0) {
           state.notify("Add a scene first: scenes are the moments you play through.");
           return;
         }
@@ -173,6 +194,25 @@ function ShellBody() {
         <EditorCanvas />
 
         <div className="pointer-events-none absolute inset-0 z-10">
+          {/* Part of the canvas: first, so every panel and bar is drawn over it. */}
+          <EmptyCanvasHint
+            libraryOpen={panels.library}
+            // In the canvas that's showing: between the panels, not behind them.
+            className={cn(
+              deckRoot !== null
+                ? panels.library
+                  ? "md:left-clear-deck-library"
+                  : "md:left-clear-deck-rail"
+                : panels.library
+                  ? "md:left-clear-library"
+                  : "md:left-0",
+              rightPanel === null
+                ? "md:right-0"
+                : rightPanel === "code"
+                  ? "md:right-clear-code xl:right-clear-code-xl"
+                  : "md:right-clear-right",
+            )}
+          />
           {/* Top row */}
           {/* As wide as the library below it, so the left column lines up (when it's open). */}
           <div
@@ -195,7 +235,13 @@ function ShellBody() {
           <div
             className={cn(
               "pointer-events-none absolute top-16 flex flex-col items-center gap-2 max-md:inset-x-2 max-md:top-[60px]",
-              panels.library ? "md:left-clear-library" : "md:left-clear-pill",
+              deckRoot !== null
+                ? panels.library
+                  ? "md:left-clear-deck-library"
+                  : "md:left-clear-deck-rail"
+                : panels.library
+                  ? "md:left-clear-library"
+                  : "md:left-clear-pill",
               rightPanel === null
                 ? "md:right-clear-pill"
                 : rightPanel === "code"
@@ -214,9 +260,25 @@ function ShellBody() {
           </div>
 
           {/* Side panels (bottom sheets on phones) */}
+          {deckRoot !== null ? (
+            <aside className="pointer-events-auto absolute bottom-3 left-3 top-16 hidden w-panel-deck-rail md:block">
+              <SlideRail />
+            </aside>
+          ) : null}
+
+          {/* Side panels (bottom sheets on phones) */}
           {panels.library ? (
-            <aside className="pointer-events-auto absolute bottom-3 left-3 top-16 w-panel-library max-md:inset-x-2 max-md:bottom-2 max-md:top-auto max-md:h-[62dvh] max-md:w-auto">
-              {leftTab === "assistant" ? (
+            <aside
+              className={cn(
+                "pointer-events-auto absolute bottom-3 top-16 w-panel-library max-md:inset-x-2 max-md:bottom-2 max-md:top-auto max-md:h-[62dvh] max-md:w-auto",
+                deckRoot !== null ? "left-clear-deck-rail" : "left-3",
+              )}
+            >
+              {leftTab === "deck" ? (
+                <div className="h-full md:hidden">
+                  <SlideRail onClose={() => store.getState().togglePanel("library", false)} />
+                </div>
+              ) : leftTab === "assistant" ? (
                 <AssistantPanel onClose={() => store.getState().togglePanel("library", false)} />
               ) : leftTab === "concepts" ? (
                 <ConceptsPanel onClose={() => store.getState().togglePanel("library", false)} />
@@ -225,7 +287,12 @@ function ShellBody() {
               )}
             </aside>
           ) : (
-            <div className="pointer-events-auto absolute left-3 top-16 max-md:hidden">
+            <div
+              className={cn(
+                "pointer-events-auto absolute top-16 max-md:hidden",
+                deckRoot !== null ? "left-clear-deck-rail" : "left-3",
+              )}
+            >
               <Panel shape="pill" className="flex flex-col gap-1 p-1">
                 <IconButton
                   label="Show library"
@@ -291,11 +358,17 @@ function ShellBody() {
           )}
 
           {/* Bottom: zoom, scenes and (below lg) tools, centred in the space the panels leave */}
-          {/* With the library open on tablets the zoom buttons give way to the tools (pinch still zooms). */}
+          {/* With the library or a deck's slides open on tablets the zoom buttons give way to the tools (pinch still zooms). */}
           <div
             className={cn(
               "pointer-events-auto absolute bottom-3 flex flex-col items-start gap-2 max-md:hidden",
-              panels.library ? "left-clear-library max-lg:hidden" : "left-3",
+              deckRoot !== null
+                ? panels.library
+                  ? "left-clear-deck-library max-lg:hidden"
+                  : "left-clear-deck-rail max-lg:hidden"
+                : panels.library
+                  ? "left-clear-library max-lg:hidden"
+                  : "left-3",
             )}
           >
             {showMinimap ? <Minimap /> : null}
@@ -305,9 +378,13 @@ function ShellBody() {
             className={cn(
               "absolute bottom-3 flex flex-col items-center gap-2 max-md:inset-x-2 max-md:bottom-2",
               // Clear of the zoom controls on the left and the open panel on the right.
-              panels.library
-                ? "md:left-clear-library lg:left-[calc(var(--spacing-clear-library)+var(--spacing-clear-zoom))]"
-                : "md:left-[calc(12px+var(--spacing-clear-zoom))]",
+              deckRoot !== null
+                ? panels.library
+                  ? "md:left-clear-deck-library lg:left-[calc(var(--spacing-clear-deck-library)+var(--spacing-clear-zoom))]"
+                  : "md:left-clear-deck-rail lg:left-[calc(var(--spacing-clear-deck-rail)+var(--spacing-clear-zoom))]"
+                : panels.library
+                  ? "md:left-clear-library lg:left-[calc(var(--spacing-clear-library)+var(--spacing-clear-zoom))]"
+                  : "md:left-[calc(12px+var(--spacing-clear-zoom))]",
               rightPanel === null
                 ? "md:right-clear-pill"
                 : rightPanel === "code"
@@ -321,6 +398,15 @@ function ShellBody() {
             </div>
             <div className="pointer-events-auto flex max-w-full items-center gap-2 lg:hidden">
               <Panel shape="pill" className="p-1 md:hidden">
+                {deckRoot !== null ? (
+                  <IconButton
+                    label="Slides"
+                    shape="round"
+                    onClick={() => store.getState().showLeft("deck")}
+                  >
+                    <Layers />
+                  </IconButton>
+                ) : null}
                 <IconButton
                   label="Library"
                   shape="round"
@@ -341,8 +427,6 @@ function ShellBody() {
               </Panel>
             </div>
           </div>
-
-          <EmptyCanvasHint libraryOpen={panels.library} />
         </div>
 
         <BusyOverlay />
@@ -373,7 +457,7 @@ function SceneStripDock() {
   const layout = useLayout(diagram);
   const routes = useRoutes(diagram, layout);
   const theme = useMemo(() => resolveTheme(diagram.settings), [diagram.settings]);
-  return <SceneStrip layout={layout} routes={routes} theme={theme} />;
+  return <Dock layout={layout} routes={routes} theme={theme} />;
 }
 
 /** Store messages become toasts (errors in rose, everything else neutral). */
@@ -516,35 +600,64 @@ function YamlErrorBanner() {
 }
 
 /** A blank canvas explains how to start (ED-2). */
-function EmptyCanvasHint({ libraryOpen }: { libraryOpen: boolean }) {
+function EmptyCanvasHint({ libraryOpen, className }: { libraryOpen: boolean; className: string }) {
   const store = useEditorStore();
   const empty = useIsEmptyDiagram();
+  const diagram = useEditor((s) => s.parsed().diagram);
+  const camera = useEditor((s) => s.camera);
+  const layout = useLayout(diagram);
   if (!empty) return null;
-  return (
-    <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-6">
-      <div className="pointer-events-auto flex max-w-sm flex-col items-center text-center animate-fade-in">
-        <span className="mb-4 flex size-14 items-center justify-center rounded-full border border-border bg-surface text-fg-secondary [&_svg]:size-6">
+  // A diagram with a page (a slide) has a middle of its own: the words sit there, and move with
+  // it. Without one they sit in the middle of the canvas that's showing, between the panels.
+  const page = layout.page;
+  const middle =
+    page === null ? null : toScreen(camera, { x: page.x + page.w / 2, y: page.y + page.h / 2 });
+  const words = (
+    <div className="flex w-max max-w-sm flex-col items-center text-center animate-fade-in">
+      <span className="mb-4 flex size-14 items-center justify-center rounded-full border border-border bg-surface text-fg-secondary [&_svg]:size-6">
+        <Shapes />
+      </span>
+      <p className="font-display text-body-lg font-medium tracking-snug text-fg">
+        Start with a component
+      </p>
+      <p className="mt-1 text-body-sm text-fg-muted">
+        Drag an icon from the library onto the canvas, or click one to add it. Then press C to
+        connect things.
+      </p>
+      {!libraryOpen ? (
+        <Button
+          variant="secondary"
+          size="sm"
+          className="pointer-events-auto mt-4"
+          onClick={() => store.getState().togglePanel("library", true)}
+        >
           <Shapes />
-        </span>
-        <p className="font-display text-body-lg font-medium tracking-snug text-fg">
-          Start with a component
-        </p>
-        <p className="mt-1 text-body-sm text-fg-muted">
-          Drag an icon from the library onto the canvas, or click one to add it. Then press C to
-          connect things.
-        </p>
-        {!libraryOpen ? (
-          <Button
-            variant="secondary"
-            size="sm"
-            className="mt-4"
-            onClick={() => store.getState().togglePanel("library", true)}
-          >
-            <Shapes />
-            Open the library
-          </Button>
-        ) : null}
+          Open the library
+        </Button>
+      ) : null}
+    </div>
+  );
+  // Words over the canvas, not in its way: something dragged from the library lands on the
+  // canvas wherever it's dropped, on the words too. Only the button takes the pointer.
+  if (middle !== null)
+    return (
+      <div
+        className="pointer-events-none absolute -translate-x-1/2 -translate-y-1/2"
+        style={{ left: middle.x, top: middle.y }}
+        data-testid="empty-canvas-hint"
+      >
+        {words}
       </div>
+    );
+  return (
+    <div
+      className={cn(
+        "pointer-events-none absolute inset-y-0 left-0 right-0 flex items-center justify-center p-6",
+        className,
+      )}
+      data-testid="empty-canvas-hint"
+    >
+      {words}
     </div>
   );
 }

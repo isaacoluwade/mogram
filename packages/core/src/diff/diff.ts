@@ -19,6 +19,7 @@ export type ChangedThing =
   | "connection"
   | "note"
   | "scene"
+  | "story"
   | "tour"
   | "settings"
   | "style"
@@ -251,6 +252,14 @@ export function diffDiagrams(before: Diagram, after: Diagram, folder = after.fol
   compareMaps(
     out,
     folder,
+    byName(before.stories),
+    byName(after.stories),
+    () => "story",
+    (s) => s.label,
+  );
+  compareMaps(
+    out,
+    folder,
     byName(before.tours),
     byName(after.tours),
     () => "tour",
@@ -264,7 +273,10 @@ export function diffDiagrams(before: Diagram, after: Diagram, folder = after.fol
     () => "style",
     (s) => s.name,
   );
-  const settings = changedFields(before.settings, after.settings);
+  // Whether the theme is written or only the default isn't a change anyone made.
+  const settings = changedFields(before.settings, after.settings).filter(
+    (field) => field !== "themeSet",
+  );
   if (settings.length > 0)
     out.push({
       folder,

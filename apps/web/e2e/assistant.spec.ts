@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { openDraft, openYaml, shot, yaml } from "./support";
+import { openDraft, openProject, openYaml, shot, yaml } from "./support";
 
 /**
  * The assistant (A4), against the scripted provider the dev server runs with
@@ -181,5 +181,43 @@ test.describe("assistant", () => {
     await expect(page.getByTestId("editor-canvas")).toBeVisible();
     await page.keyboard.press("ControlOrMeta+j");
     await expect(page.getByTestId("assistant-reply")).toHaveCount(1);
+  });
+
+  test("builds a deck: adds a slide and gives its beat words (D-107)", async ({ page }) => {
+    await openProject(
+      page,
+      {
+        "mogram.yaml": "mogram: 1\nname: Course\ndeck:\n  slides: [intro]\n",
+        "intro/mogram.yaml":
+          "mogram: 1\nname: Introduction\nshapes:\n  hello: { label: Hello }\nlayout:\n  hello: [20, 20]\n",
+        "flow/mogram.yaml": `mogram: 1
+name: The flow
+shapes:
+  door: { label: Front door }
+stories:
+  main:
+    - say: Something happens.
+layout:
+  door: [20, 20]
+`,
+      },
+      { allowEmptyRoot: true },
+    );
+    const panel = await openAssistant(page);
+    await ask(page, "Add a slide for the flow");
+    await expect(lastReply(page)).toHaveAttribute("data-status", "done");
+    await expect(lastReply(page)).toContainText("Added a slide, How it flows");
+    const rail = page.getByTestId("slide-rail");
+    await expect(rail.getByRole("button", { name: "Slide 2: How it flows" })).toBeVisible();
+    // The beat has the words it was given, caption and script.
+    await rail.getByRole("button", { name: "Slide 2: How it flows" }).click();
+    // A slide opens on its story: nothing to switch to.
+    await page.getByRole("button", { name: "Beat 1: A request arrives." }).click();
+    await expect(page.getByLabel("Script", { exact: true })).toHaveValue(
+      "Everything starts when a request arrives at the front door.",
+    );
+    // One step to undo, the slide and the words together.
+    await panel.getByTestId("change-card").getByRole("button", { name: "Undo" }).click();
+    await expect(rail.getByRole("button", { name: "Slide 2: How it flows" })).toHaveCount(0);
   });
 });

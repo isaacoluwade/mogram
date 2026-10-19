@@ -23,6 +23,7 @@ import {
   type Box,
   type LayoutResult,
   type Point,
+  isPlaced,
 } from "@mogram/core/layout";
 import { toWorld, wheelZoomFactor, zoomAt } from "@/features/canvas/camera";
 import {
@@ -38,11 +39,13 @@ import {
   isResizable,
   minimumSize,
   openQuickAdd,
+  placeAt,
   relativeTo,
   spotBeside,
   topLevelSelection,
 } from "../actions";
 import { openNested } from "../levels";
+import { showInspectorSection } from "../inspector/show-section";
 import type { EditorStore } from "../store/editor-store";
 import {
   beginHandleDrag,
@@ -230,6 +233,8 @@ export function useCanvasGestures(
       .filter((box) => box !== undefined);
     const parentBox = parent === null ? undefined : layout.elements.get(parent)?.box;
     if (parentBox !== undefined) neighbours.push(parentBox);
+    // The page's edges and centre lines are things to line up with too (D-98).
+    if (layout.page !== null) neighbours.push(layout.page);
     const boxes = names.map(drawn).filter((box) => box !== undefined);
     const bounds =
       boxes.length === 0
@@ -337,6 +342,32 @@ export function useCanvasGestures(
     const { dx, dy } = offset;
     const target = containerAt(layout, world, new Set(names));
     if (dx === 0 && dy === 0 && sameParents(layout, names, target)) return;
+    // What a layout places (D-87) has no position of its own: it goes into the container it's
+    // dropped in, if that arranges its contents, or onto the element it's dropped on.
+    const diagram = store.getState().diagram();
+    if (!clone && names.every((name) => isPlaced(diagram, name))) {
+      const moving = new Set(names);
+      const into =
+        target !== null && diagram.containers.get(target)?.layout != null ? target : null;
+      const onto =
+        into !== null
+          ? null
+          : ([...layout.elements.values()]
+              .filter((element) => element.kind === "component" && !moving.has(element.name))
+              .reverse()
+              .find((element) => {
+                const box = layout.tiles.get(element.name) ?? element.box;
+                return (
+                  world.x >= box.x &&
+                  world.x <= box.x + box.w &&
+                  world.y >= box.y &&
+                  world.y <= box.y + box.h
+                );
+              })?.name ?? null);
+      if (into !== null) placeAt(store, names, { in: into });
+      else if (onto !== null) placeAt(store, names, { on: onto });
+      return;
+    }
     const moves: Move[] = names.flatMap((name) => {
       const element = layout.elements.get(name);
       if (element === undefined) return [];
@@ -1013,6 +1044,11 @@ export function useCanvasGestures(
     }
     if (hit.kind === "component" && openNested(store, hit.name)) return;
     state.select([hit.name]);
+    // A listing or a picture has no label to type in: its own section of the inspector opens.
+    const component =
+      hit.kind === "component" ? state.parsed().diagram.components.get(hit.name) : undefined;
+    if (component?.code != null) return showInspectorSection(store, "code");
+    if (component?.image != null) return showInspectorSection(store, "image");
     state.setEditingLabel(hit.name);
   };
 

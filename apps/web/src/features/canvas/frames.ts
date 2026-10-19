@@ -17,8 +17,8 @@ import { tone, type CanvasTheme } from "./theme";
  * (called every frame) and static rendering (thumbnails, export), so both always match.
  */
 
-export function progressAt(t: number, transitionStart: number | null): number {
-  return transitionStart === null ? 1 : transitionProgress(t, transitionStart);
+export function progressAt(t: number, transitionStart: number | null, seconds?: number): number {
+  return transitionStart === null ? 1 : transitionProgress(t, transitionStart, seconds);
 }
 
 export interface ComponentFrame {

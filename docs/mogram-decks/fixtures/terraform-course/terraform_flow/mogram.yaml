@@ -1,0 +1,79 @@
+# One diagram shown on two slides: up to "applied", then on from it after other slides.
+# (P0: a story in a subfolder.  P2: a stretch, carrying on.  P6: script.  P7: voice)
+mogram: 1
+name: How does Terraform reach Azure?
+containers:
+  laptop: { label: Your laptop }
+  azure: { type: account, label: Your Azure subscription }
+  rg: { type: resource-group, label: tfcourse-dev-eus-rg, in: azure, show: hidden }
+components:
+  you: { type: generic/user, label: You }
+  code: { type: generic/file, label: main.tf, in: laptop }
+  terraform: { type: tool/terraform, label: Terraform, in: laptop }
+  state: { type: generic/database, label: State, in: laptop, show: hidden }
+  provider: { type: generic/api, label: azurerm provider }
+  storage: { type: azure/storage-accounts, label: Storage account, in: rg, show: hidden }
+  portal: { type: azure/management-portal, label: Someone in the portal, show: hidden }
+shapes:
+  plan: { shape: document, label: "Plan: 2 to add", tone: violet, in: laptop, show: hidden }
+connections:
+  you_to_code: { from: you, to: code, label: writes }
+  code_to_tf: { from: code, to: terraform }
+  tf_to_provider: { from: terraform, to: provider }
+  provider_to_azure: { from: provider, to: azure, label: Azure API }
+  tf_to_plan: { from: terraform, to: plan, line: dashed, show: hidden }
+  tf_to_state: { from: terraform, to: state, show: hidden }
+  portal_to_storage: { from: portal, to: storage, line: dashed, show: hidden }
+stories:
+  main:
+    - say: You describe the result, not the steps.
+      script: |
+        So you describe what you want in a file. Not the steps to get there. Just the result.
+      set: { you_to_code: traffic }
+      focus: [you, code, you_to_code]
+    - say: Terraform reads the file and asks Azure what exists.
+      script: |
+        Terraform reads that file, and then it asks Azure what actually exists right now.
+      set: { you_to_code: idle, code_to_tf: traffic, tf_to_provider: traffic, provider_to_azure: traffic }
+    - say: The plan is the difference.
+      script: |
+        And the plan is just the difference between those two things. Nothing has been touched yet.
+      set: { code_to_tf: idle, tf_to_provider: idle, provider_to_azure: idle, plan: shown, tf_to_plan: shown }
+      focus: [plan, terraform, tf_to_plan]
+    - say: Apply does exactly what the plan said.
+      script: |
+        Then you say yes, and apply does exactly what the plan said. A resource group, and then a storage account inside it.
+      pace: slow
+      set: { tf_to_provider: traffic, provider_to_azure: traffic, rg: shown }
+    - set: { storage: shown }
+    - name: applied
+      set: { rg: { mark: check }, storage: { mark: check }, plan: { label: Applied, tone: green } }
+    - say: Terraform writes down what it made. That is state.
+      script: |
+        And then Terraform writes down what it made. That's state.
+      set: { tf_to_provider: idle, provider_to_azure: idle, state: shown, tf_to_state: { show: shown, flow: traffic } }
+      focus: [terraform, state, tf_to_state]
+    - say: Someone changes the storage account by hand.
+      script: |
+        Now a week later, somebody changes that storage account by hand, in the portal.
+      set: { tf_to_state: idle, portal: shown, portal_to_storage: { show: shown, flow: traffic }, storage: { mark: warn, label: Storage account (changed) } }
+      focus: [portal, storage, portal_to_storage]
+    - say: The next plan notices.
+      script: |
+        And the next plan notices, because it compares all three. The code, the state, and what's really there.
+      set: { portal_to_storage: idle, code_to_tf: traffic, tf_to_provider: traffic, provider_to_azure: traffic, tf_to_state: traffic, plan: { label: "Plan: 1 to change", tone: amber } }
+      focus: [plan, storage, terraform, state]
+layout:
+  you: [28, 46]
+  laptop: { at: [50, 38], size: [46, 44] }
+  code: [4, 8]
+  terraform: [28, 8]
+  state: [28, 28]
+  plan: { at: [3, 30], size: [18, 9] }
+  provider: [106, 46]
+  azure: { at: [130, 38], size: [46, 44] }
+  rg: { at: [5, 9], size: [36, 28] }
+  storage: [12, 8]
+  portal: [147, 88]
+  decorations:
+    title: { text: How does Terraform reach Azure?, style: title, font_size: 56, at: [12, 10] }

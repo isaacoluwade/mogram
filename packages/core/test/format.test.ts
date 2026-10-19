@@ -103,6 +103,7 @@ components:
     expect(root.diagram.connections.get("gateway_to_aks")?.to).toEqual({
       element: "aks",
       port: "web",
+      part: null,
     });
 
     const nested = parseDiagram(files, "aks");

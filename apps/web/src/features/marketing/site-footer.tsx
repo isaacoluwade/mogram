@@ -9,6 +9,7 @@ const COLUMNS: readonly { title: string; links: readonly { href: string; label: 
       { href: "/diagrams", label: "Your diagrams" },
       { href: "/draft/new?template=blank", label: "Blank canvas" },
       { href: "/#templates", label: "Templates" },
+      { href: "/prompter", label: "Prompter" },
     ],
   },
   {

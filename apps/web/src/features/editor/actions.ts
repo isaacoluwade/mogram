@@ -14,11 +14,14 @@ import {
   isMogramSnippet,
   moveElements,
   pasteSnippet,
+  placeElements,
   planZOrder,
   readStyle,
+  newSlideFolder,
   reorderZ,
   resizeElement,
   setConcept,
+  setEntries,
   setFlowValue,
   setLocked,
   setSceneCapacity,
@@ -28,6 +31,8 @@ import {
   type CopiedStyle,
   type EditResult,
   type Move,
+  type SceneValue,
+  type SetRef,
   type ZOrderMove,
 } from "@mogram/core/edit";
 import {
@@ -42,7 +47,8 @@ import {
   type LayoutResult,
   type Point,
 } from "@mogram/core/layout";
-import type { Diagram, ProjectFiles, SceneEntry, Tone } from "@mogram/core/model";
+import type { Diagram, Place, ProjectFiles, SceneEntry, Tone } from "@mogram/core/model";
+import { toName } from "@mogram/core/model";
 import { applyConcept, insertConcept, type ConceptBindings } from "@mogram/core/concepts";
 import { routeConnections } from "@mogram/core/routing";
 import {
@@ -65,12 +71,146 @@ import {
   PHONE_MIN_ZOOM,
   PHONE_WIDTH,
   zoomAt,
+  toWorld,
   type Camera,
   nextZoomStep,
 } from "@/features/canvas/camera";
 import { STUB_ROOM } from "@/features/canvas/svg/stubs";
-import { clearOf, PANEL } from "./panel-sizes";
-import { parseCached, sceneTarget, storyDiagram, type EditorStore } from "./store/editor-store";
+import { clearDeckLibrary, clearDeckRail, clearOf, PANEL } from "./panel-sizes";
+import {
+  parseCached,
+  sceneTarget,
+  storyCursor,
+  topDiagram,
+  type EditorStore,
+} from "./store/editor-store";
+import { pictureAt, type StepRef } from "@mogram/core/picture";
+import { mediaTypeForPath, pageSize } from "@mogram/core/presets";
+import { parseDiagram } from "@mogram/core/format";
+import { importMedia } from "@/features/assets/import";
+import { preparePicture } from "@/features/assets/pictures";
+
+/**
+ * A picture chosen, dropped or pasted (D-102): kept in this browser and written into the
+ * project under `images/` by its own name. The same picture already there is used again.
+ * Returns the edit that writes it and its path from the diagram's folder.
+ */
+async function pictureFile(
+  store: EditorStore,
+  file: File,
+): Promise<{ readonly src: string; readonly write: (files: ProjectFiles) => ProjectFiles }> {
+  const type = mediaTypeForPath(file.name);
+  if (type === undefined || !type.startsWith("image/"))
+    throw new Error("Choose a PNG, JPEG, WebP or GIF picture.");
+  const text = await importMedia(file.name, new Uint8Array(await file.arrayBuffer()));
+  await preparePicture(text);
+  const { files, folder } = store.getState();
+  const inFolder = (path: string) => (folder === "" ? path : `${folder}/${path}`);
+  const existing = Object.keys(files).find(
+    (path) => files[path] === text && (folder === "" || path.startsWith(`${folder}/`)),
+  );
+  if (existing !== undefined)
+    return {
+      src: existing.slice(folder === "" ? 0 : folder.length + 1),
+      write: (current) => current,
+    };
+  const extension = file.name.split(".").at(-1)?.toLowerCase() ?? "png";
+  const stem = toName(file.name.replace(/\.[^.]+$/, ""), "picture").replace(/_/g, "-");
+  let src = `images/${stem}.${extension}`;
+  for (let n = 2; files[inFolder(src)] !== undefined; n++) src = `images/${stem}-${n}.${extension}`;
+  return { src, write: (current) => ({ ...current, [inFolder(src)]: text }) };
+}
+
+/** Adds a picture as an image element where it landed (the middle of the view unless said). */
+export async function addImageFile(
+  store: EditorStore,
+  file: File,
+  at: Point | null = null,
+): Promise<void> {
+  const picture = await pictureFile(store, file);
+  const state = store.getState();
+  const point =
+    at ?? toWorld(state.camera, { x: state.viewport.width / 2, y: state.viewport.height / 2 });
+  state.edit("Add picture", (files, diagram) =>
+    addShape(picture.write(files), diagram, {
+      shape: "image",
+      label: "",
+      src: picture.src,
+      at: { x: Math.round(point.x / 8), y: Math.round(point.y / 8) },
+    }),
+  );
+}
+
+/**
+ * "Pictures…" in a deck's rail (D-100): one new slide for each picture, the picture filling the
+ * page, in the order chosen, starting at `at` in the deck's list. One undo step for them all.
+ */
+export async function addPictureSlides(
+  store: EditorStore,
+  chosen: readonly File[],
+  at: number,
+): Promise<void> {
+  const deckRoot = store.getState().deckRoot;
+  if (deckRoot === null) return;
+  // Every picture is kept first; the slides are then one edit.
+  const pictures: { readonly name: string; readonly text: string; readonly extension: string }[] =
+    [];
+  for (const file of chosen) {
+    const type = mediaTypeForPath(file.name);
+    if (type === undefined || !type.startsWith("image/"))
+      throw new Error(`${file.name} isn't a PNG, JPEG, WebP or GIF picture.`);
+    const text = await importMedia(file.name, new Uint8Array(await file.arrayBuffer()));
+    await preparePicture(text);
+    pictures.push({
+      name: file.name.replace(/\.[^.]+$/, ""),
+      text,
+      extension: file.name.split(".").at(-1)?.toLowerCase() ?? "png",
+    });
+  }
+  store.getState().edit("Add picture slides", (files) => {
+    let current = files;
+    pictures.forEach((picture, offset) => {
+      const deck = parseDiagram(current, deckRoot).diagram;
+      const made = newSlideFolder(current, deck, { name: picture.name, at: at + offset });
+      const src = `picture.${picture.extension}`;
+      const withPicture = { ...made.files, [`${made.folder}/${src}`]: picture.text };
+      const slide = parseDiagram(withPicture, made.folder).diagram;
+      const added = addShape(withPicture, slide, {
+        shape: "image",
+        label: "",
+        src,
+        at: { x: 0, y: 0 },
+      });
+      // The page, whole: a picture slide is the picture.
+      const page = slide.settings.page;
+      const size = page === null ? null : pageSize(page);
+      current =
+        size === null
+          ? added.files
+          : resizeElement(added.files, parseDiagram(added.files, made.folder).diagram, {
+              name: added.select?.[0] ?? "image",
+              size,
+              at: { x: 0, y: 0 },
+            }).files;
+    });
+    return { files: current };
+  });
+  store.getState().showSlide(at);
+}
+
+/** Shows another picture in an image element, keeping its place, size and parts. */
+export async function replaceImageFile(
+  store: EditorStore,
+  name: string,
+  file: File,
+): Promise<void> {
+  const picture = await pictureFile(store, file);
+  store
+    .getState()
+    .edit("Replace picture", (files, diagram) =>
+      updateElement(picture.write(files), diagram, { name, set: { src: picture.src } }),
+    );
+}
 
 /**
  * Editor operations shared by shortcuts, menus, the toolbar and the inspector. Each one is a
@@ -897,9 +1037,45 @@ export function connect(store: EditorStore, from: string, to: string): void {
  * element inside a nested diagram by its path (`aks.checkout`, SC-10, NE-14).
  */
 function sceneSlot(store: EditorStore, files: Record<string, string>, diagram: Diagram) {
-  const { levelPath } = store.getState();
-  const story = levelPath.length === 0 ? diagram : storyDiagram(files);
+  const { levelPath, root } = store.getState();
+  const story = levelPath.length === 0 ? diagram : topDiagram(files, root);
   return { story, target: (name: string) => sceneTarget(levelPath, name) };
+}
+
+/**
+ * The set that how an element is (its state, flow, motion, numbers, presence, words) is
+ * written to (D-86): the step of the story being shown, else the scene picked. Null: nothing is
+ * picked (or the story is at its opening), so a change is to the element itself.
+ */
+export function editingSet(state: {
+  readonly story: StepRef | null;
+  readonly scene: string | null;
+}): SetRef | null {
+  if (state.story !== null) return state.story.index >= 0 ? state.story : null;
+  return state.scene;
+}
+
+/**
+ * What a change in a set is compared with, so the set only records differences: in a scene, the
+ * element's own values (`own`); at a step, how the steps before it left the element.
+ */
+function setBase(story: Diagram, set: SetRef, target: string, own: SceneValue = {}): SceneValue {
+  if (typeof set === "string") return own;
+  const before = pictureAt(story, {
+    scene: null,
+    story: storyCursor(story, { story: set.story, index: set.index - 1 }),
+  }).lines.get(target);
+  if (before === undefined) return own;
+  return {
+    ...own,
+    ...(before.state !== null ? { state: before.state } : {}),
+    ...(before.flow !== null ? { flow: before.flow } : {}),
+    ...(before.motion !== null ? { motion: before.motion } : {}),
+    ...(before.show !== undefined ? { show: before.show } : {}),
+    ...(before.label !== undefined ? { label: before.label } : {}),
+    ...(before.tone !== undefined ? { tone: before.tone } : {}),
+    ...(before.mark !== undefined ? { mark: before.mark } : {}),
+  };
 }
 
 /**
@@ -908,7 +1084,7 @@ function sceneSlot(store: EditorStore, files: Record<string, string>, diagram: D
  */
 export function setState(store: EditorStore, names: readonly string[], state: StatePreset): void {
   const s = store.getState();
-  const scene = s.scene;
+  const scene = editingSet(s);
   s.edit(scene === null ? "Set state" : "Set scene state", (files, diagram) => {
     let current = { files: { ...files }, diagram };
     for (const name of names) {
@@ -924,7 +1100,10 @@ export function setState(store: EditorStore, names: readonly string[], state: St
           scene,
           target: target(name),
           value: { state, motion: sceneEntry(story, scene, target(name))?.motion ?? null },
-          base: { state: element.state, motion: component?.motion ?? "none" },
+          base: setBase(story, scene, target(name), {
+            state: element.state,
+            motion: component?.motion ?? "none",
+          }),
         });
       }
       current = { files: result.files, diagram: reparse(store, result.files) };
@@ -935,7 +1114,7 @@ export function setState(store: EditorStore, names: readonly string[], state: St
 
 export function setFlow(store: EditorStore, names: readonly string[], flow: FlowPreset): void {
   const s = store.getState();
-  const scene = s.scene;
+  const scene = editingSet(s);
   s.edit(scene === null ? "Set flow" : "Set scene flow", (files, diagram) => {
     let current = { files: { ...files }, diagram };
     for (const name of names) {
@@ -950,7 +1129,7 @@ export function setFlow(store: EditorStore, names: readonly string[], flow: Flow
           scene,
           target: target(name),
           value: { flow },
-          base: { flow: connection.flow },
+          base: setBase(story, scene, target(name), { flow: connection.flow }),
         });
       }
       current = { files: result.files, diagram: reparse(store, result.files) };
@@ -965,7 +1144,7 @@ export function setMotion(
   motion: MotionPreset,
 ): void {
   const s = store.getState();
-  const scene = s.scene;
+  const scene = editingSet(s);
   s.edit("Set motion", (files, diagram) => {
     let current = { files: { ...files }, diagram };
     for (const name of names) {
@@ -983,7 +1162,10 @@ export function setMotion(
             state: sceneEntry(story, scene, target(name))?.state ?? component.state,
             motion,
           },
-          base: { state: component.state, motion: component.motion },
+          base: setBase(story, scene, target(name), {
+            state: component.state,
+            motion: component.motion,
+          }),
         });
       }
       current = { files: result.files, diagram: reparse(store, result.files) };
@@ -1003,7 +1185,7 @@ export function setCapacityValue(
   value: number | null,
 ): void {
   const s = store.getState();
-  const scene = s.scene;
+  const scene = editingSet(s);
   const label = { traffic: "Set traffic", share: "Set share", hit: "Set hit rate" }[key];
   s.edit(scene === null ? label : `${label} in scene`, (files, diagram) => {
     if (scene === null) {
@@ -1029,7 +1211,7 @@ export function pinCapacity(
   pin: { readonly copies: number | null } | { readonly size: string | null },
 ): void {
   const s = store.getState();
-  const scene = s.scene;
+  const scene = editingSet(s);
   if (scene === null) return;
   s.edit("copies" in pin ? "Set copies in scene" : "Set size in scene", (files, diagram) => {
     const { story, target } = sceneSlot(store, files, diagram);
@@ -1121,8 +1303,90 @@ export function insertConceptExample(
 }
 
 /** A scene's line for an element (`target` may be a nested path), or undefined. */
-export function sceneEntry(story: Diagram, scene: string, target: string): SceneEntry | undefined {
-  return story.scenes.find((s) => s.name === scene)?.entries.find((e) => e.target === target);
+/**
+ * Puts things a layout places somewhere else (D-87): in the scene picked or at the step showing
+ * it's a move recorded there; with neither, it's where they're written to be.
+ */
+export function placeAt(store: EditorStore, names: readonly string[], place: Place): void {
+  const s = store.getState();
+  const set = editingSet(s);
+  s.edit("Move", (files, diagram) => {
+    if (set === null) return placeElements(files, diagram, { names, place });
+    let current = { files: { ...files }, diagram };
+    for (const name of names) {
+      const { story, target } = sceneSlot(store, current.files, current.diagram);
+      const line = sceneEntry(story, set, target(name));
+      const result = setSceneEntry(current.files, story, {
+        scene: set,
+        target: target(name),
+        value: {
+          state: line?.state ?? null,
+          flow: line?.flow ?? null,
+          motion: line?.motion ?? null,
+          place,
+        },
+        base: {
+          state: null,
+          flow: null,
+          motion: null,
+          ...placeBefore(story, set, target(name)),
+        },
+      });
+      current = { files: result.files, diagram: reparse(store, result.files) };
+    }
+    return { files: current.files, select: names };
+  });
+}
+
+/** Where the steps before a step left something, when any of them moved it. */
+function placeBefore(story: Diagram, set: SetRef, target: string): { place?: Place } {
+  if (typeof set === "string") return {};
+  const place = pictureAt(story, {
+    scene: null,
+    story: storyCursor(story, { story: set.story, index: set.index - 1 }),
+  }).lines.get(target)?.place;
+  return place === undefined ? {} : { place };
+}
+
+/** A target's line in a set (a scene, or a step of a story), if it has one. */
+export function sceneEntry(story: Diagram, set: SetRef, target: string): SceneEntry | undefined {
+  return setEntries(story, set).find((e) => e.target === target);
+}
+
+/**
+ * Sets whether an element is there, what it says, its tone or its mark, in the scene picked or
+ * at the step shown (D-86). `null` for a key goes back to how it was before.
+ */
+export function setInSet(
+  store: EditorStore,
+  names: readonly string[],
+  value: Pick<SceneValue, "show" | "label" | "tone" | "mark">,
+  label = "Change at this step",
+): void {
+  const s = store.getState();
+  const set = editingSet(s);
+  if (set === null) return;
+  s.edit(label, (files, diagram) => {
+    let current = { files: { ...files }, diagram };
+    for (const name of names) {
+      const { story, target } = sceneSlot(store, current.files, current.diagram);
+      const line = sceneEntry(story, set, target(name));
+      const result = setSceneEntry(current.files, story, {
+        scene: set,
+        target: target(name),
+        // State, flow and motion are kept as the set has them.
+        value: {
+          state: line?.state ?? null,
+          flow: line?.flow ?? null,
+          motion: line?.motion ?? null,
+          ...value,
+        },
+        base: { ...setBase(story, set, target(name)), state: null, flow: null, motion: null },
+      });
+      current = { files: result.files, diagram: reparse(store, result.files) };
+    }
+    return { files: current.files, select: names };
+  });
 }
 
 /** Multi-element edits chain commands; each needs the diagram of the previous result. */
@@ -1135,6 +1399,15 @@ function reparse(store: EditorStore, files: Record<string, string>): Diagram {
 
 /** What fitting a level frames: its diagram, plus room for the parent's stubs when nested. */
 export function fitArea(layout: LayoutResult, nested: boolean): Box {
+  // With a page (D-98) that's what is being composed: it's framed, with a little of what's
+  // off stage around it.
+  if (layout.page !== null)
+    return {
+      x: layout.page.x - 48,
+      y: layout.page.y - 48,
+      w: layout.page.w + 96,
+      h: layout.page.h + 96,
+    };
   const base = layout.bounds.w === 0 ? { x: 0, y: 0, w: 400, h: 300 } : layout.bounds;
   const room = nested ? STUB_ROOM : 0;
   return { ...base, x: base.x - room, w: base.w + room * 2 };
@@ -1157,7 +1430,14 @@ export function fitCamera(store: EditorStore, area: Box): Camera {
         top: CANVAS_INSETS.top,
         right,
         bottom: width < 1024 ? 150 : CANVAS_INSETS.bottom,
-        left: state.panels.library ? CANVAS_INSETS.left : 24,
+        left:
+          state.deckRoot === null
+            ? state.panels.library
+              ? CANVAS_INSETS.left
+              : 24
+            : state.panels.library
+              ? clearDeckLibrary
+              : clearDeckRail,
       };
   return fitBox(area, state.viewport, {
     padding: 32,

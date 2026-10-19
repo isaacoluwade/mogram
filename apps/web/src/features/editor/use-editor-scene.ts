@@ -11,9 +11,21 @@ import { resolveAlong, resolveFor, useLayout, useRoutes } from "@/features/canva
 import { useEditor, useEditorClock, useEditorShallow, useEditorStore } from "./editor-context";
 import { useCapacity } from "@/features/canvas/capacity";
 import { useFontsVersion } from "@/features/canvas/text";
-import { levelsAlong, parseCached, shownFiles } from "./store/editor-store";
+import type { Moment } from "@mogram/core/picture";
+import {
+  currentSlide,
+  levelsAlong,
+  momentOf,
+  parseCached,
+  parseEditor,
+  shownFiles,
+  slideShown,
+  storyCursor,
+  topDiagram,
+} from "./store/editor-store";
 
-const SETTLE_MS = 700;
+/** How long after a change of picture ends its "from" side is kept, in ms. */
+const SETTLE_MARGIN = 100;
 
 /**
  * Everything the editor canvas draws: parse → layout (with gesture previews) → routes →
@@ -23,19 +35,36 @@ export function useEditorScene() {
   const state = useEditorShallow((s) => ({
     files: shownFiles(s),
     folder: s.folder,
+    deckRoot: s.deckRoot,
+    slide: s.slide,
     drag: s.drag,
     resize: s.resize,
     pathEdit: s.pathEdit,
     scene: s.scene,
-    previousScene: s.previousScene,
+    story: s.story,
+    previous: s.previous,
     transitionStart: s.transitionStart,
+    transitionSeconds: s.transitionSeconds,
     viewerEntries: s.viewerEntries,
     levelPath: s.levelPath,
+    root: s.root,
   }));
   const store = useEditorStore();
   const clock = useEditorClock();
-  const parsed = parseCached(state.files, state.folder);
+  const parsed = parseEditor(state.files, state.folder, state.deckRoot);
   const diagram = parsed.diagram;
+  // On a slide (D-100), the canvas fills in the deck's built-in values; edits never see them.
+  const slide = useMemo(
+    () =>
+      state.levelPath.length > 0
+        ? null
+        : currentSlide({ files: state.files, deckRoot: state.deckRoot, slide: state.slide }),
+    [state.files, state.deckRoot, state.slide, state.levelPath.length],
+  );
+  const shown = useMemo(
+    () => slideShown(state.files, diagram, state.deckRoot, slide),
+    [state.files, diagram, state.deckRoot, slide],
+  );
 
   const overrides = useMemo<LayoutOverrides>(() => {
     if (state.drag !== null) {
@@ -92,7 +121,9 @@ export function useEditorScene() {
     ...(settled !== null ? { follow: settled } : {}),
   });
 
-  // Inside a nested diagram, the top diagram's scene reaches this level as it does in the viewer.
+  // Inside a nested diagram, the top diagram's scene and story reach this level as they do in
+  // the viewer.
+  const moment = useEditorMoment();
   const current = useMemo(
     () =>
       resolveLevelShared(
@@ -100,76 +131,128 @@ export function useEditorScene() {
         state.levelPath,
         state.folder,
         diagram,
-        state.scene,
+        moment,
         state.viewerEntries,
+        state.root,
       ),
-    [state.files, state.levelPath, state.folder, diagram, state.scene, state.viewerEntries],
+    [state.files, state.levelPath, state.folder, state.root, diagram, moment, state.viewerEntries],
   );
   const previous = useMemo(
     () =>
-      state.transitionStart === null
+      state.transitionStart === null || state.previous === null
         ? null
         : resolveLevel(
             state.files,
             state.levelPath,
             state.folder,
             diagram,
-            state.previousScene,
+            state.previous,
             [],
+            state.root,
           ),
     [
       state.files,
       state.levelPath,
       state.folder,
+      state.root,
       diagram,
-      state.previousScene,
+      state.previous,
       state.transitionStart,
     ],
   );
   const theme = useMemo(() => resolveTheme(diagram.settings), [diagram.settings]);
+  // The deck's frame (D-99), drawn under a slide that has it, dressed for this slide.
+  const frameDiagram = useMemo(() => {
+    if (slide === null || !slide.frame || state.deckRoot === null) return null;
+    const frame = parseCached(state.files, state.deckRoot).diagram.settings.deck?.frame;
+    if (frame == null) return null;
+    return slideShown(state.files, parseCached(state.files, frame).diagram, state.deckRoot, slide);
+  }, [state.files, state.deckRoot, slide]);
+  const frameLayout = useLayout(frameDiagram ?? diagram);
+  const frameRoutes = useRoutes(frameDiagram ?? diagram, frameLayout);
+  // What a layout places follows the pointer while it's dragged (D-87).
+  const dragged = useMemo(
+    () =>
+      state.drag === null
+        ? undefined
+        : { names: new Set(state.drag.names), dx: state.drag.dx, dy: state.drag.dy },
+    [state.drag],
+  );
   // Text measured before the fonts loaded is measured again once they have.
   const fonts = useFontsVersion();
   const scene: SceneModel = useMemo(
     () =>
       buildScene({
-        diagram,
+        diagram: shown,
         files: state.files,
         layout,
         routes,
         current,
         previous,
         transitionStart: state.transitionStart,
+        transitionSeconds: state.transitionSeconds,
+        // What's hidden is drawn faintly, so it can still be selected and edited.
+        ghosts: true,
+        ...(dragged !== undefined ? { dragged } : {}),
         theme,
         fontFamily: "Inter",
         fontsVersion: fonts,
         ...(labelPlaces !== undefined ? { labelPlaces } : {}),
       }),
     [
-      diagram,
+      shown,
       state.files,
       layout,
       routes,
       current,
       previous,
       state.transitionStart,
+      state.transitionSeconds,
       theme,
       fonts,
       labelPlaces,
+      dragged,
     ],
   );
+  const frameScene = useMemo(() => {
+    if (frameDiagram === null) return null;
+    return buildScene({
+      diagram: frameDiagram,
+      files: state.files,
+      layout: frameLayout,
+      routes: frameRoutes,
+      current: resolveFor(state.files, frameDiagram.folder, frameDiagram, null),
+      theme: resolveTheme(frameDiagram.settings),
+      fontFamily: "Inter",
+      fontsVersion: fonts,
+    });
+  }, [frameDiagram, state.files, frameLayout, frameRoutes, fonts]);
 
   // Once a scene change has finished animating, drop the "from" state so nothing keeps ticking.
   useEffect(() => {
     if (state.transitionStart === null) return;
-    const remaining = Math.max(0, SETTLE_MS - (clock.time() - state.transitionStart) * 1000);
+    const settle = state.transitionSeconds * 1000 + SETTLE_MARGIN;
+    const remaining = Math.max(0, settle - (clock.time() - state.transitionStart) * 1000);
     const timer = window.setTimeout(() => store.getState().settleTransition(), remaining);
     return () => window.clearTimeout(timer);
-  }, [state.transitionStart, clock, store]);
+  }, [state.transitionStart, state.transitionSeconds, clock, store]);
 
   // Capacity over time (D-82, D-84): copies boot and drain as the scene or a traffic pattern changes.
   const motionPaused = useEditor((s) => s.motionPaused);
   const capacity = useCapacity(diagram, current, () => clock.time(), motionPaused);
-  return { parsed, diagram, layout, routes, scene, theme, current, capacity };
+  // What a layout places is where this moment's picture has it (D-87): selection, handles and
+  // hit-testing use that layout.
+  return {
+    parsed,
+    diagram,
+    layout: scene.layout,
+    routes,
+    scene,
+    frameScene,
+    theme,
+    current,
+    capacity,
+  };
 }
 
 let shared: { readonly key: readonly unknown[]; readonly value: ResolvedState } | null = null;
@@ -187,16 +270,30 @@ function resolveLevelShared(...args: Parameters<typeof resolveLevel>): ResolvedS
   return value;
 }
 
-/** The state of the level being edited in the current scene, as the canvas shows it. */
+/** Where the editor is (its scene, and the step of the story shown), the same object until it changes. */
+export function useEditorMoment(): Moment {
+  const state = useEditorShallow((s) => ({
+    files: shownFiles(s),
+    root: s.root,
+    scene: s.scene,
+    story: s.story,
+  }));
+  return momentOf(state.scene, storyCursor(topDiagram(state.files, state.root), state.story));
+}
+
+/** The state of the level being edited at the current moment, as the canvas shows it. */
 export function useResolvedLevel(): ResolvedState {
   const state = useEditorShallow((s) => ({
     files: shownFiles(s),
+    root: s.root,
     folder: s.folder,
-    scene: s.scene,
+    deckRoot: s.deckRoot,
+    slide: s.slide,
     viewerEntries: s.viewerEntries,
     levelPath: s.levelPath,
   }));
-  const diagram = parseCached(state.files, state.folder).diagram;
+  const moment = useEditorMoment();
+  const diagram = parseEditor(state.files, state.folder, state.deckRoot).diagram;
   return useMemo(
     () =>
       resolveLevelShared(
@@ -204,26 +301,28 @@ export function useResolvedLevel(): ResolvedState {
         state.levelPath,
         state.folder,
         diagram,
-        state.scene,
+        moment,
         state.viewerEntries,
+        state.root,
       ),
-    [state, diagram],
+    [state, diagram, moment],
   );
 }
 
-/** State at the level being edited: the top diagram's scene flows down through each instance. */
+/** State at the level being edited: the top diagram's scene and story flow down through each instance. */
 export function resolveLevel(
   files: ProjectFiles,
   levelPath: readonly string[],
   folder: string,
   diagram: Diagram,
-  scene: string | null,
+  at: Moment | string | null,
   viewer: readonly SceneEntry[],
+  root: string,
 ): ResolvedState {
-  if (levelPath.length === 0) return resolveFor(files, folder, diagram, scene, viewer, null);
-  const levels = levelsAlong(files, levelPath);
+  if (levelPath.length === 0) return resolveFor(files, folder, diagram, at, viewer, null);
+  const levels = levelsAlong(files, levelPath, root);
   return (
-    resolveAlong(files, levels, scene, viewer, (path) =>
+    resolveAlong(files, levels, at, viewer, (path) =>
       path === folder ? diagram : parseCached(files, path).diagram,
     ) ?? resolveFor(files, folder, diagram, null, [], null)
   );

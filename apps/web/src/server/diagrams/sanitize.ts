@@ -1,5 +1,8 @@
 import "server-only";
 import DOMPurify from "isomorphic-dompurify";
+import { formatPointer, parsePointer } from "@mogram/core/assets";
+import { mediaTypeForPath } from "@mogram/core/presets";
+import { LIMITS, isCodeFile } from "@/lib/api/contracts";
 
 /**
  * Uploaded icons are SVG. They are always rendered as images (where scripts never
@@ -31,16 +34,35 @@ export function isThumbnailDataUrl(value: string): boolean {
  */
 export function sanitizeProjectFiles(
   files: Record<string, string>,
+  assets: ReadonlyMap<string, { readonly type: string; readonly bytes: number }> = new Map(),
 ): { files: Record<string, string> } | { error: string } {
   const out: Record<string, string> = {};
   for (const [path, content] of Object.entries(files)) {
     const lower = path.toLowerCase();
-    if (lower.endsWith(".svg")) {
+    const pointer = parsePointer(content);
+    if (pointer !== null) {
+      const stored = assets.get(pointer.hash);
+      if (
+        mediaTypeForPath(path) !== pointer.type ||
+        stored?.type !== pointer.type ||
+        stored.bytes !== pointer.bytes
+      )
+        return {
+          error: `${path} doesn't point to an asset in your account with that type and size.`,
+        };
+      if (pointer.bytes > LIMITS.assetBytes || (pointer.seconds ?? 0) > LIMITS.assetSeconds)
+        return { error: `${path} exceeds the asset limits.` };
+      out[path] = formatPointer(pointer);
+    } else if (lower.endsWith(".svg")) {
       const clean = sanitizeSvg(content);
       if (clean === null) return { error: `${path} isn't an SVG Mogram can use.` };
       out[path] = clean;
     } else if (/\.(png|jpe?g|gif|webp)$/.test(lower)) {
       if (!IMAGE_DATA_URL.test(content)) return { error: `${path} isn't a valid image.` };
+      out[path] = content;
+    } else if (isCodeFile(path)) {
+      if (new TextEncoder().encode(content).length > LIMITS.codeFileBytes)
+        return { error: `${path} is larger than 200 KB.` };
       out[path] = content;
     } else if (/\.(ya?ml|mogram|md|txt)$/.test(lower)) {
       out[path] = content;

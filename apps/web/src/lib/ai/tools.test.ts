@@ -281,6 +281,68 @@ describe("the assistant's tools", () => {
     expect(planned.ends).toBe("plan");
   });
 
+  it("writes the file a code listing shows, and nothing it can't read", () => {
+    const written = runTool(env, state, {
+      name: "write_file",
+      input: { path: "code/main.tf", content: 'resource "example" "main" {}\n' },
+    });
+    expect(written.isError).toBe(false);
+    expect(written.files["code/main.tf"]).toBe('resource "example" "main" {}\n');
+    const refused = runTool(env, state, {
+      name: "write_file",
+      input: { path: "notes/secret.bin", content: "x" },
+    });
+    expect(refused.isError).toBe(true);
+    expect(refused.content).toMatch(/code files a listing shows/);
+  });
+
+  it("builds a deck: slides, sections, stretches and a beat's words, replayed the same", () => {
+    const deck: ProjectFiles = {
+      "mogram.yaml": "mogram: 1\nname: Course\ndeck:\n  slides: [intro]\n",
+      "intro/mogram.yaml": "mogram: 1\nname: Introduction\n",
+      "flow/mogram.yaml": `mogram: 1
+name: The flow
+shapes:
+  a: { label: A }
+stories:
+  main:
+    - say: One
+      name: one
+    - say: Two
+layout:
+  a: [0, 0]
+`,
+    };
+    let current = { files: deck, folder: "intro" };
+    const run = (name: string, input: Record<string, unknown>) => {
+      const result = runTool(env, current, { name, input });
+      expect(result.isError, result.content).toBe(false);
+      const event = result.events[0];
+      // The browser replays exactly the same change.
+      if (event?.type === "op")
+        expect(applyOp(current.files, event.op).files).toEqual(result.files);
+      current = { ...current, files: result.files };
+      return result;
+    };
+    run("add_slide", { diagram: "flow", to: "one" });
+    run("add_slide", { diagram: "flow", from: "one", title: "The rest" });
+    run("add_section", { title: "How it works", before: 2 });
+    run("move_slide", { slide: 3, after: 0 });
+    run("set_slide", { slide: 1, skip: true });
+    run("set_beat_words", { folder: "flow", beat: 2, script: "And then the second." });
+    const yaml = current.files["mogram.yaml"] ?? "";
+    expect(yaml).toMatch(/- flow: \{ from: one, title: The rest, skip: true \}/);
+    expect(yaml).toContain("- section: How it works");
+    expect(current.files["flow/mogram.yaml"]).toContain("script: And then the second.");
+    run("remove_slide", { slide: 1 });
+
+    const wrong = runTool(env, current, { name: "move_slide", input: { slide: 9, after: 0 } });
+    expect(wrong.isError).toBe(true);
+    expect(wrong.content).toMatch(/There's no slide 9/);
+    const notADeck = runTool(env, state, { name: "add_slide", input: {} });
+    expect(notADeck.content).toMatch(/isn't a deck/);
+  });
+
   it("finds icons", () => {
     const found = runTool(env, state, {
       name: "search_icons",

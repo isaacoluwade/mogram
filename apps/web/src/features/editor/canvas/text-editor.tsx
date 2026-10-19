@@ -54,6 +54,7 @@ export function TextEditor({
   const finished = useRef(false);
   const name = item.name;
   const isNote = item.variant === "note";
+  const wraps = isNote || item.width != null;
 
   const save = (text: string) => {
     if (timer.current !== null) window.clearTimeout(timer.current);
@@ -205,8 +206,8 @@ export function TextEditor({
   const lines = draft.split("\n").length;
   const corner = toScreen(camera, { x: inner.x, y: inner.y });
   const zoom = camera.zoom;
-  const width = isNote ? inner.w * zoom : Math.max(inner.w * zoom, 160);
-  const height = isNote
+  const width = wraps ? inner.w * zoom : Math.max(inner.w * zoom, 160);
+  const height = wraps
     ? inner.h * zoom
     : Math.max(lines, 1) * fontSize * TEXT_LINE_HEIGHT * zoom + 2;
 
@@ -214,6 +215,11 @@ export function TextEditor({
   useLayoutEffect(() => {
     const node = field.current;
     if (node === null || isNote) return;
+    if (wraps) {
+      node.style.height = "0px";
+      node.style.height = `${Math.max(height, node.scrollHeight)}px`;
+      return;
+    }
     node.style.width = "0px";
     node.style.width = `${Math.max(width, node.scrollWidth + 8)}px`;
   });
@@ -245,7 +251,7 @@ export function TextEditor({
           toggleList();
         }
       }}
-      wrap={isNote ? "soft" : "off"}
+      wrap={wraps ? "soft" : "off"}
       className="absolute z-20 resize-none overflow-hidden border-0 bg-transparent p-0 outline-none"
       style={{
         left: corner.x,
@@ -260,7 +266,7 @@ export function TextEditor({
         textAlign: look?.align ?? "left",
         color: decorationInk(item, theme),
         caretColor: decorationInk(item, theme),
-        whiteSpace: isNote ? "pre-wrap" : "pre",
+        whiteSpace: wraps ? "pre-wrap" : "pre",
       }}
     />
   );

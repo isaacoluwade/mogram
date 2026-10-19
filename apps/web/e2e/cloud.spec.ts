@@ -3,6 +3,13 @@ import { openSection, openYaml, shot, signIn, uniqueEmail, watchErrors } from ".
 
 /** Accounts, cloud diagrams and share links (AC-3 … AC-6, SH-1 … SH-5). */
 test.describe("cloud", () => {
+  // Signing in reads the code from the development mailbox, which a production build refuses
+  // to serve (docs/security.md §2). Against one, these are skipped rather than left to fail.
+  test.skip(
+    process.env.E2E_BASE_URL !== undefined,
+    "needs the development mailbox, which a production build doesn't serve",
+  );
+
   test("sign in, create from a template, share, view signed out, then make it private", async ({
     page,
     browser,
@@ -185,7 +192,9 @@ layout:
 
     await page.goto("/diagrams");
     const card = page.getByRole("article").filter({ hasText: "Region failover" }).first();
-    await expect(card).toContainText("Private");
+    // In the account and not shared: a card says where it is only when that's somewhere else.
+    await expect(card).not.toContainText("Shared");
+    await expect(card).not.toContainText("This browser");
     await card.hover();
     await card.getByRole("button", { name: /options/ }).click();
     await page.getByRole("menuitem", { name: "Rename" }).click();

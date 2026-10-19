@@ -3,6 +3,22 @@ import type { ConceptCard } from "./types";
 
 export const CONCEPT_CATALOG: readonly ConceptCard[] = [
   {
+    "id": "blue-green-deployment",
+    "title": "Blue/green deployment",
+    "summary": "Run the new version as a full second environment, test it privately, then move all traffic with one switch. Rolling back is the same switch, as long as the database still suits both versions.",
+    "topic": "delivery",
+    "platform": "any",
+    "tags": [
+      "release",
+      "deployment",
+      "cutover",
+      "rollback",
+      "zero downtime"
+    ],
+    "kind": "explainer",
+    "parts": []
+  },
+  {
     "id": "canary",
     "title": "Canary release",
     "summary": "Release a new version to a small share of traffic. If it holds up, give it more; if it doesn't, take its share away before most people notice.",
@@ -58,6 +74,23 @@ export const CONCEPT_CATALOG: readonly ConceptCard[] = [
         "optional": false
       }
     ]
+  },
+  {
+    "id": "visibility-timeout",
+    "title": "Visibility timeout",
+    "summary": "A received message isn't deleted, only hidden from other consumers for a set time. If it hasn't been acknowledged when that time is up, it comes back and another consumer does the work again.",
+    "topic": "messaging",
+    "platform": "any",
+    "tags": [
+      "queue",
+      "lease",
+      "peek-lock",
+      "ack",
+      "redelivery",
+      "at-least-once"
+    ],
+    "kind": "explainer",
+    "parts": []
   },
   {
     "id": "load-balancing",

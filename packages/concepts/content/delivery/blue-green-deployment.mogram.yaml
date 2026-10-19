@@ -1,0 +1,83 @@
+mogram: 1
+name: Blue/green deployment
+description: Bring the new version up beside the old one, then switch everyone at once.
+concept:
+  summary: Run the new version as a full second environment, test it privately, then move all traffic with one switch. Rolling back is the same switch, as long as the database still suits both versions.
+  topic: delivery
+  tags: [release, deployment, cutover, rollback, zero downtime]
+containers:
+  blue: { label: BLUE }
+  green: { label: GREEN, show: faded }
+components:
+  users: { type: generic/users, label: Users }
+  router: { type: generic/load-balancer, label: Router }
+  v1: { type: generic/service, label: Version 1, in: blue }
+  v2: { type: generic/service, label: Version 2, in: green, show: hidden }
+  db: { type: generic/database, label: Database }
+shapes:
+  tester: { shape: person, label: Tester, show: hidden }
+  cost: { shape: rounded, label: "Capacity: 1×" }
+connections:
+  users_to_router: { from: users, to: router, flow: traffic }
+  router_to_blue: { from: router, to: v1, flow: traffic }
+  router_to_green: { from: router, to: v2 }
+  blue_to_db: { from: v1, to: db, flow: traffic }
+  green_to_db: { from: v2, to: db }
+  private_test: { from: tester, to: v2, line: dashed, show: hidden }
+stories:
+  main:
+    - say: A full copy of the new version comes up beside the old one. Nobody is using it yet.
+      set:
+        green: shown
+        v2: shown
+        cost: { label: "Capacity: 2×", tone: amber }
+    - say: Test it before anyone sees it. Every user is still on BLUE.
+      set:
+        tester: shown
+        private_test: { show: shown, flow: traffic }
+      focus: [tester, private_test, v2, green]
+    - set:
+        v2: { mark: check }
+    - say: One switch, and everyone moves at once.
+      pace: slow
+      set:
+        tester: hidden
+        router: { label: Router → GREEN }
+        router_to_blue: idle
+        blue_to_db: idle
+        router_to_green: traffic
+        green_to_db: traffic
+        v2: { state: active, mark: none }
+    - say: Version 2 starts failing. Rolling back is the same switch, and BLUE is still warm.
+      name: failing
+      set:
+        v2: degraded
+    - set:
+        router: { label: Router → BLUE }
+        router_to_green: idle
+        green_to_db: idle
+        router_to_blue: traffic
+        blue_to_db: traffic
+        v1: active
+    - say: The same again, but this release also dropped a database column that version 1 reads.
+      rewind: failing
+      set:
+        db: { label: Database (column dropped), mark: warn }
+    - say: Now the switch back lands on a BLUE that can't read its data. The database has to suit both versions.
+      set:
+        router: { label: Router → BLUE }
+        router_to_green: idle
+        green_to_db: idle
+        router_to_blue: traffic
+        blue_to_db: blocked
+        v1: down
+layout:
+  users: [0, 10]
+  router: [18, 10]
+  blue: { at: [38, 0], size: [22, 18] }
+  v1: [5, 4]
+  green: { at: [38, 22], size: [22, 18] }
+  v2: [5, 4]
+  db: [72, 14]
+  tester: [20, 30]
+  cost: [68, 32]

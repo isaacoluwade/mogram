@@ -25,6 +25,7 @@ import {
   common,
 } from "../connection-controls";
 import { CardEditor } from "./card-editor";
+import { PresenceSection } from "./presence-section";
 import { ConnectionTrafficSection } from "./capacity-section";
 import {
   Advanced,
@@ -269,6 +270,7 @@ export function ConnectionInspector({
           onCommit={(label) => set(connection.name, { label }, "Label connection")}
         />
       </InspectorSection>
+      <PresenceSection diagram={diagram} name={connection.name} />
       <InspectorSection id="ends" title="Ends">
         <FieldStack>
           <FieldRow label="From">

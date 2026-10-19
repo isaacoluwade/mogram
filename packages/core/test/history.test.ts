@@ -92,6 +92,26 @@ describe("what changed between versions", () => {
   });
 });
 
+describe("what changed in a story", () => {
+  it("counts a beat's new words as a change to its story", () => {
+    const base: ProjectFiles = {
+      "mogram.yaml":
+        "mogram: 1\nshapes:\n  a: { label: A }\nstories:\n  main:\n    - say: One\nlayout:\n  a: [0, 0]\n",
+    };
+    const after = {
+      "mogram.yaml": base["mogram.yaml"]!.replace(
+        "- say: One",
+        "- say: One\n      script: Said aloud.",
+      ),
+    };
+    const diff = diffProjects(base, after);
+    expect(diff.changes).toEqual([
+      expect.objectContaining({ thing: "story", name: "main", change: "changed" }),
+    ]);
+    expect(summarizeDiff(diff)).toBe("Changed Main");
+  });
+});
+
 describe("bringing elements back", () => {
   it("brings back a deleted element with its connections, as it was written", () => {
     const now = deleteElements(base, diagramOf(base), ["db"]).files;

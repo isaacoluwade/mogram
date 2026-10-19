@@ -1,56 +1,62 @@
 "use client";
 
-import { useDeferredValue, useRef, useState, type ReactNode } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import type { Route } from "next";
 import {
-  BookOpen,
+  ArrowDownAZ,
+  ArrowRight,
+  Clock,
+  CloudUpload,
   FileUp,
   LayoutGrid,
-  LogIn,
-  LogOut,
-  Menu as MenuIcon,
+  Layers,
+  List,
   Plus,
   Shapes,
-  ShieldCheck,
   Sparkles,
+  Trash2,
+  X,
 } from "lucide-react";
-import { toast } from "sonner";
 import { useQuery } from "@tanstack/react-query";
 import type { AssistantConfig } from "@/lib/ai/protocol";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { LogoMark, Wordmark } from "@/components/ui/logo";
-import {
-  Menu,
-  MenuContent,
-  MenuItem,
-  MenuLabel,
-  MenuSeparator,
-  MenuTrigger,
-} from "@/components/ui/menu";
+import { IconButton } from "@/components/ui/icon-button";
+import { Panel } from "@/components/ui/panel";
 import { SearchField } from "@/components/ui/search-field";
 import { SegmentedControl } from "@/components/ui/segmented-control";
-import { PageHeader, Sidebar, SidebarItem, SidebarLabel } from "@/components/ui/sidebar";
+import { PageHeader } from "@/components/ui/sidebar";
 import { Skeleton } from "@/components/ui/skeleton";
 import type { DiagramSummary } from "@/lib/api/contracts";
-import { authClient } from "@/lib/auth-client";
-import { relativeTime } from "@/lib/format";
-import { DiagramPreview } from "@/features/canvas/diagram-preview";
-import { OpenError, readProject } from "@/features/files/open";
-import { TEMPLATES, type Template } from "@/features/templates";
-import { DiagramCard } from "./diagram-card";
+import { cn } from "@/lib/cn";
+import { preference, setPreference, usePreference } from "@/lib/preferences";
+import { TEMPLATES } from "@/features/templates";
+import { AppShell, chooseFiles, type DashboardUser } from "./app-shell";
+import {
+  ContinueCard,
+  DeleteDialog,
+  DiagramCard,
+  DiagramRow,
+  type CardActions,
+} from "./diagram-card";
+import { TemplateCard } from "./template-card";
 import { useDashboard, type DashboardItem } from "./use-dashboard";
 
+export type { DashboardUser };
+
+type Kind = "all" | "diagram" | "deck";
 type Source = "all" | "cloud" | "draft";
 
-export interface DashboardUser {
-  readonly email: string;
-  readonly name: string;
-}
+const keyOf = (item: DashboardItem): string => `${item.kind}:${item.id}`;
 
-/** Your diagrams (AC-1 … AC-6), in Eden's app shell: floating sidebar, page header, card grid. */
+/** Templates the home page shows a taste of; the rest are on their own page. */
+const FEATURED = ["web-app", "failover", "aks", "aws-serverless"];
+
+/**
+ * Home (AC-1 … AC-6): ways to start, the thing worked on last, and everything there is, in
+ * Eden's app shell. What's pinned comes first, here and in the sidebar.
+ */
 export function Dashboard({
   user,
   initialCloud,
@@ -62,268 +68,434 @@ export function Dashboard({
   const dashboard = useDashboard(signedIn, initialCloud);
   const [query, setQuery] = useState("");
   const deferred = useDeferredValue(query.trim().toLowerCase());
+  const [kind, setKind] = useState<Kind>("all");
   const [source, setSource] = useState<Source>("all");
-  const upload = useRef<HTMLInputElement | null>(null);
+  const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
+  const [deleting, setDeleting] = useState(false);
+  const view = usePreference("homeView");
+  const sort = usePreference("homeSort");
+  const pins = usePreference("homePinned");
   const search = useRef<HTMLInputElement | null>(null);
-  const templates = useRef<HTMLElement | null>(null);
 
-  const visible = dashboard.items.filter(
-    (item) =>
-      (source === "all" || item.kind === source) &&
-      (deferred.length === 0 || item.name.toLowerCase().includes(deferred)),
-  );
+  const { items } = dashboard;
+  const pinned = useMemo(() => new Set(pins), [pins]);
+  const hasDecks = items.some((item) => item.about.kind === "deck");
+  const hasDiagrams = items.some((item) => item.about.kind === "diagram");
 
-  const openFiles = async (list: FileList | null) => {
-    if (list === null || list.length === 0) return;
-    try {
-      dashboard.createFromFiles(await readProject([...list]));
-    } catch (error) {
-      toast.error(error instanceof OpenError ? error.message : "Those files couldn't be opened.");
-    }
+  const visible = useMemo(() => {
+    const matching = items.filter(
+      (item) =>
+        (kind === "all" || item.about.kind === kind) &&
+        (source === "all" || item.kind === source) &&
+        (deferred === "" || item.name.toLowerCase().includes(deferred)),
+    );
+    const byOrder = (a: DashboardItem, b: DashboardItem) =>
+      sort === "name" ? a.name.localeCompare(b.name) : b.updatedAt.localeCompare(a.updatedAt);
+    // What's pinned comes first, whatever the order of the rest.
+    return matching.sort(
+      (a, b) => Number(pinned.has(keyOf(b))) - Number(pinned.has(keyOf(a))) || byOrder(a, b),
+    );
+  }, [items, kind, source, deferred, sort, pinned]);
+
+  // Only what's still there stays chosen.
+  const chosen = items.filter((item) => selected.has(keyOf(item)));
+  const chosenDrafts = chosen.filter((item) => item.kind === "draft");
+
+  // "/" goes to the search; Escape lets go of what's selected.
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const typing =
+        target !== null &&
+        (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName) || target.isContentEditable);
+      if (event.key === "/" && !typing && !event.metaKey && !event.ctrlKey) {
+        event.preventDefault();
+        search.current?.focus();
+      } else if (event.key === "Escape" && !typing) setSelected(new Set());
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const actions: CardActions = {
+    signedIn,
+    rename: dashboard.rename,
+    duplicate: dashboard.duplicate,
+    remove: dashboard.remove,
+    download: dashboard.download,
+    moveToAccount: dashboard.moveToAccount,
+    backfillThumbnail: dashboard.backfillThumbnail,
+    files: dashboard.files,
+    isPinned: (item) => pinned.has(keyOf(item)),
+    togglePin: (item) => {
+      const key = keyOf(item);
+      const now = preference("homePinned");
+      setPreference("homePinned", now.includes(key) ? now.filter((k) => k !== key) : [key, ...now]);
+    },
+    isSelected: (item) => selected.has(keyOf(item)),
+    toggleSelect: (item) =>
+      setSelected((was) => {
+        const next = new Set(was);
+        const key = keyOf(item);
+        if (next.has(key)) next.delete(key);
+        else next.add(key);
+        return next;
+      }),
+    selecting: chosen.length > 0,
   };
 
-  const newMenu = (trigger: ReactNode) => (
-    <Menu>
-      <MenuTrigger asChild>{trigger}</MenuTrigger>
-      <MenuContent align="end" className="w-72">
-        <MenuLabel>
-          {signedIn ? "New diagram in your account" : "New diagram in this browser"}
-        </MenuLabel>
-        {TEMPLATES.map((template) => (
-          <MenuItem
-            key={template.id}
-            icon={template.id === "blank" ? <Plus /> : <Shapes />}
-            description={template.description}
-            onSelect={() => dashboard.createFromTemplate(template.id)}
-          >
-            {template.id === "blank" ? "Blank diagram" : template.name}
-          </MenuItem>
-        ))}
-        <MenuSeparator />
-        <MenuItem
-          icon={<FileUp />}
-          description=".mogram.yaml, a folder zip or files"
-          onSelect={() => upload.current?.click()}
-        >
-          Open from computer…
-        </MenuItem>
-      </MenuContent>
-    </Menu>
-  );
+  const latest = items[0];
+  const featured = FEATURED.flatMap((id) => TEMPLATES.filter((template) => template.id === id));
 
   return (
-    <div className="flex min-h-dvh bg-main md:h-dvh md:gap-2 md:p-2">
-      <input
-        ref={upload}
-        type="file"
-        multiple
-        accept=".yaml,.yml,.mogram,.zip,.md,.svg,.png,.jpg,.jpeg,.gif,.webp"
-        hidden
-        onChange={(event) => void openFiles(event.target.files)}
+    <AppShell user={user} active="home" create={dashboard} items={items}>
+      <PageHeader
+        title="Home"
+        description={
+          signedIn
+            ? "Start something, or carry on with what's in your account and this browser."
+            : "Start something, or carry on with the drafts in this browser."
+        }
       />
 
-      <Sidebar className="w-[260px] shrink-0 p-2 max-md:hidden" aria-label="Mogram">
-        <div className="flex h-10 items-center gap-2.5 px-1.5">
-          <Link href="/" className="flex items-center gap-2.5" aria-label="Mogram home">
-            <LogoMark size="sm" />
-            <Wordmark />
-          </Link>
-        </div>
-        <nav className="mt-3 flex flex-col gap-0.5" aria-label="Main">
-          {newMenu(<SidebarItem icon={<Plus />}>New diagram</SidebarItem>)}
-          <SidebarItem icon={<LayoutGrid />} active onClick={() => search.current?.focus()}>
-            Diagrams
-          </SidebarItem>
-          <SidebarItem
-            icon={<Shapes />}
-            onClick={() =>
-              templates.current?.scrollIntoView({ behavior: "smooth", block: "start" })
-            }
-          >
-            Templates
-          </SidebarItem>
-          <SidebarItem asChild>
-            <Link href="/docs/format">
-              <BookOpen className="text-fg-faint" />
-              <span className="min-w-0 flex-1 truncate">File format</span>
-            </Link>
-          </SidebarItem>
-          <SidebarItem asChild>
-            <Link href="/security">
-              <ShieldCheck className="text-fg-faint" />
-              <span className="min-w-0 flex-1 truncate">Security</span>
-            </Link>
-          </SidebarItem>
-        </nav>
-        {dashboard.items.length > 0 ? (
-          <>
-            <SidebarLabel>Recent</SidebarLabel>
-            <ul className="flex min-h-0 flex-col gap-0.5 overflow-y-auto">
-              {dashboard.items.slice(0, 8).map((item) => (
-                <li key={`${item.kind}-${item.id}`}>
-                  <SidebarItem asChild>
-                    <Link
-                      href={item.href as Parameters<typeof Link>[0]["href"]}
-                      className="text-fg-soft"
-                    >
-                      <span
-                        aria-hidden
-                        className="mx-1 size-1.5 shrink-0 rounded-full bg-fg-ghost"
-                      />
-                      <span className="min-w-0 flex-1 truncate text-body-sm">{item.name}</span>
-                      <span className="shrink-0 text-micro tabular-nums text-fg-ghost">
-                        {relativeTime(item.updatedAt).replace(" ago", "")}
-                      </span>
-                    </Link>
-                  </SidebarItem>
-                </li>
-              ))}
-            </ul>
-          </>
-        ) : null}
-        <div className="mt-auto pt-3">
-          <AccountBlock user={user} />
-        </div>
-      </Sidebar>
-
-      <div className="flex min-w-0 flex-1 flex-col md:overflow-hidden md:rounded-lg">
-        <MobileHeader
-          user={user}
-          newButton={newMenu(
-            // Eden's header "New" is the soft pill: the white one is kept for the page's main action.
-            <Button variant="secondary" size="sm">
-              <Plus />
-              New
-            </Button>,
-          )}
+      <section aria-label="Start" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <StartTile
+          icon={<Plus />}
+          title="Blank diagram"
+          detail="An empty canvas"
+          disabled={dashboard.creating}
+          onClick={() => dashboard.createFromTemplate("blank")}
         />
-        <main className="min-h-0 flex-1 overflow-y-auto px-4 pb-16 pt-6 sm:px-8 md:pt-10 lg:px-12">
-          <div className="mx-auto flex max-w-6xl flex-col gap-6">
-            <PageHeader
-              title="Diagrams"
-              description={
-                signedIn
-                  ? "Everything in your account and in this browser."
-                  : "Drafts in this browser. Sign in to keep diagrams in your account and share them."
-              }
-              actions={newMenu(
-                <Button
-                  variant="secondary"
+        <StartTile
+          icon={<Layers />}
+          title="Blank deck"
+          detail="Slides for a talk or a course"
+          disabled={dashboard.creating}
+          onClick={() => dashboard.createFromTemplate("blank-deck")}
+        />
+        <StartTile
+          icon={<FileUp />}
+          title="Open files"
+          detail="A .mogram.yaml, a folder or a zip"
+          disabled={dashboard.creating}
+          onClick={chooseFiles}
+        />
+        <StartTile
+          icon={<Shapes />}
+          title="Templates"
+          detail="Real architectures to start from"
+          href={"/templates" as Route}
+        />
+      </section>
+
+      <Describe
+        disabled={dashboard.creating}
+        onBuild={(text) => dashboard.createFromDescription(text)}
+      />
+
+      {/* With only a couple of things, the list below is already "where you left off". */}
+      {!dashboard.loading && latest !== undefined && items.length >= 3 ? (
+        <section aria-labelledby="continue-heading" className="flex flex-col gap-3">
+          <SectionHeading id="continue-heading" title="Continue" />
+          <ContinueCard item={latest} actions={actions} />
+        </section>
+      ) : null}
+
+      <section aria-labelledby="everything-heading" className="flex flex-col gap-4">
+        <SectionHeading
+          id="everything-heading"
+          title="Everything"
+          aside={
+            dashboard.loading || items.length === 0
+              ? undefined
+              : visible.length === items.length
+                ? String(items.length)
+                : `${visible.length} of ${items.length}`
+          }
+        />
+        {items.length > 0 ? (
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
+            <SearchField
+              ref={search}
+              placeholder="Search by name"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              aria-label="Search diagrams"
+              aria-keyshortcuts="/"
+              className="flex-1"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              {hasDecks && hasDiagrams ? (
+                <SegmentedControl
+                  label="Kind"
                   size="sm"
-                  className="max-md:hidden"
-                  disabled={dashboard.creating}
-                >
-                  <Plus />
-                  New
-                </Button>,
-              )}
-            />
-
-            <Describe
-              disabled={dashboard.creating}
-              onBuild={(text) => dashboard.createFromDescription(text)}
-            />
-
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-              <SearchField
-                ref={search}
-                placeholder="Search diagrams"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-                aria-label="Search diagrams"
-                className="flex-1"
-              />
+                  value={kind}
+                  onChange={setKind}
+                  options={[
+                    { value: "all", label: "All" },
+                    { value: "diagram", label: "Diagrams" },
+                    { value: "deck", label: "Decks" },
+                  ]}
+                />
+              ) : null}
               {signedIn ? (
                 <SegmentedControl
                   label="Where"
+                  size="sm"
                   value={source}
                   onChange={setSource}
                   options={[
-                    { value: "all", label: "All" },
+                    { value: "all", label: "Anywhere" },
                     { value: "cloud", label: "Account" },
                     { value: "draft", label: "This browser" },
                   ]}
                 />
               ) : null}
+              <Panel shape="pill" className="flex items-center gap-0.5 p-0.5">
+                <IconButton
+                  label={sort === "recent" ? "Sorted by last edited" : "Sort by last edited"}
+                  size="sm"
+                  shape="round"
+                  active={sort === "recent"}
+                  onClick={() => setPreference("homeSort", "recent")}
+                >
+                  <Clock />
+                </IconButton>
+                <IconButton
+                  label={sort === "name" ? "Sorted by name" : "Sort by name"}
+                  size="sm"
+                  shape="round"
+                  active={sort === "name"}
+                  onClick={() => setPreference("homeSort", "name")}
+                >
+                  <ArrowDownAZ />
+                </IconButton>
+              </Panel>
+              <Panel shape="pill" className="flex items-center gap-0.5 p-0.5">
+                <IconButton
+                  label="Show as cards"
+                  size="sm"
+                  shape="round"
+                  active={view === "grid"}
+                  onClick={() => setPreference("homeView", "grid")}
+                >
+                  <LayoutGrid />
+                </IconButton>
+                <IconButton
+                  label="Show as a list"
+                  size="sm"
+                  shape="round"
+                  active={view === "list"}
+                  onClick={() => setPreference("homeView", "list")}
+                >
+                  <List />
+                </IconButton>
+              </Panel>
             </div>
-
-            {dashboard.cloudError !== null ? (
-              <p
-                role="alert"
-                className="rounded-md border border-rose-line bg-rose-fill px-3 py-2 text-label text-rose"
-              >
-                Your account&apos;s diagrams couldn&apos;t load. {dashboard.cloudError.message}
-              </p>
-            ) : null}
-
-            {dashboard.loading ? (
-              <Grid>
-                {Array.from({ length: 6 }, (_, i) => (
-                  <Skeleton key={i} className="aspect-[16/12] rounded-xl" />
-                ))}
-              </Grid>
-            ) : visible.length > 0 ? (
-              <Grid>
-                {visible.map((item) => (
-                  <DiagramCard
-                    key={`${item.kind}-${item.id}`}
-                    item={item}
-                    actions={{ signedIn, ...dashboard }}
-                  />
-                ))}
-              </Grid>
-            ) : dashboard.items.length > 0 ? (
-              <p className="py-10 text-center text-body-sm text-fg-muted">
-                No diagrams match “{query}”.
-              </p>
-            ) : (
-              <EmptyState
-                icon={<LayoutGrid />}
-                title="Make your first diagram"
-                description="Start from a template below, open a .mogram.yaml from your computer, or begin with a blank canvas."
-                action={newMenu(
-                  <Button variant="primary" disabled={dashboard.creating}>
-                    <Plus />
-                    New diagram
-                  </Button>,
-                )}
-                className="rounded-xl border border-dashed border-border-strong"
-              />
-            )}
-
-            <section
-              ref={templates}
-              aria-labelledby="templates-heading"
-              className="scroll-mt-6 pt-6"
-            >
-              <div className="mb-4 flex items-end justify-between gap-4">
-                <div>
-                  <h2
-                    id="templates-heading"
-                    className="font-display text-heading font-medium tracking-snug text-fg"
-                  >
-                    Start from a template
-                  </h2>
-                  <p className="mt-1 text-body-sm text-fg-faint">
-                    Real architectures with scenes, cards and tours you can change.
-                  </p>
-                </div>
-              </div>
-              <Grid>
-                {TEMPLATES.filter((t) => t.id !== "blank").map((template) => (
-                  <TemplateCard
-                    key={template.id}
-                    template={template}
-                    onUse={() => dashboard.createFromTemplate(template.id)}
-                    disabled={dashboard.creating}
-                  />
-                ))}
-              </Grid>
-            </section>
           </div>
-        </main>
-      </div>
+        ) : null}
+
+        {dashboard.cloudError !== null ? (
+          <p
+            role="alert"
+            className="rounded-md border border-rose-line bg-rose-fill px-3 py-2 text-label text-rose"
+          >
+            Your account&apos;s diagrams couldn&apos;t load. {dashboard.cloudError.message}
+          </p>
+        ) : null}
+
+        {dashboard.loading ? (
+          <Grid>
+            {Array.from({ length: 4 }, (_, i) => (
+              <Skeleton key={i} className="aspect-[16/12] rounded-xl" />
+            ))}
+          </Grid>
+        ) : visible.length > 0 ? (
+          view === "grid" ? (
+            <Grid>
+              {visible.map((item) => (
+                <DiagramCard key={keyOf(item)} item={item} actions={actions} />
+              ))}
+            </Grid>
+          ) : (
+            <div className="flex flex-col gap-0.5" role="list" aria-label="Everything">
+              {visible.map((item) => (
+                <DiagramRow key={keyOf(item)} item={item} actions={actions} />
+              ))}
+            </div>
+          )
+        ) : items.length > 0 ? (
+          <div className="flex flex-col items-center gap-3 py-10">
+            <p className="text-center text-body-sm text-fg-muted">
+              {deferred === "" ? "Nothing here matches." : `Nothing is called “${query.trim()}”.`}
+            </p>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                setQuery("");
+                setKind("all");
+                setSource("all");
+              }}
+            >
+              Show everything
+            </Button>
+          </div>
+        ) : (
+          <EmptyState
+            icon={<LayoutGrid />}
+            title="Nothing here yet"
+            description="Start with a blank diagram or a deck above, pick a template, or drop a .mogram.yaml file anywhere on this page."
+            action={
+              <Button
+                variant="primary"
+                disabled={dashboard.creating}
+                onClick={() => dashboard.createFromTemplate("blank")}
+              >
+                <Plus />
+                New diagram
+              </Button>
+            }
+            className="rounded-xl border border-dashed border-border-strong"
+          />
+        )}
+      </section>
+
+      <section aria-labelledby="templates-heading" className="flex flex-col gap-4">
+        <SectionHeading
+          id="templates-heading"
+          title="Start from a template"
+          aside={
+            <Link
+              href={"/templates" as Route}
+              className="inline-flex items-center gap-1 text-label text-fg-soft transition-colors hover:text-fg"
+            >
+              All templates
+              <ArrowRight className="size-3.5" />
+            </Link>
+          }
+        />
+        <Grid>
+          {featured.map((template, index) => (
+            // The fourth shows where it fills a row (two across, or four), not as an orphan.
+            <div key={template.id} className={cn("flex", index === 3 && "xl:max-2xl:hidden")}>
+              <TemplateCard
+                template={template}
+                onUse={() => dashboard.createFromTemplate(template.id)}
+                disabled={dashboard.creating}
+              />
+            </div>
+          ))}
+        </Grid>
+      </section>
+
+      {chosen.length > 0 ? (
+        <div className="pointer-events-none sticky bottom-4 z-10 flex justify-center">
+          <Panel
+            shape="pill"
+            role="toolbar"
+            aria-label="Selected"
+            className="pointer-events-auto flex items-center gap-1 py-1 pl-4 pr-1 shadow-popover"
+          >
+            <span className="pr-2 text-label tabular-nums text-fg" data-testid="selected-count">
+              {chosen.length} selected
+            </span>
+            {signedIn && chosenDrafts.length > 0 ? (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  dashboard.moveManyToAccount(chosenDrafts);
+                  setSelected(new Set());
+                }}
+              >
+                <CloudUpload />
+                Save to account
+              </Button>
+            ) : null}
+            <Button variant="ghost" size="sm" onClick={() => setDeleting(true)}>
+              <Trash2 />
+              Delete
+            </Button>
+            <IconButton
+              label="Clear the selection"
+              shortcut="Esc"
+              size="sm"
+              shape="round"
+              onClick={() => setSelected(new Set())}
+            >
+              <X />
+            </IconButton>
+          </Panel>
+        </div>
+      ) : null}
+      <DeleteDialog
+        open={deleting}
+        items={chosen}
+        onClose={() => setDeleting(false)}
+        onDelete={() => {
+          dashboard.removeMany(chosen);
+          setSelected(new Set());
+        }}
+      />
+    </AppShell>
+  );
+}
+
+function SectionHeading({ id, title, aside }: { id: string; title: string; aside?: ReactNode }) {
+  return (
+    <div className="flex items-baseline gap-3">
+      <h2 id={id} className="font-display text-heading font-medium tracking-snug text-fg">
+        {title}
+      </h2>
+      {typeof aside === "string" ? (
+        <span className="text-label tabular-nums text-fg-muted">{aside}</span>
+      ) : aside !== undefined ? (
+        <span className="ml-auto">{aside}</span>
+      ) : null}
     </div>
+  );
+}
+
+/** One way to start: a big, plain target with what it makes said under it. */
+function StartTile({
+  icon,
+  title,
+  detail,
+  onClick,
+  href,
+  disabled = false,
+}: {
+  icon: ReactNode;
+  title: string;
+  detail: string;
+  onClick?: () => void;
+  href?: Route;
+  disabled?: boolean;
+}) {
+  const className = cn(
+    "group flex items-center gap-3 rounded-xl border border-border-muted bg-fill-faint p-3.5 text-left transition-colors max-sm:gap-2.5 max-sm:p-2.5",
+    "hover:border-border-strong hover:bg-fill-hover disabled:pointer-events-none disabled:opacity-50",
+  );
+  const body = (
+    <>
+      <span className="flex size-10 shrink-0 items-center justify-center rounded-lg bg-fill-subtle text-fg-soft transition-colors group-hover:text-fg max-sm:size-8 [&_svg]:size-5 max-sm:[&_svg]:size-4">
+        {icon}
+      </span>
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-body font-medium text-fg max-sm:text-body-sm">{title}</span>
+        <span className="truncate text-caption text-fg-muted max-sm:hidden">{detail}</span>
+      </span>
+    </>
+  );
+  return href !== undefined ? (
+    <Link href={href} className={className}>
+      {body}
+    </Link>
+  ) : (
+    <button type="button" className={className} onClick={onClick} disabled={disabled}>
+      {body}
+    </button>
   );
 }
 
@@ -360,7 +532,7 @@ function Describe({ onBuild, disabled }: { onBuild: (text: string) => void; disa
         className="flex items-center gap-2 px-1 text-label font-medium text-fg"
       >
         <Sparkles aria-hidden className="size-4 text-violet" />
-        Describe what you want to build
+        Or describe what you want to build
       </label>
       <textarea
         id="describe"
@@ -389,165 +561,11 @@ function Describe({ onBuild, disabled }: { onBuild: (text: string) => void; disa
   );
 }
 
-function Grid({ children }: { children: ReactNode }) {
-  return <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">{children}</div>;
-}
-
-/** Template card: a live preview that animates on hover, name, what it shows, and "Use". */
-function TemplateCard({
-  template,
-  onUse,
-  disabled,
-}: {
-  template: Template;
-  onUse: () => void;
-  disabled: boolean;
-}) {
-  const [hover, setHover] = useState(false);
+export function Grid({ children }: { children: ReactNode }) {
   return (
-    <article
-      className="group flex flex-col overflow-hidden rounded-xl border border-border-muted bg-fill-faint transition-colors hover:border-border-strong"
-      onPointerEnter={() => setHover(true)}
-      onPointerLeave={() => setHover(false)}
-    >
-      <button
-        type="button"
-        onClick={onUse}
-        disabled={disabled}
-        className="relative aspect-[16/10] overflow-hidden text-left"
-        aria-label={`Use the ${template.name} template`}
-      >
-        <DiagramPreview
-          files={template.files}
-          className="absolute inset-0"
-          padding={20}
-          animate={hover}
-        />
-      </button>
-      <div className="flex flex-1 flex-col gap-2 px-3.5 pb-3.5 pt-3">
-        <div className="flex items-start gap-2">
-          <h3 className="min-w-0 flex-1 truncate font-sans text-body font-medium text-fg">
-            {template.name}
-          </h3>
-          <Button
-            variant="secondary"
-            size="sm"
-            className="hit-area -mt-0.5 h-7"
-            onClick={onUse}
-            disabled={disabled}
-          >
-            Use
-          </Button>
-        </div>
-        <p className="line-clamp-2 text-caption text-fg-muted">{template.description}</p>
-        <div className="mt-auto flex flex-wrap gap-1 pt-1">
-          {template.features.map((feature) => (
-            <Badge key={feature} size="sm">
-              {feature}
-            </Badge>
-          ))}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function AccountBlock({ user }: { user: DashboardUser | null }) {
-  const router = useRouter();
-  if (user === null) {
-    return (
-      <div className="rounded-md border border-border-muted bg-fill-faint p-3">
-        <p className="text-label font-medium text-fg">Keep diagrams in the cloud</p>
-        <p className="mt-1 text-caption text-fg-muted">
-          Sign in to save to your account and share links. Drafts here stay in this browser.
-        </p>
-        <Button variant="secondary" size="sm" className="mt-3 w-full" asChild>
-          <Link href="/sign-in?next=%2Fdiagrams">
-            <LogIn />
-            Sign in
-          </Link>
-        </Button>
-      </div>
-    );
-  }
-  return (
-    <Menu>
-      <MenuTrigger asChild>
-        <button
-          type="button"
-          className="flex w-full items-center gap-2.5 rounded-md p-1.5 text-left transition-colors hover:bg-fill-hover"
-        >
-          <span
-            aria-hidden
-            className="flex size-7 shrink-0 items-center justify-center rounded-full bg-fill-active text-caption font-medium uppercase text-fg"
-          >
-            {(user.name || user.email).charAt(0)}
-          </span>
-          <span className="min-w-0 flex-1 truncate text-body-sm text-fg-soft">{user.email}</span>
-        </button>
-      </MenuTrigger>
-      <MenuContent side="top" align="start" className="w-56">
-        <MenuLabel className="truncate">{user.email}</MenuLabel>
-        <MenuItem
-          icon={<LogOut />}
-          onSelect={() => {
-            authClient.signOut().then(
-              () => router.refresh(),
-              () => toast.error("Couldn't sign out. Check your connection and try again."),
-            );
-          }}
-        >
-          Sign out
-        </MenuItem>
-      </MenuContent>
-    </Menu>
-  );
-}
-
-function MobileHeader({ user, newButton }: { user: DashboardUser | null; newButton: ReactNode }) {
-  const router = useRouter();
-  return (
-    <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b border-border-muted bg-main/95 px-4 backdrop-blur md:hidden">
-      <Link href="/" className="flex items-center gap-2" aria-label="Mogram home">
-        <LogoMark size="sm" />
-        <Wordmark />
-      </Link>
-      <span className="flex-1" />
-      {newButton}
-      <Menu>
-        <MenuTrigger asChild>
-          <button
-            type="button"
-            aria-label="Menu"
-            className="flex size-9 items-center justify-center rounded-full text-fg-soft hover:bg-fill-hover hover:text-fg"
-          >
-            <MenuIcon className="size-4" />
-          </button>
-        </MenuTrigger>
-        <MenuContent align="end" className="w-60">
-          <MenuItem icon={<BookOpen />} onSelect={() => router.push("/docs/format")}>
-            File format
-          </MenuItem>
-          <MenuItem icon={<ShieldCheck />} onSelect={() => router.push("/security")}>
-            Security
-          </MenuItem>
-          <MenuSeparator />
-          {user === null ? (
-            <MenuItem icon={<LogIn />} onSelect={() => router.push("/sign-in?next=%2Fdiagrams")}>
-              Sign in
-            </MenuItem>
-          ) : (
-            <MenuItem
-              icon={<LogOut />}
-              description={user.email}
-              onSelect={() => void authClient.signOut().then(() => router.refresh())}
-            >
-              Sign out
-            </MenuItem>
-          )}
-        </MenuContent>
-      </Menu>
-    </header>
+    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+      {children}
+    </div>
   );
 }
 

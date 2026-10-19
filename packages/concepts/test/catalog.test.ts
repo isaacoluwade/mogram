@@ -69,7 +69,16 @@ describe("every concept", () => {
       for (const scene of diagram.scenes) {
         const changed =
           JSON.stringify([...plan(scene.name).capacity.connections]) !== normal ||
-          scene.entries.some((e) => e.state !== null || e.capacity?.hit !== undefined);
+          scene.entries.some(
+            (e) =>
+              e.state !== null ||
+              e.capacity?.hit !== undefined ||
+              e.show !== undefined ||
+              e.label !== undefined ||
+              e.mark !== undefined ||
+              e.place !== undefined ||
+              e.value !== undefined,
+          );
         expect(changed, `${card.id} ${scene.name}`).toBe(true);
       }
       // What the catalog says about it is what its file says.
@@ -84,12 +93,15 @@ describe("every concept", () => {
 describe("finding concepts", () => {
   it("matches every word, best in the title, and filters by topic, platform and kind", () => {
     expect(findConcepts(CONCEPT_CATALOG, { text: "scaling" })[0]?.title).toMatch(/scaling/i);
-    expect(findConcepts(CONCEPT_CATALOG, { text: "redis" }).map((c) => c.id)).toEqual(["caching"]);
+    expect(findConcepts(CONCEPT_CATALOG, { text: "redis" })[0]?.id).toBe("caching");
     expect(findConcepts(CONCEPT_CATALOG, { text: "cache hit nothing-like-this" })).toEqual([]);
-    expect(findConcepts(CONCEPT_CATALOG, { topic: "reliability" }).map((c) => c.id)).toEqual([
-      "failover",
-    ]);
-    expect(findConcepts(CONCEPT_CATALOG, { kind: "explainer" })).toEqual([]);
+    // The library grows: a filter is checked by what it lets through, not by a count.
+    const reliable = findConcepts(CONCEPT_CATALOG, { topic: "reliability" });
+    expect(reliable.map((c) => c.id)).toContain("failover");
+    expect(reliable.every((c) => c.topic === "reliability")).toBe(true);
+    const explainers = findConcepts(CONCEPT_CATALOG, { kind: "explainer" });
+    expect(explainers.map((c) => c.id)).toContain("blue-green-deployment");
+    expect(explainers.every((c) => c.kind === "explainer")).toBe(true);
     // A platform's concepts include the ones for any platform.
     expect(forPlatform({ platform: "any" }, "aws")).toBe(true);
     expect(forPlatform({ platform: "azure" }, "aws")).toBe(false);

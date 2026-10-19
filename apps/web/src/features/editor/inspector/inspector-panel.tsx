@@ -29,6 +29,7 @@ import { ConnectionInspector } from "./connection-inspector";
 import { ContainerInspector } from "./container-inspector";
 import { DecorationInspector } from "./decoration-inspector";
 import { DiagramSettings } from "./diagram-settings";
+import { SlideInspector } from "./slide-inspector";
 import { SectionScope } from "./fields";
 import { GroupInspector } from "./group-inspector";
 import { DataSection, LinkSection } from "./link-data";
@@ -51,6 +52,8 @@ function useRememberedTab<T extends string>(
 
 const ELEMENT_TABS = ["element", "style", "arrange"] as const;
 const DIAGRAM_TABS = ["diagram", "canvas"] as const;
+const SLIDE_TABS = ["slide", "diagram", "canvas"] as const;
+type SlideTab = (typeof SLIDE_TABS)[number];
 
 const KIND_ICONS: Readonly<Record<string, ComponentType<{ className?: string }>>> = {
   component: Box,
@@ -78,22 +81,29 @@ const KIND_NAMES: Readonly<Record<string, [string, string]>> = {
  * selected. Each remembers its last tab, and each kind remembers which sections are open.
  */
 export function InspectorPanel({ onClose }: { onClose: () => void }) {
-  const { selection } = useEditorShallow((s) => ({ selection: s.selection }));
+  const { selection, deckRoot, root, slide } = useEditorShallow((s) => ({
+    selection: s.selection,
+    deckRoot: s.deckRoot,
+    root: s.root,
+    slide: s.slide,
+  }));
   // parsed() is cached per files+folder, so this re-renders exactly when the document changes.
   const diagram = useEditor((s) => s.parsed().diagram);
   const sel = selectionInfo(diagram, selection);
+  const nothing = sel.kind === "none";
+  const editingDeckSlide = deckRoot !== null && slide !== null;
+  const onDeck = deckRoot !== null && slide === null && root === deckRoot;
   const [elementTab, setElementTab] = useRememberedTab<InspectorTab>(
     "element",
     ELEMENT_TABS,
     "element",
   );
   const [diagramTab, setDiagramTab] = useRememberedTab<DiagramTab>(
-    "diagram",
+    onDeck ? "deck" : "diagram",
     DIAGRAM_TABS,
     "diagram",
   );
-  const nothing = sel.kind === "none";
-
+  const [slideTab, setSlideTab] = useRememberedTab<SlideTab>("deck-slide", SLIDE_TABS, "slide");
   return (
     <Panel
       role="region"
@@ -102,20 +112,37 @@ export function InspectorPanel({ onClose }: { onClose: () => void }) {
       data-popover-edge
     >
       <div className="flex shrink-0 items-start gap-2 px-3.5 pb-1 pt-3">
-        <Header diagram={diagram} sel={sel} />
+        <Header
+          diagram={diagram}
+          sel={sel}
+          context={nothing ? (editingDeckSlide ? "Slide" : onDeck ? "Deck" : undefined) : undefined}
+        />
         <IconButton label="Hide inspector" size="sm" onClick={onClose}>
           <PanelRightClose />
         </IconButton>
       </div>
       {nothing ? (
-        <Tabs value={diagramTab} onValueChange={(v) => setDiagramTab(v as DiagramTab)}>
-          <TabsList aria-label="Diagram settings" className="border-b border-border-subtle px-1">
-            <TabsTrigger value="diagram">Diagram</TabsTrigger>
-            <TabsTrigger value="canvas">Canvas</TabsTrigger>
-          </TabsList>
-        </Tabs>
+        editingDeckSlide ? (
+          <Tabs value={slideTab} onValueChange={(value) => setSlideTab(value as SlideTab)}>
+            <TabsList aria-label="Slide settings" className="border-b border-border-subtle px-1">
+              <TabsTrigger value="slide">Slide</TabsTrigger>
+              <TabsTrigger value="diagram">Diagram</TabsTrigger>
+              <TabsTrigger value="canvas">Canvas</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        ) : (
+          <Tabs value={diagramTab} onValueChange={(value) => setDiagramTab(value as DiagramTab)}>
+            <TabsList
+              aria-label={onDeck ? "Deck settings" : "Diagram settings"}
+              className="border-b border-border-subtle px-1"
+            >
+              <TabsTrigger value="diagram">{onDeck ? "Deck" : "Diagram"}</TabsTrigger>
+              <TabsTrigger value="canvas">Canvas</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        )
       ) : (
-        <Tabs value={elementTab} onValueChange={(v) => setElementTab(v as InspectorTab)}>
+        <Tabs value={elementTab} onValueChange={(value) => setElementTab(value as InspectorTab)}>
           <TabsList aria-label="Properties" className="border-b border-border-subtle px-1">
             <TabsTrigger value="element">
               {sel.names.length > 1 ? "Elements" : "Element"}
@@ -127,12 +154,20 @@ export function InspectorPanel({ onClose }: { onClose: () => void }) {
       )}
       <div
         role="tabpanel"
-        aria-label={nothing ? diagramTab : elementTab}
+        aria-label={nothing ? (editingDeckSlide ? slideTab : diagramTab) : elementTab}
         className="min-h-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]"
       >
         <SectionScope value={scopeOf(diagram, sel)}>
           {nothing ? (
-            <DiagramSettings diagram={diagram} tab={diagramTab} />
+            editingDeckSlide && deckRoot !== null && slide !== null ? (
+              slideTab === "slide" ? (
+                <SlideInspector deckRoot={deckRoot} item={slide} />
+              ) : (
+                <DiagramSettings diagram={diagram} tab={slideTab} />
+              )
+            ) : (
+              <DiagramSettings diagram={diagram} tab={diagramTab} />
+            )
           ) : (
             <Body diagram={diagram} sel={sel} tab={elementTab} />
           )}
@@ -187,12 +222,20 @@ function Body({ diagram, sel, tab }: { diagram: Diagram; sel: SelectionInfo; tab
 }
 
 /** What is selected: kind icon, name and type, or a count with chips that narrow it by kind. */
-function Header({ diagram, sel }: { diagram: Diagram; sel: SelectionInfo }) {
+function Header({
+  diagram,
+  sel,
+  context,
+}: {
+  diagram: Diagram;
+  sel: SelectionInfo;
+  context: "Deck" | "Slide" | undefined;
+}) {
   const store = useEditorStore();
   if (sel.kind === "none") {
     return (
       <div className="min-w-0 flex-1">
-        <h2 className="truncate text-label font-medium text-fg">Diagram</h2>
+        <h2 className="truncate text-label font-medium text-fg">{context ?? "Diagram"}</h2>
         <p className="truncate text-micro text-fg-muted">{diagram.settings.name}</p>
       </div>
     );

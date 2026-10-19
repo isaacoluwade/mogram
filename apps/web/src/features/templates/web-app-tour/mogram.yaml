@@ -1,0 +1,13 @@
+mogram: 1
+name: Three-tier web app tour
+description: An overview of a checkout app, then a traffic spike and a regional outage.
+page: 16:9
+theme: midnight
+deck:
+  captions: off
+  slides:
+    - section: Architecture
+    - architecture: { title: The checkout architecture }
+    - section: Scale and resilience
+    - architecture: { title: A sudden traffic spike, scene: traffic_spike }
+    - architecture: { title: Recover from a regional outage, scene: region_outage }

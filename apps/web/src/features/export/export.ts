@@ -4,16 +4,30 @@ import { CapacityTimeline } from "@mogram/core/capacity";
 import { settledCapacity, type CapacityRuntime } from "@/features/canvas/capacity";
 import { createElement } from "react";
 import { parseDiagram } from "@mogram/core/format";
+import { deckInfo, deckSlides, slideClosing, slideDiagram } from "@mogram/core/deck";
 import { computeLayout, type Box } from "@mogram/core/layout";
 import type { Diagram, ProjectFiles } from "@mogram/core/model";
+import { DiagramLoader } from "@mogram/core/nested";
 import { toName } from "@mogram/core/model";
 import { FLOW_INFO, type FontName } from "@mogram/core/presets";
 import { routeConnections } from "@mogram/core/routing";
 import type { ResolvedState } from "@mogram/core/state";
-import { LOOP_SECONDS, SCENE_TRANSITION, STORY_HOLD, storyAt } from "@mogram/core/timeline";
+import { LOOP_SECONDS, SCENE_TRANSITION, SCENE_HOLD, scenesAt } from "@mogram/core/timeline";
+import {
+  captionAt,
+  cursorAtStep,
+  segmentAt,
+  storyTimeline,
+  type Moment,
+  type StepRef,
+  type StoryCursor,
+  type StoryTimeline,
+} from "@mogram/core/picture";
+import { strToU8, zipSync, type Zippable } from "fflate";
 import { CONTAINER_STYLE_INFO } from "@mogram/core/presets";
 import { fontStack } from "@/features/canvas/fonts";
 import { iconSource, preloadIcons, type IconSource } from "@/features/canvas/icons";
+import { preparePictures } from "@/features/assets/pictures";
 import { buildScene, type SceneModel } from "@/features/canvas/scene";
 import { DiagramSvg } from "@/features/canvas/svg/diagram-svg";
 import { resolveTheme } from "@/features/canvas/theme";
@@ -26,15 +40,20 @@ import { jpegToPdf } from "./pdf";
 
 /** Export formats (EX-1 … EX-5). GIF and WebP are only offered when something moves. */
 export type ExportFormat = "png" | "jpeg" | "svg" | "pdf" | "gif" | "webp";
-export type ExportArea = "fit" | "1:1" | "4:5" | "16:9" | "4:3" | "16:10";
+/** `page` is the diagram's own page (D-98), exactly, with nothing around it. */
+export type ExportArea = "page" | "fit" | "1:1" | "4:5" | "16:9" | "4:3" | "16:10";
 
 export interface ExportOptions {
   readonly format: ExportFormat;
   readonly scale: 1 | 2 | 3;
   readonly transparent: boolean;
   readonly area: ExportArea;
-  /** Loop the current scene, or play every scene in order (EX-6). */
-  readonly animation: "loop" | "story";
+  /** Loop the current scene, play every scene in order (EX-6), or play the story (D-86). */
+  readonly animation: "loop" | "scenes" | "story";
+  /** Draw the story's words under the diagram (D-86). On unless turned off. */
+  readonly captions?: boolean;
+  /** A still of the picture showing, or one of each beat of the story, zipped. */
+  readonly each?: "one" | "beats";
   readonly fps: 10 | 20 | 25;
   readonly fileName: string;
   /**
@@ -48,7 +67,16 @@ export interface ExportRequest {
   readonly files: ProjectFiles;
   /** The diagram level to export — top level or any nested level (EX-8). */
   readonly folder: string;
+  /**
+   * The folder of the diagram whose story plays (D-97): the project's own unless said. A level
+   * reached from it through `opens` is exported as it stands.
+   */
+  readonly root?: string;
   readonly scene: string | null;
+  /** The step of the story showing (D-86): a still is the picture once it has played. */
+  readonly story?: StepRef | null;
+  /** Internal composed diagram, used for deck slide thumbnails with inherited settings. */
+  readonly diagram?: Diagram;
   readonly options: ExportOptions;
 }
 
@@ -61,7 +89,7 @@ export interface ExportResult {
 
 const PADDING = 48;
 const MAX_ANIMATED_WIDTH = 1280;
-const ASPECTS: Readonly<Record<Exclude<ExportArea, "fit">, number>> = {
+const ASPECTS: Readonly<Record<Exclude<ExportArea, "fit" | "page">, number>> = {
   "1:1": 1,
   "4:5": 4 / 5,
   "16:9": 16 / 9,
@@ -75,7 +103,7 @@ const ASPECTS: Readonly<Record<Exclude<ExportArea, "fit">, number>> = {
  */
 export function hasAnimation(files: ProjectFiles, folder: string, scene: string | null): boolean {
   const { diagram } = parseDiagram(files, folder);
-  if (diagram.scenes.length > 0) return true;
+  if (diagram.scenes.length > 0 || diagram.stories.length > 0) return true;
   const resolved = resolveFor(files, folder, diagram, scene);
   if (resolved.capacity.active) return true;
   for (const status of resolved.connections.values())
@@ -85,21 +113,30 @@ export function hasAnimation(files: ProjectFiles, folder: string, scene: string 
   return false;
 }
 
-export function exportFrame(bounds: Box, area: ExportArea): Box {
-  const box = {
-    x: bounds.x - PADDING,
-    y: bounds.y - PADDING,
-    w: Math.max(1, bounds.w) + PADDING * 2,
-    h: Math.max(1, bounds.h) + PADDING * 2,
-  };
-  if (area === "fit") return box;
-  const ratio = ASPECTS[area];
+/** `box` grown to a ratio, centred. */
+function grownTo(box: Box, ratio: number): Box {
   if (box.w / box.h > ratio) {
     const h = box.w / ratio;
     return { ...box, y: box.y - (h - box.h) / 2, h };
   }
   const w = box.h * ratio;
   return { ...box, x: box.x - (w - box.w) / 2, w };
+}
+
+/**
+ * What an export shows. The page, when that's asked for and there is one, is exactly the page;
+ * every other area is the contents with room around them, grown to the ratio asked for.
+ */
+export function exportFrame(bounds: Box, area: ExportArea, page: Box | null = null): Box {
+  if (area === "page" && page !== null) return page;
+  const box = {
+    x: bounds.x - PADDING,
+    y: bounds.y - PADDING,
+    w: Math.max(1, bounds.w) + PADDING * 2,
+    h: Math.max(1, bounds.h) + PADDING * 2,
+  };
+  if (area === "fit" || area === "page") return box;
+  return grownTo(box, ASPECTS[area]);
 }
 
 async function fontAsDataUrl(path: string): Promise<string> {
@@ -157,26 +194,35 @@ async function embeddedFonts(used: ReadonlySet<FontName>): Promise<string> {
   return `${faces.join("")}svg{--font-display:"Geist","Inter",sans-serif;}`;
 }
 
-/** Fonts the diagram's free text and notes use. */
-function fontsUsed(diagram: Diagram): Set<FontName> {
+/** Fonts the diagram's free text and notes use, and the mono a code listing is set in (D-103). */
+export function fontsUsed(diagram: Diagram): Set<FontName> {
   const used = new Set<FontName>();
   for (const decoration of diagram.decorations.values()) {
     if (decoration.variant === "text" || decoration.variant === "note") {
       if (decoration.look.font !== null) used.add(decoration.look.font);
     }
   }
+  for (const component of diagram.components.values())
+    if (component.code !== null) used.add("mono");
   return used;
 }
 
 interface Prepared {
   readonly frame: Box;
+  /** The diagram's page, when it has one. */
+  readonly page: Box | null;
   readonly theme: ReturnType<typeof resolveTheme>;
   readonly modelFor: (
     current: ResolvedState,
     previous: ResolvedState | null,
     transitionStart: number | null,
+    transitionSeconds?: number,
+    ramp?: { readonly start: number; readonly seconds: number } | null,
   ) => SceneModel;
-  readonly resolvedFor: (scene: string | null) => ResolvedState;
+  /** The state in a scene, or at a moment of the story. */
+  readonly resolvedFor: (at: Moment | string | null) => ResolvedState;
+  /** The story's timeline, when this is the top diagram and it has one. */
+  readonly story: StoryTimeline | null;
   readonly sceneNames: readonly (string | null)[];
   readonly title: string;
   readonly fonts: ReadonlySet<FontName>;
@@ -185,7 +231,7 @@ interface Prepared {
 
 async function prepare(request: ExportRequest): Promise<Prepared> {
   const { files, folder } = request;
-  const { diagram } = parseDiagram(files, folder);
+  const diagram = request.diagram ?? parseDiagram(files, folder).diagram;
   const layout = computeLayout(diagram);
   const routes = routeConnections(diagram, layout);
   const theme = resolveTheme(diagram.settings);
@@ -199,27 +245,35 @@ async function prepare(request: ExportRequest): Promise<Prepared> {
   }
   const fonts = fontsUsed(diagram);
   // Measure with the real fonts: wrapping in notes depends on them.
-  await Promise.all([preloadIcons(icons), loadFonts([...fonts].map(fontStack))]);
+  await Promise.all([
+    preloadIcons(icons),
+    preparePictures(files),
+    loadFonts([...fonts].map(fontStack)),
+  ]);
   const cache = new Map<string, ResolvedState>();
-  const resolvedFor = (scene: string | null): ResolvedState => {
-    const key = scene ?? "";
+  const resolvedFor = (at: Moment | string | null): ResolvedState => {
+    const key = momentKey(at);
     let value = cache.get(key);
     if (value === undefined) {
-      value = resolveFor(files, folder, diagram, scene);
+      value = resolveFor(files, folder, diagram, at);
       cache.set(key, value);
     }
     return value;
   };
   return {
-    frame: exportFrame(layout.bounds, request.options.area),
+    frame: exportFrame(layout.bounds, request.options.area, layout.page),
+    page: layout.page,
     theme,
     resolvedFor,
+    // A story belongs to the diagram being viewed: a level inside it is exported as it stands.
+    story: folder === (request.root ?? "") ? storyTimeline(diagram) : null,
     sceneNames: [null, ...diagram.scenes.map((s) => s.name)],
     title: diagram.settings.name,
     fonts,
     diagram,
-    modelFor: (current, previous, transitionStart) =>
+    modelFor: (current, previous, transitionStart, transitionSeconds, ramp) =>
       buildScene({
+        ...(ramp == null ? {} : { ramp }),
         diagram,
         files,
         layout,
@@ -227,10 +281,87 @@ async function prepare(request: ExportRequest): Promise<Prepared> {
         current,
         previous,
         transitionStart,
+        ...(transitionSeconds === undefined ? {} : { transitionSeconds }),
         theme,
         fontFamily: "Inter",
       }),
   };
+}
+
+/** One diagram's pictures as SVG, for an export that draws many of them: a deck's (D-106). */
+export interface LayerRenderer {
+  /** The page (or the diagram's bounds without one), in px at scale 1. */
+  readonly page: Box;
+  /** The colour behind everything. */
+  readonly base: string;
+  /**
+   * The picture at `to` drawn on `stage` (a box at scale 1) with nothing behind it, at time `t`;
+   * while it's changing from `from`, part way.
+   */
+  svg(
+    to: Moment,
+    stage: Box,
+    t?: number,
+    from?: { readonly moment: Moment; readonly start: number; readonly seconds: number } | null,
+  ): Promise<string>;
+}
+
+export async function layerRenderer(request: {
+  readonly files: ProjectFiles;
+  readonly folder: string;
+  readonly scene: string | null;
+  readonly diagram: Diagram;
+}): Promise<LayerRenderer> {
+  const prepared = await prepare({
+    ...request,
+    root: request.folder,
+    options: {
+      format: "png",
+      scale: 1,
+      transparent: true,
+      area: "page",
+      animation: "story",
+      fps: 10,
+      fileName: "deck",
+    },
+  });
+  return {
+    page: prepared.page ?? prepared.frame,
+    base: prepared.theme.base,
+    svg: async (to, stage, t = 0, from = null) => {
+      const staged = { ...prepared, frame: stage };
+      const changing = from !== null && t - from.start < from.seconds;
+      const model = staged.modelFor(
+        staged.resolvedFor(to),
+        changing ? staged.resolvedFor(from.moment) : null,
+        changing ? from.start : null,
+        from?.seconds,
+      );
+      return markup(staged, model, t, true, changing ? null : still(staged, to));
+    },
+  };
+}
+
+/** A name for a moment, so its state is worked out once per export. */
+function momentKey(at: Moment | string | null): string {
+  if (at === null || typeof at === "string") return at ?? "";
+  const story = at.story;
+  if (story === null) return at.scene ?? "";
+  const played = story.played.map((ref) => `${ref.story}.${ref.index}`).join(",");
+  return `${at.scene ?? ""}|${story.story}|${played}|${story.rewound ? "r" : ""}`;
+}
+
+/** Room under the diagram for the story's words, in px at scale 1. */
+export const CAPTION_BAND = 92;
+
+/** The export frame with room for captions under it. */
+function withCaptionBand(frame: Box): Box {
+  return { ...frame, h: frame.h + CAPTION_BAND };
+}
+
+/** Where the words go: the band under the diagram. */
+function captionBox(frame: Box): Box {
+  return { x: frame.x, y: frame.y + frame.h - CAPTION_BAND, w: frame.w, h: CAPTION_BAND };
 }
 
 /** A still picture's capacity: the scene's plan, settled. */
@@ -247,8 +378,14 @@ function patternLoop(cycle: number): number {
   return both <= 40 ? both : cycle;
 }
 
-function still(prepared: Prepared, scene: string | null): CapacityRuntime | null {
-  return settledCapacity(prepared.diagram, prepared.resolvedFor(scene));
+function still(prepared: Prepared, at: Moment | string | null): CapacityRuntime | null {
+  return settledCapacity(prepared.diagram, prepared.resolvedFor(at));
+}
+
+/** The story's words to draw under a frame: the text, and how far it has faded in (0–1). */
+interface Caption {
+  readonly text: string | null;
+  readonly opacity: number;
 }
 
 async function markup(
@@ -257,24 +394,29 @@ async function markup(
   t: number,
   transparent: boolean,
   capacity: CapacityRuntime | null = null,
+  caption: Caption | null = null,
 ): Promise<string> {
   const { renderToStaticMarkup } = await import("react-dom/server");
   const style = await embeddedFonts(prepared.fonts);
+  const frame = caption === null ? prepared.frame : withCaptionBand(prepared.frame);
   const element = createElement(DiagramSvg, {
     scene: model,
     time: { kind: "static", t },
     mode: "export",
     fontFamily: "Inter, sans-serif",
-    frame: prepared.frame,
+    frame,
     transparent,
     embeddedStyle: style,
     title: prepared.title,
     capacity,
+    ...(caption === null
+      ? {}
+      : { caption: { text: caption.text, opacity: caption.opacity, box: captionBox(frame) } }),
   });
   return `<?xml version="1.0" encoding="UTF-8"?>\n${renderToStaticMarkup(element)}`;
 }
 
-async function rasterize(
+export async function rasterize(
   svg: string,
   width: number,
   height: number,
@@ -329,6 +471,9 @@ export function defaultFileName(name: string): string {
   return toName(name, "diagram").replace(/_/g, "-");
 }
 
+/** How long an animated story holds its last picture before it starts over. */
+const STORY_END_HOLD = 2;
+
 /** Renders the export. `onProgress` receives 0…1; `signal` cancels long animated exports. */
 export async function runExport(
   request: ExportRequest,
@@ -337,41 +482,99 @@ export async function runExport(
 ): Promise<ExportResult> {
   const { options } = request;
   const prepared = await prepare(request);
-  const filename = `${defaultFileName(options.fileName)}.${options.format === "jpeg" ? "jpg" : options.format}`;
-
+  const extension = options.format === "jpeg" ? "jpg" : options.format;
+  const filename = `${defaultFileName(options.fileName)}.${extension}`;
   const embed = options.embed !== false;
-  if (options.format === "svg") {
-    const model = prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
-    const plain = await markup(
-      prepared,
-      model,
-      0,
-      options.transparent,
-      still(prepared, request.scene),
+  const captions = options.captions !== false;
+
+  // A still is the picture showing: the scene picked, and the step of the story shown (D-86).
+  const cursor =
+    request.story == null || request.folder !== ""
+      ? null
+      : cursorAtStep(prepared.diagram, request.story);
+  const showing: Moment = { scene: request.scene, story: cursor };
+  const captionOf = (story: StoryCursor | null): Caption | null => {
+    if (!captions || story === null) return null;
+    const text = captionAt(prepared.diagram, story);
+    return text === null ? null : { text, opacity: 1 };
+  };
+
+  /** One still, as SVG text and its size in px at scale 1. */
+  const stillSvg = async (at: Moment, transparent: boolean) => {
+    const caption = captionOf(at.story);
+    const model = prepared.modelFor(prepared.resolvedFor(at), null, null);
+    const svg = await markup(prepared, model, 0, transparent, still(prepared, at), caption);
+    const frame = caption === null ? prepared.frame : withCaptionBand(prepared.frame);
+    return { svg, w: frame.w, h: frame.h };
+  };
+  const stillImage = async (at: Moment, format: "png" | "jpeg", scale: number, quality = 0.92) => {
+    const transparent = format === "png" && options.transparent;
+    const { svg, w, h } = await stillSvg(at, transparent);
+    const width = Math.round(w * scale);
+    const height = Math.round(h * scale);
+    const canvas = await rasterize(
+      svg,
+      width,
+      height,
+      format === "jpeg" ? prepared.theme.base : null,
     );
+    const blob = await toBlob(canvas, format === "png" ? "image/png" : "image/jpeg", quality);
+    return { blob, width, height };
+  };
+
+  // Every beat as an image, zipped, in the order they play.
+  if (
+    options.each === "beats" &&
+    prepared.story !== null &&
+    (options.format === "png" || options.format === "jpeg")
+  ) {
+    const ends = [
+      prepared.story.opening,
+      ...prepared.story.segments.filter((segment) => segment.endsBeat).map((segment) => segment.to),
+    ];
+    const entries: Zippable = {};
+    const base = defaultFileName(options.fileName);
+    let size = { width: 0, height: 0 };
+    for (const [index, story] of ends.entries()) {
+      if (signal?.aborted === true) throw new DOMException("Export cancelled", "AbortError");
+      const image = await stillImage(
+        { scene: request.scene, story },
+        options.format,
+        options.scale,
+      );
+      size = {
+        width: Math.max(size.width, image.width),
+        height: Math.max(size.height, image.height),
+      };
+      const number = String(index).padStart(2, "0");
+      entries[`${base}/${base}-${number}.${extension}`] = new Uint8Array(
+        await image.blob.arrayBuffer(),
+      );
+      onProgress((index + 1) / ends.length);
+    }
+    if (embed) entries[`${base}/README.txt`] = strToU8(BEATS_NOTE);
+    const zipped = zipSync(entries, { level: 0 });
+    return {
+      blob: new Blob([zipped.slice().buffer], { type: "application/zip" }),
+      filename: `${base}.zip`,
+      ...size,
+    };
+  }
+
+  if (options.format === "svg") {
+    const { svg: plain, w, h } = await stillSvg(showing, options.transparent);
     const svg = embed ? embedInSvg(plain, request.files) : plain;
     onProgress(1);
     return {
       blob: new Blob([svg], { type: "image/svg+xml" }),
       filename,
-      width: Math.round(prepared.frame.w),
-      height: Math.round(prepared.frame.h),
+      width: Math.round(w),
+      height: Math.round(h),
     };
   }
 
   if (options.format === "png" || options.format === "jpeg") {
-    const width = Math.round(prepared.frame.w * options.scale);
-    const height = Math.round(prepared.frame.h * options.scale);
-    const transparent = options.format === "png" && options.transparent;
-    const model = prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
-    const svg = await markup(prepared, model, 0, transparent, still(prepared, request.scene));
-    const canvas = await rasterize(
-      svg,
-      width,
-      height,
-      options.format === "jpeg" ? prepared.theme.base : null,
-    );
-    const image = await toBlob(canvas, options.format === "png" ? "image/png" : "image/jpeg", 0.92);
+    const { blob: image, width, height } = await stillImage(showing, options.format, options.scale);
     const blob =
       options.format === "png" && embed
         ? new Blob(
@@ -388,91 +591,156 @@ export async function runExport(
   if (options.format === "pdf") {
     // A print-quality image of the diagram on a page its size (07 §18 P0-7).
     const scale = Math.max(2, options.scale);
-    const width = Math.round(prepared.frame.w * scale);
-    const height = Math.round(prepared.frame.h * scale);
-    const model = prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
-    const svg = await markup(prepared, model, 0, false, still(prepared, request.scene));
+    const { svg, w, h } = await stillSvg(showing, false);
+    const width = Math.round(w * scale);
+    const height = Math.round(h * scale);
     const canvas = await rasterize(svg, width, height, prepared.theme.base);
     const jpeg = await toBlob(canvas, "image/jpeg", 0.95);
     const pdf = jpegToPdf(
       new Uint8Array(await jpeg.arrayBuffer()),
       { width, height },
-      { width: prepared.frame.w, height: prepared.frame.h },
+      { width: w, height: h },
       options.fileName,
     );
     onProgress(1);
     return {
       blob: new Blob([pdf.slice().buffer], { type: "application/pdf" }),
       filename,
-      width: Math.round(prepared.frame.w),
-      height: Math.round(prepared.frame.h),
+      width: Math.round(w),
+      height: Math.round(h),
     };
   }
 
   // Animated: sample the shared clock frame by frame (PR-9). Every period divides 4s, so the
   // last frame flows straight into the first (EX-7).
-  const scale = Math.min(options.scale, MAX_ANIMATED_WIDTH / prepared.frame.w);
-  const width = Math.max(2, Math.round(prepared.frame.w * scale));
-  const height = Math.max(2, Math.round(prepared.frame.h * scale));
   const sceneCount = prepared.sceneNames.length;
-  const story = options.animation === "story" && sceneCount > 1;
+  const scenes = options.animation === "scenes" && sceneCount > 1;
+  const story = options.animation === "story" ? prepared.story : null;
+  const banded = story !== null && captions;
+  const area = banded ? withCaptionBand(prepared.frame) : prepared.frame;
+  const scale = Math.min(options.scale, MAX_ANIMATED_WIDTH / area.w);
+  const width = Math.max(2, Math.round(area.w * scale));
+  const height = Math.max(2, Math.round(area.h * scale));
   // A traffic pattern (D-84) loops once per cycle (and every motion's loop): frames come from its
   // second time round, so copies that are draining at the end are draining at the start too.
-  const cycle = story
-    ? null
-    : (prepared.resolvedFor(request.scene).capacityOverTime?.cycle ?? null);
-  const duration = story
-    ? sceneCount * STORY_HOLD
-    : cycle === null
-      ? LOOP_SECONDS
-      : patternLoop(cycle);
+  const cycle =
+    scenes || story !== null
+      ? null
+      : (prepared.resolvedFor(showing).capacityOverTime?.cycle ?? null);
+  const duration =
+    story !== null
+      ? story.duration + STORY_END_HOLD
+      : scenes
+        ? sceneCount * SCENE_HOLD
+        : cycle === null
+          ? LOOP_SECONDS
+          : patternLoop(cycle);
   const offset = cycle === null ? 0 : duration;
   const frameCount = Math.round(duration * options.fps);
   const delay = Math.round(1000 / options.fps);
   const transparent = options.format === "webp" && options.transparent;
 
-  // Capacity in an animation: copies boot and drain as the story moves from scene to scene.
+  /** Where an animation is at time `t`: the picture, the one it's changing from, and since when. */
+  const positionAt = (
+    t: number,
+  ): {
+    readonly key: number;
+    readonly to: Moment | string | null;
+    readonly from: Moment | string | null;
+    readonly start: number;
+    readonly seconds: number;
+    /** How long the step lasts, change and hold: values run across it. */
+    readonly lasts: number;
+    readonly caption: Caption | null;
+  } => {
+    if (story !== null) {
+      const segment = segmentAt(story, t);
+      if (segment === null)
+        return {
+          key: -1,
+          to: { scene: request.scene, story: story.opening },
+          from: null,
+          start: 0,
+          seconds: 0,
+          lasts: 0,
+          caption: banded ? { text: null, opacity: 0 } : null,
+        };
+      // The words arrive with the first change of their beat.
+      const first = story.segments.find((other) => other.beat === segment.beat) ?? segment;
+      return {
+        key: story.segments.indexOf(segment),
+        to: { scene: request.scene, story: segment.to },
+        from: { scene: request.scene, story: segment.from },
+        start: segment.start,
+        seconds: segment.change,
+        lasts: segment.end - segment.start,
+        caption: banded
+          ? {
+              text: captionAt(prepared.diagram, segment.to),
+              opacity: Math.min(1, Math.max(0, (t - first.start) / 0.3)),
+            }
+          : null,
+      };
+    }
+    if (scenes) {
+      const position = scenesAt(t, sceneCount);
+      const local = ((t % duration) + duration) % duration;
+      return {
+        key: position.to,
+        to: prepared.sceneNames[position.to] ?? null,
+        from: prepared.sceneNames[position.from] ?? null,
+        start: t - (local - position.to * SCENE_HOLD),
+        seconds: SCENE_TRANSITION,
+        lasts: 0,
+        caption: null,
+      };
+    }
+    return { key: 0, to: showing, from: null, start: 0, seconds: 0, lasts: 0, caption: null };
+  };
+
+  // Capacity in an animation: copies boot and drain as it moves from picture to picture.
   let timeline: CapacityTimeline | null = null;
-  let shown = -1;
+  let shown = Number.NaN;
   const capacityAt = (t: number): CapacityRuntime | null => {
-    const position = story ? storyAt(t, sceneCount) : { from: 0, to: 0 };
-    const name = story ? (prepared.sceneNames[position.to] ?? null) : request.scene;
-    const resolved = prepared.resolvedFor(name);
+    const position = positionAt(t);
+    const resolved = prepared.resolvedFor(position.to);
     if (!resolved.capacity.active) return null;
+    const moving = scenes || story !== null;
     if (timeline === null) {
       timeline = new CapacityTimeline(
         resolved.capacity,
         prepared.diagram,
-        story ? t : 0,
+        moving ? t : 0,
         resolved.capacityOverTime,
       );
-      shown = position.to;
-    } else if (position.to !== shown) {
-      const local = ((t % duration) + duration) % duration;
+      shown = position.key;
+    } else if (position.key !== shown) {
       timeline.update(
         resolved.capacity,
         prepared.diagram,
-        t - (local - position.to * STORY_HOLD),
+        position.start,
         false,
         resolved.capacityOverTime,
       );
-      shown = position.to;
+      shown = position.key;
     }
-    return { timeline, version: position.to };
+    return { timeline, version: position.key };
   };
 
   const modelAt = (t: number): SceneModel => {
-    if (!story) return prepared.modelFor(prepared.resolvedFor(request.scene), null, null);
-    const position = storyAt(t, sceneCount);
-    const local = ((t % duration) + duration) % duration;
-    const transitionStart = t - (local - position.to * STORY_HOLD);
-    const inTransition = local - position.to * STORY_HOLD < SCENE_TRANSITION;
-    const current = prepared.resolvedFor(prepared.sceneNames[position.to] ?? null);
-    const previous = inTransition
-      ? prepared.resolvedFor(prepared.sceneNames[position.from] ?? null)
-      : null;
-    return prepared.modelFor(current, previous, inTransition ? transitionStart : null);
+    const position = positionAt(t);
+    const current = prepared.resolvedFor(position.to);
+    const inTransition = position.from !== null && t - position.start < position.seconds;
+    return prepared.modelFor(
+      current,
+      inTransition ? prepared.resolvedFor(position.from) : null,
+      inTransition ? position.start : null,
+      position.seconds,
+      position.lasts > 0 ? { start: position.start, seconds: position.lasts } : null,
+    );
   };
+  const frameAt = (t: number, clear: boolean): Promise<string> =>
+    markup(prepared, modelAt(t), t, clear, capacityAt(t), positionAt(t).caption);
 
   if (options.format === "gif") {
     // Rendering and encoding overlap, so progress counts both halves of the work.
@@ -495,12 +763,7 @@ export async function runExport(
       for (let i = 0; i < frameCount; i++) {
         encoder.check();
         const t = offset + i / options.fps;
-        const canvas = await rasterize(
-          await markup(prepared, modelAt(t), t, false, capacityAt(t)),
-          width,
-          height,
-          prepared.theme.base,
-        );
+        const canvas = await rasterize(await frameAt(t, false), width, height, prepared.theme.base);
         const ctx = canvas.getContext("2d");
         if (ctx === null) throw new Error("Canvas isn't available in this browser.");
         await encoder.add(ctx.getImageData(0, 0, width, height).data, delay);
@@ -524,7 +787,7 @@ export async function runExport(
     if (signal?.aborted === true) throw new DOMException("Export cancelled", "AbortError");
     const t = offset + i / options.fps;
     const canvas = await rasterize(
-      await markup(prepared, modelAt(t), t, transparent, capacityAt(t)),
+      await frameAt(t, transparent),
       width,
       height,
       transparent ? null : prepared.theme.base,
@@ -542,6 +805,16 @@ export async function runExport(
   };
 }
 
+const BEATS_NOTE =
+  "One image per beat of the story, in the order they play. 00 is the opening, before anything happens.\n";
+
+/** How long an animated export of a diagram's story runs, in seconds; null when it has none. */
+export function storySeconds(files: ProjectFiles, folder: string, root = ""): number | null {
+  if (folder !== root) return null;
+  const timeline = storyTimeline(parseDiagram(files, folder).diagram);
+  return timeline === null ? null : timeline.duration + STORY_END_HOLD;
+}
+
 const THUMBNAIL = { width: 480, height: 300 } as const;
 
 /** Small JPEG of the top level for dashboard cards (stored with the draft or cloud diagram). */
@@ -555,9 +828,79 @@ export async function renderThumbnail(files: ProjectFiles): Promise<string> {
     fps: 10,
     fileName: "thumbnail",
   };
-  const prepared = await prepare({ files, folder: "", scene: null, options });
-  const model = prepared.modelFor(prepared.resolvedFor(null), null, null);
-  const svg = await markup(prepared, model, 0.5, false, still(prepared, null));
-  const canvas = await rasterize(svg, THUMBNAIL.width, THUMBNAIL.height, prepared.theme.base);
+  const source = new DiagramLoader(files);
+  const info = deckInfo(files, source);
+  const slide = info === null ? undefined : deckSlides(source)[0];
+  if (info === null || slide === undefined) {
+    const whole = await prepare({ files, folder: "", scene: null, options });
+    return thumbnailOf(whole, null);
+  }
+
+  const deck = source.load("").diagram;
+  const rawSlide = source.load(slide.folder).diagram;
+  const diagram = slideDiagram(deck, rawSlide, slide, info.slides);
+  const slideMoment = { scene: slide.scene, story: slideClosing(rawSlide, slide) };
+  const prepared = await prepare({
+    files,
+    folder: slide.folder,
+    root: slide.folder,
+    scene: slide.scene,
+    options,
+    diagram,
+  });
+  const stage =
+    prepared.page === null
+      ? prepared.frame
+      : grownTo(prepared.page, THUMBNAIL.width / THUMBNAIL.height);
+  const slideCanvas = await thumbnailLayer(prepared, stage, slideMoment);
+  let frameCanvas: HTMLCanvasElement | null = null;
+  const frameFolder = deck.settings.deck?.frame;
+  if (slide.frame && frameFolder !== null && frameFolder !== undefined && source.has(frameFolder)) {
+    const rawFrame = source.load(frameFolder).diagram;
+    const frameDiagram = slideDiagram(deck, rawFrame, slide, info.slides);
+    const framePrepared = await prepare({
+      files,
+      folder: frameFolder,
+      root: frameFolder,
+      scene: null,
+      options,
+      diagram: frameDiagram,
+    });
+    frameCanvas = await thumbnailLayer(framePrepared, stage, null);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = THUMBNAIL.width;
+  canvas.height = THUMBNAIL.height;
+  const context = canvas.getContext("2d");
+  if (context === null) throw new Error("Canvas isn't available in this browser.");
+  context.fillStyle = prepared.theme.base;
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  if (frameCanvas !== null) context.drawImage(frameCanvas, 0, 0);
+  context.drawImage(slideCanvas, 0, 0);
   return canvas.toDataURL("image/jpeg", 0.78);
+}
+
+/** A diagram with a page shows that page, whole, in the dashboard card's proportions. */
+async function thumbnailOf(prepared: Prepared, at: Moment | null): Promise<string> {
+  const stage =
+    prepared.page === null
+      ? prepared
+      : { ...prepared, frame: grownTo(prepared.page, THUMBNAIL.width / THUMBNAIL.height) };
+  const model = stage.modelFor(stage.resolvedFor(at), null, null);
+  const svg = await markup(stage, model, 0.5, false, still(stage, at));
+  const canvas = await rasterize(svg, THUMBNAIL.width, THUMBNAIL.height, stage.theme.base);
+  return canvas.toDataURL("image/jpeg", 0.78);
+}
+
+/** Render one transparent deck layer aligned to the same page frame as the other. */
+async function thumbnailLayer(
+  prepared: Prepared,
+  frame: Box,
+  at: Moment | null,
+): Promise<HTMLCanvasElement> {
+  const aligned = { ...prepared, frame };
+  const model = aligned.modelFor(aligned.resolvedFor(at), null, null);
+  const svg = await markup(aligned, model, 0.5, true, still(aligned, at));
+  return rasterize(svg, THUMBNAIL.width, THUMBNAIL.height, null);
 }

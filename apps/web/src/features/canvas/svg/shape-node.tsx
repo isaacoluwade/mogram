@@ -1,14 +1,15 @@
 "use client";
 
 import { memo, useRef } from "react";
-import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import { currentTime, useFrame, useTimeSource } from "../clock";
 import { componentAnimates, componentFrame, progressAt, type ComponentFrame } from "../frames";
 import { measure } from "../text";
 import type { SceneComponent, SceneShape } from "../scene";
-import { Badge, CardMark, ExportLink, LinkMark, NestedMark } from "./glyphs";
+import { Badge, CardMark, ExportLink, LinkMark, MarkBadge, NestedMark } from "./glyphs";
 import { PaintGradient, paintFill } from "./paint-gradient";
 import { actionProps, focusOpacity, useRender } from "./render-context";
+import { ImageNode } from "./image-node";
+import { CodeNode } from "./code-node";
 
 /** How far the state ring sits outside the outline, in px. */
 const RING = 4;
@@ -61,11 +62,16 @@ function apply(refs: ShapeRefs, component: SceneComponent, frame: ComponentFrame
  */
 export const ShapeNode = memo(function ShapeNode({ component }: { component: SceneComponent }) {
   const settings = useRender();
-  const { theme, transitionStart } = settings;
+  const { theme, transitionStart, transitionSeconds } = settings;
   const source = useTimeSource();
   const now = currentTime(source);
-  const transitioning = transitionStart !== null && now - transitionStart < SCENE_TRANSITION + 0.1;
-  const frame = componentFrame(component, theme, now, progressAt(now, transitionStart));
+  const transitioning = transitionStart !== null && now - transitionStart < transitionSeconds + 0.1;
+  const frame = componentFrame(
+    component,
+    theme,
+    now,
+    progressAt(now, transitionStart, transitionSeconds),
+  );
   const refs = useRef<ShapeRefs>({
     motion: null,
     glow: null,
@@ -79,7 +85,11 @@ export const ShapeNode = memo(function ShapeNode({ component }: { component: Sce
   }).current;
 
   useFrame(componentAnimates(component, transitioning), (t) => {
-    apply(refs, component, componentFrame(component, theme, t, progressAt(t, transitionStart)));
+    apply(
+      refs,
+      component,
+      componentFrame(component, theme, t, progressAt(t, transitionStart, transitionSeconds)),
+    );
   });
 
   const shape = component.shape;
@@ -164,6 +174,24 @@ export const ShapeNode = memo(function ShapeNode({ component }: { component: Sce
               <path d={shape.outline} fill={shape.base} />
               <g ref={(node) => void (refs.content = node)} opacity={frame.contentOpacity}>
                 <path data-part="fill" d={shape.outline} fill={paintFill(shape.fill, gradientId)} />
+                {component.image !== null ? (
+                  <ImageNode
+                    image={component.image}
+                    name={component.name}
+                    parts={component.parts}
+                    width={box.w}
+                    height={box.h}
+                  />
+                ) : null}
+                {component.code !== null ? (
+                  <CodeNode
+                    code={component.code}
+                    name={component.name}
+                    parts={component.parts}
+                    width={box.w}
+                    height={box.h}
+                  />
+                ) : null}
               </g>
               {shape.stroke !== null ? (
                 <path
@@ -206,11 +234,23 @@ export const ShapeNode = memo(function ShapeNode({ component }: { component: Sce
                 y={2}
               />
             </g>
+            {component.mark !== null ? (
+              <MarkBadge
+                mark={component.mark}
+                mode={theme.mode}
+                muted={theme.textMuted}
+                background={theme.base}
+                x={2}
+                y={2}
+              />
+            ) : null}
             {component.hasCard ? <CardMark x={9} y={box.h - 9} color={theme.textMuted} /> : null}
             {component.opens ? (
               <NestedMark x={box.w - 10} y={box.h - 9} color={theme.textMuted} />
             ) : null}
-            {component.link !== null ? <LinkMark x={10} y={10} color={theme.textMuted} /> : null}
+            {component.link !== null && component.mark === null ? (
+              <LinkMark x={10} y={10} color={theme.textMuted} />
+            ) : null}
           </g>
         </g>
       </g>
@@ -305,6 +345,16 @@ function sameShape(a: { component: SceneComponent }, b: { component: SceneCompon
     x.opens === y.opens &&
     x.link === y.link &&
     x.tooltip === y.tooltip &&
+    x.mark === y.mark &&
+    x.image?.content === y.image?.content &&
+    x.image?.fit === y.image?.fit &&
+    // A listing's lines are the same array until its text or slice changes.
+    x.code?.lines === y.code?.lines &&
+    x.code?.fontSize === y.code?.fontSize &&
+    x.code?.title === y.code?.title &&
+    x.code?.numbers === y.code?.numbers &&
+    x.code?.missing === y.code?.missing &&
+    JSON.stringify(x.parts) === JSON.stringify(y.parts) &&
     s.outline === t.outline &&
     s.details === t.details &&
     JSON.stringify(s.fill) === JSON.stringify(t.fill) &&

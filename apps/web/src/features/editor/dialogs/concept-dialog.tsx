@@ -7,7 +7,7 @@ import { EditError } from "@mogram/core/edit";
 import { parseDiagram } from "@mogram/core/format";
 import { conceptPlatformLabel, conceptTopicLabel } from "@mogram/core/presets";
 import type { Diagram, ProjectFiles } from "@mogram/core/model";
-import { STORY_HOLD } from "@mogram/core/timeline";
+import { SCENE_HOLD } from "@mogram/core/timeline";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import { IconButton } from "@/components/ui/icon-button";
@@ -325,7 +325,10 @@ function Changes({ changes }: { changes: DryRun }) {
   );
 }
 
-/** The concept, playing its scenes one after another; a scene chip shows (or picks) one. */
+/**
+ * The concept, playing: its story if it has one, with its scenes one after another over it; a
+ * scene chip shows (or picks) one.
+ */
 function ScenePlayer({ files, concept }: { files: ProjectFiles; concept: Diagram }) {
   const scenes = useMemo(
     () => [
@@ -340,7 +343,7 @@ function ScenePlayer({ files, concept }: { files: ProjectFiles; concept: Diagram
     if (!playing || scenes.length < 2) return;
     const timer = window.setInterval(
       () => setIndex((i) => (i + 1) % scenes.length),
-      STORY_HOLD * 1000,
+      SCENE_HOLD * 1000,
     );
     return () => window.clearInterval(timer);
   }, [playing, scenes.length]);
@@ -352,7 +355,17 @@ function ScenePlayer({ files, concept }: { files: ProjectFiles; concept: Diagram
         data-testid="concept-preview"
         data-scene={scene ?? "normal"}
       >
-        <DiagramPreview files={files} scene={scene} className="absolute inset-0" padding={28} />
+        {/* A concept with a story plays it, with its words (D-86). */}
+        <DiagramPreview
+          files={files}
+          scene={scene}
+          className="absolute inset-0"
+          padding={28}
+          captions
+          {...(concept.stories.length > 0
+            ? { insets: { top: 0, right: 0, bottom: 56, left: 0 } }
+            : {})}
+        />
       </div>
       {scenes.length > 1 ? (
         <div className="flex items-center gap-1" role="group" aria-label="Concept scenes">

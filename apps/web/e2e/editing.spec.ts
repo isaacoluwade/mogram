@@ -346,3 +346,63 @@ test("a container can't be shrunk smaller than what it holds (ED-13)", async ({ 
   const after = await element(page, "east_us").locator("rect").first().boundingBox();
   expect(Math.round(after?.width ?? 0)).toBe(Math.round(east.width));
 });
+
+test("the empty canvas's words sit in the open canvas and don't get in the way of a drop", async ({
+  page,
+}) => {
+  await openDraft(page, "blank");
+  const words = page.getByText("Start with a component");
+  await expect(words).toBeVisible();
+  // Centred between the library and the inspector, not behind either.
+  const centre = async () => {
+    const box = (await words.boundingBox())!;
+    return box.x + box.width / 2;
+  };
+  const library = (await page.getByRole("region", { name: "Library" }).boundingBox())!;
+  const inspector = (await page.getByRole("region", { name: "Inspector" }).boundingBox())!;
+  const open = (library.x + library.width + inspector.x) / 2;
+  expect(Math.abs((await centre()) - open)).toBeLessThan(12);
+
+  // Dropped right on the words: it lands on the canvas there.
+  const from = (await page
+    .getByRole("button", { name: "Add Rectangle", exact: true })
+    .boundingBox())!;
+  const to = (await words.boundingBox())!;
+  await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(to.x + to.width / 2, to.y + to.height / 2, { steps: 12 });
+  await page.mouse.up();
+  await expect(page.getByTestId("editor-canvas").locator('[data-shape="rectangle"]')).toHaveCount(
+    1,
+  );
+  await expect(words).toHaveCount(0);
+});
+
+test("on a page, the empty canvas's words sit in the middle of the page", async ({ page }) => {
+  await openDraft(page, "blank-deck");
+  const words = page.getByTestId("empty-canvas-hint");
+  await expect(words).toBeVisible();
+  const frame = (await page.getByTestId("page-frame").first().boundingBox())!;
+  const hint = (await words.boundingBox())!;
+  expect(Math.abs(hint.x + hint.width / 2 - (frame.x + frame.width / 2))).toBeLessThan(3);
+  expect(Math.abs(hint.y + hint.height / 2 - (frame.y + frame.height / 2))).toBeLessThan(3);
+  // They're part of the canvas: a page moved under a panel takes them under it too.
+  expect(
+    await words.evaluate((node) => {
+      const panel = document.querySelector('[aria-label="Inspector"]');
+      return (
+        panel !== null &&
+        (node.compareDocumentPosition(panel) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+      );
+    }),
+  ).toBe(true);
+  // And they stay there as the canvas moves.
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  const moved = (await page.getByTestId("page-frame").first().boundingBox())!;
+  await expect
+    .poll(async () => {
+      const now = (await words.boundingBox())!;
+      return Math.abs(now.x + now.width / 2 - (moved.x + moved.width / 2));
+    })
+    .toBeLessThan(3);
+});

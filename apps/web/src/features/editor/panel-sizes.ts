@@ -7,6 +7,7 @@ export const PANEL = {
   /** Gap between a panel and the window edge. */
   edge: 12,
   library: 288,
+  deckRail: 192,
   /** Inspector and tours. */
   right: 316,
   code: 360,
@@ -16,3 +17,5 @@ export const PANEL = {
 
 /** Space a panel takes from the canvas edge, including its margins. */
 export const clearOf = (width: number): number => PANEL.edge + width + PANEL.edge;
+export const clearDeckRail = clearOf(PANEL.deckRail);
+export const clearDeckLibrary = clearOf(PANEL.deckRail + PANEL.edge + PANEL.library);

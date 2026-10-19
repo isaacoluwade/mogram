@@ -1,0 +1,7 @@
+# Drawn under every slide that doesn't say frame: false.  (P2: the frame, the built-in values)
+mogram: 1
+name: Frame
+layout:
+  decorations:
+    where: { text: "%section%", style: caption, at: [6, 127] }
+    count: { text: "%slide% / %slides%", style: caption, align: right, at: [222, 127], width: 12 }

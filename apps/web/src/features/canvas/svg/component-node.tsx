@@ -2,13 +2,12 @@
 
 import { memo, useRef } from "react";
 import { LABEL } from "@mogram/core/layout";
-import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import { currentTime, useFrame, useTimeSource } from "../clock";
 import { componentAnimates, componentFrame, progressAt, type ComponentFrame } from "../frames";
 import { iconHref, useIconCacheVersion } from "../icons";
 import { measure } from "../text";
 import type { SceneComponent } from "../scene";
-import { Badge, CardMark, ExportLink, LinkMark, NestedMark } from "./glyphs";
+import { Badge, CardMark, ExportLink, LinkMark, MarkBadge, NestedMark } from "./glyphs";
 import { loadColor, percent } from "../capacity-frames";
 import { tone } from "../theme";
 import { actionProps, focusOpacity, useRender } from "./render-context";
@@ -111,12 +110,17 @@ export const ComponentNode = memo(function ComponentNode({
   component: SceneComponent;
 }) {
   const settings = useRender();
-  const { theme, fontFamily, transitionStart } = settings;
+  const { theme, fontFamily, transitionStart, transitionSeconds } = settings;
   const source = useTimeSource();
   useIconCacheVersion();
   const now = currentTime(source);
-  const transitioning = transitionStart !== null && now - transitionStart < SCENE_TRANSITION + 0.1;
-  const frame = componentFrame(component, theme, now, progressAt(now, transitionStart));
+  const transitioning = transitionStart !== null && now - transitionStart < transitionSeconds + 0.1;
+  const frame = componentFrame(
+    component,
+    theme,
+    now,
+    progressAt(now, transitionStart, transitionSeconds),
+  );
   const refs = useRef<NodeRefs>({
     motion: null,
     glow: null,
@@ -144,7 +148,11 @@ export const ComponentNode = memo(function ComponentNode({
   const QUEUE_INSET = 5;
 
   useFrame(componentAnimates(component, transitioning) || metered, (t) => {
-    apply(refs, component, componentFrame(component, theme, t, progressAt(t, transitionStart)));
+    apply(
+      refs,
+      component,
+      componentFrame(component, theme, t, progressAt(t, transitionStart, transitionSeconds)),
+    );
     if (!metered) return;
     const next = meterAt(t);
     const width = (component.tile.w - BAR_INSET * 2) * Math.min(1, next.load);
@@ -327,13 +335,23 @@ export const ComponentNode = memo(function ComponentNode({
               y={tile.y + 2}
             />
           </g>
+          {component.mark !== null ? (
+            <MarkBadge
+              mark={component.mark}
+              mode={theme.mode}
+              muted={theme.textMuted}
+              background={theme.base}
+              x={tile.x + 2}
+              y={tile.y + 2}
+            />
+          ) : null}
           {component.hasCard ? (
             <CardMark x={tile.x + 9} y={tile.y + tile.h - 9} color={theme.textMuted} />
           ) : null}
           {component.opens ? (
             <NestedMark x={tile.x + tile.w - 10} y={tile.y + tile.h - 9} color={theme.textMuted} />
           ) : null}
-          {component.link !== null ? (
+          {component.link !== null && component.mark === null ? (
             <LinkMark x={tile.x + 10} y={tile.y + 10} color={theme.textMuted} />
           ) : null}
           {timeline !== null && component.measured ? (
@@ -447,6 +465,7 @@ function sameComponent(
       x.tooltip === y.tooltip &&
       x.measured === y.measured &&
       x.queue === y.queue &&
-      x.hit === y.hit)
+      x.hit === y.hit &&
+      x.mark === y.mark)
   );
 }

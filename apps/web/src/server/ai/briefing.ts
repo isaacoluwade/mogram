@@ -1,4 +1,6 @@
 import "server-only";
+import { deckInfo, deckSlides } from "@mogram/core/deck";
+import { DiagramLoader } from "@mogram/core/nested";
 import { findDiagramFolders, parseDiagram } from "@mogram/core/format";
 import { lintDiagram } from "@mogram/core/lint";
 import type { ProjectFiles } from "@mogram/core/model";
@@ -27,6 +29,7 @@ export function briefing(name: string): string {
 - For a large build from scratch or a big restructure, propose_plan first with short steps, and build once they agree. Small, clear requests: just do them.
 - Building a new diagram from scratch: give it a name (and a one-line description) with update_settings.
 - To show how something copes with load (scaling out or up, caching, failover, queues, canaries), set it up on their own elements (find_concepts, then apply_concept naming their elements for its parts; or set_scaling plus traffic in waves on an arrow into it) rather than describing it: Mogram draws copies starting and stopping, machines growing, queues filling, on a loop. Use scenes for moments (an outage, a rollback), not for load. To explain an idea on its own, find_concepts and insert one of its explainers.
+- A deck (\`deck:\` in a diagram's settings) is a talk or a course: slides in order, each showing a diagram and playing its story, or a stretch of it between two named steps. Make and order slides with add_slide (a diagram already in the project, or a blank one), move_slide, remove_slide, add_section and set_slide. Slides are numbered as the deck plays. Give each beat a short caption and a spoken script with set_beat_words: the caption is read on screen, the script is said aloud and recorded.
 - Removing more than 8 elements, or rewriting a file that would, needs the person's agreement first.
 - Questions about the diagram: answer from the YAML, and point with show_elements.
 - Reply briefly, in plain words: what you did, and anything they should decide. No YAML, no list of every element, no talk of tools.
@@ -41,6 +44,17 @@ ${FILE_FORMAT_MARKDOWN}
 ${WEB_APP_FILES["mogram.yaml"] ?? ""}
 \`\`\`
 `;
+}
+
+/** The deck a folder is (or is a slide of): itself, the nearest one above, or the project's. */
+function deckAround(files: ProjectFiles, folder: string): string | null {
+  const loader = new DiagramLoader(files);
+  const parts = folder === "" ? [] : folder.split("/");
+  for (let depth = parts.length; depth >= 0; depth--) {
+    const candidate = parts.slice(0, depth).join("/");
+    if (deckInfo(files, loader, candidate) !== null) return candidate;
+  }
+  return null;
 }
 
 /** The most of the project's text shown in full each turn; the rest is listed (read_files). */
@@ -70,6 +84,19 @@ export function turnMessage(args: {
       ? `On screen: the top diagram${folders.length > 1 ? ` (nested diagrams: ${folders.filter((f) => f !== "").join(", ")})` : ""}.`
       : `On screen: the nested diagram in "${folder}". Tools change it unless you give another folder.`,
   );
+  const deck = deckAround(files, folder);
+  if (deck !== null) {
+    const slides = deckSlides(new DiagramLoader(files), deck);
+    lines.push(
+      `It's part of the deck in "${deck === "" ? "the project's own folder" : deck}", ${slides.length} slides: ${slides
+        .slice(0, 60)
+        .map(
+          (slide) =>
+            `${slide.number} ${slide.title} (${slide.folder}${slide.from === null ? "" : `, after step ${slide.from.index + 1}`}${slide.to === null ? "" : `, to step ${slide.to.index + 1}`})`,
+        )
+        .join("; ")}.`,
+    );
+  }
   const named = args.selection
     .map((name) => {
       const label =

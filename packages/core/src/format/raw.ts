@@ -4,17 +4,21 @@
  */
 import type {
   Component,
+  Deck,
   Connection,
   Container,
+  Control,
   DataValue,
   Decoration,
   Group,
   LayoutEntry,
   Scene,
+  Story,
   Tour,
 } from "../model/types";
 import { type CanvasThemeName } from "../presets/names";
 import type { ConceptPlatform, ConceptTopic } from "../presets/concepts";
+import type { PageName } from "../presets/pages";
 import type { Paint } from "../presets/paint";
 import type { Position } from "./diagnostics";
 
@@ -40,7 +44,9 @@ export interface RawSettings {
   name: string | null;
   description: string | null;
   concept: RawConcept | null;
+  deck: Deck | null;
   theme: CanvasThemeName | null;
+  page: PageName | null;
   background: Paint | null;
   grid: string | null;
   libraries: string[] | null;
@@ -53,6 +59,8 @@ export interface RawComponent {
   readonly at: Position;
   readonly parentRef: Ref | null;
   readonly opensAt: Position | null;
+  /** Where `on:` is written, when it is. */
+  readonly onAt: Position | null;
 }
 
 export interface RawContainer {
@@ -77,8 +85,10 @@ export interface RawConnection {
 
 export interface RawDecoration {
   readonly model: Mutable<Decoration>;
+  readonly needsPosition: boolean;
   readonly at: Position;
   readonly parentRef: Ref | null;
+  readonly onAt: Position | null;
 }
 
 export interface RawLayout {
@@ -91,6 +101,27 @@ export interface RawScene {
   readonly model: Scene;
   readonly at: Position;
   readonly entryPositions: Position[];
+}
+
+export interface RawStory {
+  readonly model: Story;
+  readonly at: Position;
+  /** Per step: where it's written, and where each line of its `set` is. */
+  readonly steps: readonly RawStep[];
+}
+
+export interface RawStep {
+  readonly at: Position;
+  readonly entries: readonly Position[];
+  readonly focus: readonly Position[];
+  readonly zoom: Position | null;
+  readonly rewind: Position | null;
+  readonly choices: readonly Position[];
+}
+
+export interface RawControl {
+  readonly model: Control;
+  readonly at: Position;
 }
 
 export interface RawTour {
@@ -117,6 +148,8 @@ export interface FileContribution {
   readonly decorations: RawDecoration[];
   readonly layout: RawLayout[];
   readonly scenes: RawScene[];
+  readonly stories: RawStory[];
+  readonly controls: RawControl[];
   readonly tours: RawTour[];
   hasLayoutKey: boolean;
 }

@@ -124,7 +124,7 @@ export class EditContext {
   }
 
   /** File where scenes (or tours) already live, else the settings file. */
-  storyFile(kind: "scenes" | "tours"): string {
+  sectionFile(kind: "scenes" | "tours"): string {
     const first = kind === "scenes" ? this.diagram.scenes[0] : this.diagram.tours[0];
     return first?.source.file ?? this.diagram.settingsFile;
   }

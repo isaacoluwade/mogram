@@ -21,6 +21,10 @@ import {
   GRID,
   LABEL,
   paintOrder,
+  frameOf,
+  placeMovers,
+  codeFontSize,
+  partBox,
   textStyleSize,
   type Box,
   type LayoutResult,
@@ -38,7 +42,9 @@ import {
   type ShapeId,
   type TextAlign,
   type ContainerStyleName,
+  presenceOpacity,
   type FlowPreset,
+  type Mark,
   type MotionPreset,
   type Paint,
   type StatePreset,
@@ -51,18 +57,24 @@ import {
   midpointOf,
   pointAlong,
   pointAtLength,
+  RouteCache,
+  routeConnections,
   trimPath,
   trimPolyline,
   type RoutedPath,
 } from "@mogram/core/routing";
 import { markerShape, markerTransform, type MarkerShape } from "./markers";
 import type { ResolvedState } from "@mogram/core/state";
+import { numberOf, scopeOf } from "@mogram/core/picture";
+import { isFormula, type Scope } from "@mogram/core/values";
+import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import { CapacityTimeline, isQueue } from "@mogram/core/capacity";
 import { fontStack } from "./fonts";
 import { iconSource, type IconSource } from "./icons";
 import { fitRich, layoutRich, parseRich, type RichLayout } from "./rich-text";
 import { measure, wrap } from "./text";
 import type { CanvasTheme } from "./theme";
+import { highlight, type Token } from "@mogram/core/code";
 
 /**
  * Everything the SVG renderer draws, already positioned and resolved. Built from the diagram,
@@ -75,6 +87,12 @@ export interface Pair<T> {
 }
 
 export interface SceneComponent {
+  /** What an image shows (D-102); null for anything else. */
+  readonly image: SceneImage | null;
+  /** What a listing shows (D-103); null for anything else. */
+  readonly code: SceneCode | null;
+  /** Its parts (D-104), in the order they're written. */
+  readonly parts: readonly ScenePart[];
   readonly name: string;
   readonly label: string;
   readonly lines: readonly string[];
@@ -102,6 +120,55 @@ export interface SceneComponent {
   readonly queue: boolean;
   /** A cache's hit rate in this scene. */
   readonly hit: number | null;
+  /** The sign at its corner (D-86). */
+  readonly mark: Mark | null;
+  /** What a meter shows (D-88): its value at each end of the step's run, against its most. */
+  readonly meter: SceneMeter | null;
+}
+
+/** A picture an image element shows (D-102): its file's text, which a renderer turns into a source. */
+export interface SceneImage {
+  /** A pointer, a `data:` picture or an SVG's text; empty when the file isn't there. */
+  readonly content: string;
+  readonly fit: "contain" | "cover";
+}
+
+/** A code listing as drawn (D-103): the lines shown, coloured, with what frames them. */
+export interface SceneCode {
+  /** The shown lines' tokens, in order; the first is line `first` of the file. */
+  readonly lines: readonly (readonly Token[])[];
+  readonly first: number;
+  /** The text or file isn't there: drawn as a missing listing. */
+  readonly missing: boolean;
+  readonly fontSize: number;
+  /** The header's words; null for none. */
+  readonly title: string | null;
+  readonly numbers: boolean;
+}
+
+/** A part as drawn (D-104), its box in the element's own coordinates, its look easing like any other. */
+export interface ScenePart {
+  readonly name: string;
+  /** `element.part`: what focus names. */
+  readonly target: string;
+  readonly kind: "lines" | "area";
+  /** For lines: the file's numbers of the first and last. */
+  readonly first: number;
+  readonly last: number;
+  readonly box: Box;
+  /** How strongly it's there, before and after a change of picture. */
+  readonly show: Pair<number>;
+  readonly tone: Pair<Tone | null>;
+  readonly mark: Pair<Mark | null>;
+}
+
+export interface SceneMeter {
+  readonly as: "bar" | "ring" | "number";
+  /** Where the value starts and ends across the step showing (the same when it isn't running). */
+  readonly value: Pair<number>;
+  readonly max: number;
+  readonly limit: number | null;
+  readonly unit: string;
 }
 
 /** How a scaling component is drawn (D-82). */
@@ -231,6 +298,9 @@ export interface SceneContainer {
     /** The component's room: the container shrinks by however much of it is empty. */
     readonly room: Box;
   } | null;
+  readonly mark: Mark | null;
+  /** It arranges what's in it (D-87): drawn as a plain tray, with a small title. */
+  readonly tray: boolean;
 }
 
 export interface SceneConnection {
@@ -341,6 +411,7 @@ export interface SceneGroup {
 }
 
 export interface SceneDecoration {
+  readonly width?: number | null;
   readonly name: string;
   readonly variant: Decoration["variant"];
   readonly text: string;
@@ -391,7 +462,7 @@ function richDecoration(
       bold: look.bold,
       italic: look.italic,
       tracking: style === "title" ? -0.6 : style === "heading" ? -0.3 : 0,
-      maxWidth: Number.POSITIVE_INFINITY,
+      maxWidth: decoration.width === null ? Number.POSITIVE_INFINITY : decoration.width * 8,
     });
     return { look, rich, family, fill: null };
   }
@@ -408,9 +479,34 @@ export interface SceneModel {
   readonly texts: readonly SceneDecoration[];
   /** Back-to-front drawing order: each container is drawn with everything inside it (ED-23). */
   readonly paint: readonly PaintEntry[];
+  /** What's framed: the page when the diagram has one (D-98), else its contents. */
   readonly bounds: Box;
+  /** The diagram's page, when it has one. Outside the editor nothing beyond it is drawn. */
+  readonly page: Box | null;
   /** Clock time the current scene change started, or null when settled. */
   readonly transitionStart: number | null;
+  /** How long that change takes, in seconds. */
+  readonly transitionSeconds: number;
+  /**
+   * How strongly things are drawn (D-86), by `kind:name` as painted: faded things, and during a
+   * change of picture, what's arriving (from 0) and leaving (to 0). Absent = fully there.
+   */
+  readonly presence: ReadonlyMap<string, Pair<number>>;
+  /** Things whose words or look are changing: the old is drawn fading out under the new. */
+  readonly crossfade: ReadonlySet<string>;
+  /** The picture being left, for what's leaving or crossfading; null when settled. */
+  readonly leaving: SceneModel | null;
+  /** What a story step keeps bright while the rest dims; null when nothing dims. */
+  readonly focus: ReadonlySet<string> | null;
+  /**
+   * Things on their way from one place to another while the picture changes (D-87): where each
+   * started, and the line it follows there when a connection joins the two places.
+   */
+  readonly travel: ReadonlyMap<string, Travel>;
+  /** The layout as it stands at this moment: what a layout places is where the picture has it. */
+  readonly layout: LayoutResult;
+  /** When the step showing began and how long its values take to run (D-88); null: settled. */
+  readonly ramp: { readonly start: number; readonly seconds: number } | null;
   /**
    * Where traffic reaches and leaves each scaling component (D-82): the ends of its connections
    * (and its scale set's), so traffic can be drawn fanning out to every copy.
@@ -418,6 +514,14 @@ export interface SceneModel {
   readonly spokes: ReadonlyMap<string, SceneSpokes>;
   /** The capacity plan, settled: what a still picture (or a canvas without a timeline) shows. */
   readonly settled: CapacityTimeline | null;
+}
+
+export interface Travel {
+  /** Where its centre was, and is now. */
+  readonly from: Point;
+  readonly to: Point;
+  /** The line it follows, from `from` to `to`; null: straight there. */
+  readonly along: readonly Point[] | null;
 }
 
 export interface SceneSpokes {
@@ -439,6 +543,24 @@ export interface SceneInput {
   /** State before the scene change; omit when nothing is transitioning. */
   readonly previous?: ResolvedState | null;
   readonly transitionStart?: number | null;
+  /** Seconds the change takes (a slow step takes longer); the usual when left out. */
+  readonly transitionSeconds?: number;
+  /**
+   * Draw what's hidden too, faintly (the editor): something that isn't there yet can still be
+   * selected, placed and styled.
+   */
+  readonly ghosts?: boolean;
+  /**
+   * Things a layout places that are being dragged (the editor): drawn this far from where
+   * they're placed until the drop says where they go.
+   */
+  readonly dragged?: {
+    readonly names: ReadonlySet<string>;
+    readonly dx: number;
+    readonly dy: number;
+  };
+  /** When the step showing began and how long it lasts: values run across it (`[30, 0]`). */
+  readonly ramp?: { readonly start: number; readonly seconds: number } | null;
   readonly theme: CanvasTheme;
   /** Label font family used for measuring (must match what the SVG renders with). */
   readonly fontFamily?: string;
@@ -453,17 +575,174 @@ export interface SceneInput {
 
 const LABEL_SIZE = 12;
 
+/** Routes of connections that touch something a layout places, kept between pictures. */
+const placedRoutes = new RouteCache();
+
+/**
+ * The layout and routes as they stand for a picture (D-87): what a layout places is put where
+ * the picture has it (in which container, riding on what), and the connections touching those
+ * things are routed to where they are now. Everything else is as given.
+ */
+function settle(
+  input: SceneInput,
+  drawn: Diagram,
+): { readonly layout: LayoutResult; readonly routes: ReadonlyMap<string, RoutedPath> } {
+  if (input.layout.movers.length === 0) return { layout: input.layout, routes: input.routes };
+  const picture = input.current.picture;
+  const whole = picture?.whole ?? input.diagram;
+  const absent = new Set(
+    [...(picture?.presence ?? [])].filter(([, value]) => value === "hidden").map(([name]) => name),
+  );
+  const first = placeMovers(input.layout, input.diagram, whole, { absent });
+  const movers = new Set(first.movers);
+  const touching = new Map(
+    [...drawn.connections].filter(
+      ([, connection]) => movers.has(connection.from.element) || movers.has(connection.to.element),
+    ),
+  );
+  const routes = new Map(input.routes);
+  if (touching.size > 0)
+    for (const [name, path] of routeConnections({ ...drawn, connections: touching }, first, {
+      cache: placedRoutes,
+    }))
+      routes.set(name, path);
+  // Things riding on a connection sit on its line.
+  const placed = placeMovers(first, input.diagram, whole, {
+    absent,
+    pointOn: (name, along) => {
+      const path = routes.get(name);
+      return path === undefined ? null : pointAlong(path, along, 0).point;
+    },
+  });
+  const dragged = input.dragged;
+  if (dragged === undefined || !placed.movers.some((name) => dragged.names.has(name)))
+    return { layout: placed, routes };
+  const elements = new Map(placed.elements);
+  for (const name of placed.movers) {
+    const element = elements.get(name);
+    if (element !== undefined && dragged.names.has(name))
+      elements.set(name, {
+        ...element,
+        box: { ...element.box, x: element.box.x + dragged.dx, y: element.box.y + dragged.dy },
+      });
+  }
+  return { layout: { ...placed, elements }, routes };
+}
+
+/**
+ * Every listing's coloured lines, worked out once for the lines a parse read, and each slice of
+ * them kept, so a listing that hasn't changed is the very same lines from one picture to the next.
+ */
+const highlighted = new WeakMap<
+  readonly string[],
+  {
+    readonly all: readonly (readonly Token[])[];
+    readonly slices: Map<string, readonly (readonly Token[])[]>;
+  }
+>();
+
+function sceneCode(component: Component): SceneCode {
+  const code = component.code;
+  if (code === null) throw new Error(`"${component.name}" isn't code.`);
+  const { listing } = code;
+  let cached = highlighted.get(listing.lines);
+  if (cached === undefined) {
+    // Coloured whole, then sliced: a slice can start inside a comment that opened above it.
+    cached = { all: highlight(code.language, listing.lines), slices: new Map() };
+    highlighted.set(listing.lines, cached);
+  }
+  const key = `${listing.first}-${listing.last}`;
+  let lines = cached.slices.get(key);
+  if (lines === undefined) {
+    lines = cached.all.slice(listing.first - 1, listing.last);
+    cached.slices.set(key, lines);
+  }
+  return {
+    lines,
+    first: listing.first,
+    missing: listing.missing,
+    fontSize: codeFontSize(component),
+    title: code.title,
+    numbers: code.numbers,
+  };
+}
+
 export function buildScene(input: SceneInput): SceneModel {
-  const { diagram, layout, routes, current, theme } = input;
+  const { current, theme } = input;
   const previous = input.previous ?? current;
   const family = input.fontFamily;
+  // What's there at this moment (D-86): the picture's diagram has hidden things gone and labels
+  // and looks as the story and scene left them. Geometry and paint order come from the diagram
+  // as written, so nothing shifts as things come and go.
+  const ghosts = input.ghosts === true;
+  const standing = (ghosts ? current.picture?.whole : current.picture?.diagram) ?? input.diagram;
+  const { layout, routes } = settle(input, standing);
+  /** A component's parts as drawn, each easing from how it was to how it is (D-104). */
+  const sceneParts = (component: Component, box: Box): ScenePart[] =>
+    [...component.parts.values()].flatMap((part) => {
+      const at = partBox(layout, component, part);
+      if (at === null) return [];
+      const now = current.picture?.parts.get(component.name)?.get(part.name) ?? part;
+      const was = previous.picture?.parts.get(component.name)?.get(part.name) ?? now;
+      return [
+        {
+          name: part.name,
+          target: `${component.name}.${part.name}`,
+          kind: part.kind,
+          first: part.kind === "lines" ? part.first : 0,
+          last: part.kind === "lines" ? part.last : 0,
+          box: { x: at.x - box.x, y: at.y - box.y, w: at.w, h: at.h },
+          show: { from: presenceOpacity(was.show), to: presenceOpacity(now.show) },
+          tone: { from: was.tone, to: now.tone },
+          mark: { from: was.mark, to: now.mark },
+        },
+      ];
+    });
+  // Values as they stand (D-88). Ones that read the model (`= load(web)`) are worked out here,
+  // where the model is known; then labels read them like any other.
+  const picture = current.picture;
+  const model: Scope["model"] = (fn, element) => {
+    const planned = current.capacity.elements.get(element);
+    if (fn === "load") return planned?.load;
+    if (fn === "copies") return planned?.copies;
+    if (fn === "traffic") return current.capacity.connections.get(element);
+    // What's in or on it now.
+    let count = 0;
+    for (const component of standing.components.values())
+      if (
+        (component.on === element || (component.on === null && component.parent === element)) &&
+        picture?.presence.get(component.name) !== "hidden"
+      )
+        count++;
+    return count;
+  };
+  const scopeAt = (end: "from" | "to"): Scope => {
+    const values = new Map(picture?.values ?? []);
+    if (end === "from")
+      for (const [name, ramp] of picture?.ramps ?? []) values.set(name, ramp.from);
+    return scopeOf(values, model);
+  };
+  const scopeNow = scopeAt("to");
+  const reads = [...(picture?.values ?? [])].some(([, value]) => isFormula(value));
+  const diagram = !reads
+    ? standing
+    : {
+        ...standing,
+        settings: {
+          ...standing.settings,
+          data: new Map(
+            [...(picture?.values ?? [])].map(([name]) => [name, scopeNow.value(name) ?? 0]),
+          ),
+        },
+      };
   // Labels and notes as drawn: `%key%` placeholders filled from data (07 §6.2).
   const shown = (name: string, text: string): string => withPlaceholders(diagram, name, text);
 
-  const statePair = (name: string): Pair<StatePreset> => ({
-    from: previous.elements.get(name)?.state ?? "healthy",
-    to: current.elements.get(name)?.state ?? "healthy",
-  });
+  // Something that wasn't there before arrives in the state it has now.
+  const statePair = (name: string): Pair<StatePreset> => {
+    const to = current.elements.get(name)?.state ?? "healthy";
+    return { from: previous.elements.get(name)?.state ?? to, to };
+  };
 
   // A scale set container holding only a scaled-out component grows and shrinks with it.
   const framedBy = new Map<string, string>();
@@ -505,6 +784,8 @@ export function buildScene(input: SceneInput): SceneModel {
           ? { component: name, max: fleet.scale.max, room }
           : null;
       })(),
+      mark: container.mark,
+      tray: container.layout !== null,
     });
   }
 
@@ -534,8 +815,26 @@ export function buildScene(input: SceneInput): SceneModel {
       hasCard: component.card !== null,
       opens: component.opens !== null,
       pinned: placed.pinned,
+      image:
+        component.image === null
+          ? null
+          : {
+              content:
+                component.image.path === null
+                  ? component.image.src.startsWith("data:image/")
+                    ? component.image.src
+                    : ""
+                  : (input.files[component.image.path] ?? ""),
+              fit: component.image.fit,
+            },
+      code: component.code === null ? null : sceneCode(component),
+      parts: sceneParts(component, placed.box),
       shape: sceneShape(
-        label === component.label ? component : { ...component, label },
+        component.code !== null || (component.image !== null && !component.hasExplicitLabel)
+          ? { ...component, label: "" }
+          : label === component.label
+            ? component
+            : { ...component, label },
         placed.box,
         theme,
         family,
@@ -561,6 +860,20 @@ export function buildScene(input: SceneInput): SceneModel {
       hit: current.capacity.active
         ? (current.capacity.elements.get(component.name)?.hit ?? null)
         : null,
+      mark: component.mark,
+      meter:
+        component.meter === null
+          ? null
+          : {
+              as: component.meter.as,
+              value: {
+                from: numberOf(component.meter.value, scopeAt("from")),
+                to: numberOf(component.meter.value, scopeNow),
+              },
+              max: Math.max(1e-9, numberOf(component.meter.max, scopeNow)),
+              limit: component.meter.limit,
+              unit: component.meter.unit,
+            },
     });
   }
 
@@ -651,6 +964,7 @@ export function buildScene(input: SceneInput): SceneModel {
       text,
       tone: decoration.tone,
       style: decoration.variant === "text" ? decoration.style : "body",
+      width: decoration.variant === "text" ? decoration.width : null,
       box: placed.box,
       ...richDecoration(decoration, placed.box),
     };
@@ -675,7 +989,9 @@ export function buildScene(input: SceneInput): SceneModel {
     spokes.set(component.name, ends);
   }
 
-  return {
+  const transitionStart =
+    input.previous != null && input.previous !== current ? (input.transitionStart ?? null) : null;
+  const built: SceneModel = {
     theme,
     spokes,
     settled: current.capacity.active
@@ -687,11 +1003,158 @@ export function buildScene(input: SceneInput): SceneModel {
     groups,
     zones,
     texts,
-    paint: paintOrder(diagram, layout),
-    bounds: layout.bounds,
-    transitionStart:
-      input.previous != null && input.previous !== current ? (input.transitionStart ?? null) : null,
+    paint: paintOrder(input.diagram, layout),
+    bounds: frameOf(layout),
+    page: layout.page,
+    transitionStart,
+    transitionSeconds: input.transitionSeconds ?? SCENE_TRANSITION,
+    presence: new Map(),
+    crossfade: new Set(),
+    leaving: null,
+    focus: current.picture?.focus ?? null,
+    travel: new Map(),
+    layout,
+    ramp: (picture?.ramps.size ?? 0) > 0 ? (input.ramp ?? null) : null,
   };
+  // The picture being left, when what's there (not just its state) may differ from this one.
+  const before =
+    transitionStart !== null &&
+    input.previous != null &&
+    (input.previous.picture?.diagram !== current.picture?.diagram ||
+      !samePresence(input.previous.picture?.presence, current.picture?.presence))
+      ? buildScene({ ...input, current: input.previous, previous: null, transitionStart: null })
+      : null;
+  return {
+    ...built,
+    ...presenceBetween(before, built, current, ghosts),
+    travel: before === null ? built.travel : travelBetween(before, built, input, diagram),
+    leaving: before,
+  };
+}
+
+const centreOf = (box: Box): Point => ({ x: box.x + box.w / 2, y: box.y + box.h / 2 });
+
+/**
+ * What's on its way somewhere while the picture changes (D-87): things a layout places whose
+ * place differs, and copies arriving, which grow out of what they copy. A thing moving between
+ * two places a connection joins follows that connection, either way along it.
+ */
+function travelBetween(
+  before: SceneModel,
+  model: SceneModel,
+  input: SceneInput,
+  diagram: Diagram,
+): ReadonlyMap<string, Travel> {
+  const travel = new Map<string, Travel>();
+  const was = input.previous?.picture?.whole ?? input.diagram;
+  const now = input.current.picture?.whole ?? input.diagram;
+  const whereOf = (from: Diagram, name: string): string | null => {
+    const item = from.components.get(name) ?? from.decorations.get(name);
+    return item === undefined ? null : (item.on ?? item.parent);
+  };
+  const lineBetween = (from: string | null, to: string | null): readonly Point[] | null => {
+    if (from === null || to === null || from === to) return null;
+    for (const connection of model.connections) {
+      if (connection.fromElement === from && connection.toElement === to)
+        return connection.path.samples;
+      if (connection.fromElement === to && connection.toElement === from)
+        return [...connection.path.samples].reverse();
+    }
+    return null;
+  };
+  const moved = (key: string, name: string, from: Box | undefined, to: Box): void => {
+    if (from === undefined) return;
+    const a = centreOf(from);
+    const b = centreOf(to);
+    if (Math.abs(a.x - b.x) < 0.5 && Math.abs(a.y - b.y) < 0.5) return;
+    travel.set(key, { from: a, to: b, along: lineBetween(whereOf(was, name), whereOf(now, name)) });
+  };
+  const oldComponents = new Map(before.components.map((c) => [c.name, c]));
+  for (const component of model.components) {
+    const old = oldComponents.get(component.name);
+    if (old !== undefined) {
+      moved(`component:${component.name}`, component.name, old.box, component.box);
+      continue;
+    }
+    // A copy arriving grows out of what it copies, when that's on screen.
+    const original = diagram.components.get(component.name)?.like ?? null;
+    const source =
+      original === null ? undefined : model.components.find((c) => c.name === original);
+    if (source !== undefined)
+      travel.set(`component:${component.name}`, {
+        from: centreOf(source.box),
+        to: centreOf(component.box),
+        along: null,
+      });
+  }
+  const oldTexts = new Map(before.texts.map((t) => [t.name, t]));
+  for (const text of model.texts)
+    moved(`text:${text.name}`, text.name, oldTexts.get(text.name)?.box, text.box);
+  return travel;
+}
+
+/** How strongly the editor draws something that's hidden. */
+export const GHOST_OPACITY = 0.2;
+
+function samePresence(
+  a: ReadonlyMap<string, unknown> | undefined,
+  b: ReadonlyMap<string, unknown> | undefined,
+): boolean {
+  if ((a?.size ?? 0) !== (b?.size ?? 0)) return false;
+  for (const [name, value] of a ?? []) if (b?.get(name) !== value) return false;
+  return true;
+}
+
+/** What each painted thing looks like, as far as a change of picture can alter it. */
+function looks(model: SceneModel): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const c of model.containers) out.set(`container:${c.name}`, `${c.label}|${c.mark ?? ""}`);
+  for (const c of model.components)
+    out.set(
+      `component:${c.name}`,
+      JSON.stringify([c.label, c.mark, c.shape?.fill, c.shape?.stroke, c.shape?.text.color]),
+    );
+  // A connection whose ends moved runs somewhere else: the old line fades into the new.
+  for (const c of model.connections)
+    out.set(`connection:${c.name}`, `${c.label ?? ""}|${c.look.lineD}`);
+  for (const g of model.groups) out.set(`group:${g.name}`, g.label);
+  for (const z of model.zones) out.set(`zone:${z.name}`, `${z.text}|${z.tone}`);
+  for (const t of model.texts) out.set(`text:${t.name}`, `${t.text}|${t.tone}`);
+  return out;
+}
+
+/**
+ * How strongly each thing is drawn, from the picture being left (if any) to this one, and
+ * which things change their words or look on the way.
+ */
+function presenceBetween(
+  before: SceneModel | null,
+  model: SceneModel,
+  current: ResolvedState,
+  ghosts: boolean,
+): Pick<SceneModel, "presence" | "crossfade"> {
+  const strength = (state: ResolvedState | null, key: string): number => {
+    const presence = state?.picture?.presence.get(key.slice(key.indexOf(":") + 1)) ?? "shown";
+    return ghosts && presence === "hidden" ? GHOST_OPACITY : presenceOpacity(presence);
+  };
+  const presence = new Map<string, Pair<number>>();
+  const crossfade = new Set<string>();
+  const now = looks(model);
+  if (before === null) {
+    for (const key of now.keys()) {
+      const to = strength(current, key);
+      if (to !== 1) presence.set(key, { from: to, to });
+    }
+    return { presence, crossfade };
+  }
+  const was = looks(before);
+  for (const key of new Set([...was.keys(), ...now.keys()])) {
+    const from = was.has(key) ? (before.presence.get(key)?.to ?? 1) : 0;
+    const to = now.has(key) ? strength(current, key) : 0;
+    if (from !== 1 || to !== 1) presence.set(key, { from, to });
+    if (was.has(key) && now.has(key) && was.get(key) !== now.get(key)) crossfade.add(key);
+  }
+  return { presence, crossfade };
 }
 
 export { textStyleSize };

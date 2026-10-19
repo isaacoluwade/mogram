@@ -2,7 +2,14 @@ import { z } from "zod";
 import { diffProjects, diffStats, summarizeDiff } from "@mogram/core/diff";
 import {
   EditError,
+  addSection,
+  addSlide,
   deleteElements,
+  moveEntries,
+  newSlideFolder,
+  removeEntries,
+  updateSlide,
+  updateStep,
   insertYaml,
   nestElements,
   renameElement,
@@ -14,9 +21,13 @@ import {
   writeProjectFile,
   type EditResult,
   type SceneValue,
+  type SlideFields,
   type SettingKey,
 } from "@mogram/core/edit";
 import { findDiagramFolders, parseDiagram } from "@mogram/core/format";
+import { deckSlides } from "@mogram/core/deck";
+import { DiagramLoader } from "@mogram/core/nested";
+import { beatsOf } from "@mogram/core/picture";
 import { lintDiagram, type LintFinding } from "@mogram/core/lint";
 import type { Diagnostic, Diagram, ProjectFiles, Scale, SceneCapacity } from "@mogram/core/model";
 import {
@@ -31,6 +42,7 @@ import { suggestedSizes } from "@mogram/core/capacity";
 import { applyConcept, insertConcept } from "@mogram/core/concepts";
 import type { ConceptCard, ConceptQuery } from "@mogram/concepts";
 import { GRID, computeLayout } from "@mogram/core/layout";
+import { isCodeFile } from "@/lib/api/contracts";
 import {
   MUTATING_TOOLS,
   type AssistantEvent,
@@ -77,6 +89,9 @@ const SCENE_VALUE = z.union([
   }),
   z.null(),
 ]);
+
+const SLIDE = z.number().int().min(1).max(500).describe("A slide's number, as the deck plays.");
+const AFTER = z.number().int().min(0).max(500);
 
 const CONCEPT_TOPIC_IDS = CONCEPT_TOPICS.map((t) => t.id) as [ConceptTopic, ...ConceptTopic[]];
 
@@ -218,6 +233,51 @@ export const TOOL_INPUTS = {
     summary: z.string().min(1).max(800),
     steps: z.array(z.string().min(1).max(240)).min(1).max(12),
   }),
+  add_slide: z.strictObject({
+    diagram: z
+      .string()
+      .max(512)
+      .optional()
+      .describe(
+        'A diagram already in the project to show, by its folder, like "flow". Leave it out for a new blank slide.',
+      ),
+    name: z.string().min(1).max(80).optional().describe("A new blank slide's name."),
+    after: AFTER.optional().describe(
+      "The slide it goes after; 0 for first. Leave it out for last.",
+    ),
+    title: z.string().min(1).max(120).optional(),
+    story: NAME.optional(),
+    from: NAME.optional().describe("The step its stretch of the story starts after."),
+    to: NAME.optional().describe("The step its stretch stops after."),
+  }),
+  move_slide: z.strictObject({ slide: SLIDE, after: AFTER }),
+  remove_slide: z.strictObject({ slide: SLIDE }),
+  add_section: z.strictObject({
+    title: z.string().min(1).max(120),
+    before: SLIDE.optional().describe("The slide it starts at. Leave it out for the end."),
+  }),
+  set_slide: z.strictObject({
+    slide: SLIDE,
+    title: z.string().min(1).max(120).nullable().optional(),
+    story: NAME.nullable().optional(),
+    from: NAME.nullable().optional(),
+    to: NAME.nullable().optional(),
+    scene: NAME.nullable().optional(),
+    frame: z.boolean().optional().describe("Whether the deck's frame is drawn under it."),
+    skip: z.boolean().optional(),
+  }),
+  set_beat_words: z.strictObject({
+    beat: z.number().int().min(1).max(400).describe("The beat, counting from 1."),
+    story: NAME.optional().describe("The story; its first when left out."),
+    caption: z.string().max(400).nullable().optional().describe("What's shown, short."),
+    script: z
+      .string()
+      .max(4000)
+      .nullable()
+      .optional()
+      .describe("What's said aloud over the beat, read from the Script window."),
+    folder: FOLDER,
+  }),
 } as const;
 
 export type ToolName = keyof typeof TOOL_INPUTS;
@@ -250,13 +310,23 @@ const DESCRIPTIONS: Readonly<Record<ToolName, string>> = {
   update_settings:
     "Change the diagram's settings: name, description, theme (midnight, paper, blueprint…), background, grid colour.",
   write_file:
-    "Write a whole file (a card's markdown under docs/, or a Mogram YAML file when a change is easier as a rewrite). Rewriting a file that removes more than 8 elements needs the person's agreement first.",
+    "Write a whole file (a card's markdown under docs/, a file a code element shows, like code/main.tf, or a Mogram YAML file when a change is easier as a rewrite). Rewriting a file that removes more than 8 elements needs the person's agreement first.",
   show_elements:
     "Point the person at elements on the canvas (select them), without changing anything. Use when they ask where something is.",
   ask_user:
     "Ask the person one question with 2 to 4 answers (they can also write their own). Ends your turn: their answer comes in their next message. Ask only when the choice changes what you'd build.",
   propose_plan:
     "Before a large build or rebuild, set out what you'll do as short steps and stop for the person to agree. Ends your turn.",
+  add_slide:
+    "In a deck: add a slide showing a diagram already in the project (it plays that diagram's story, or a stretch of it from one named step to another), or a new blank slide with a diagram of its own.",
+  move_slide: "In a deck: move a slide to after another (0 for first).",
+  remove_slide:
+    "In a deck: take a slide out of the deck. Its diagram stays in the project for other slides.",
+  add_section: "In a deck: start a section, a heading over the slides that follow it.",
+  set_slide:
+    "In a deck: change a slide's title, which story it plays and the stretch of it (from and to are step names), a scene over it, whether the deck's frame is under it, or skip it. null puts a value back to the diagram's own.",
+  set_beat_words:
+    "Set a beat's caption (short words shown on screen) and script (what's said aloud, read from the Script window and recorded). null removes one.",
 };
 
 /** A tool as providers describe it to the model. */
@@ -285,8 +355,15 @@ const diagramOf = (files: ProjectFiles, folder: string): Diagram =>
 function checkPath(path: string): void {
   if (path.startsWith("/") || path.split("/").some((part) => part === ".." || part === ""))
     throw new EditError(`"${path}" isn't a path inside the project.`);
-  if (!/\.(mogram\.yaml|mogram|md)$/.test(path) && !/(^|\/)mogram\.yaml$/.test(path))
-    throw new EditError("Only Mogram YAML files and markdown cards can be written.");
+  if (
+    !/\.(mogram\.yaml|mogram|md)$/.test(path) &&
+    !/(^|\/)mogram\.yaml$/.test(path) &&
+    // A code element's listing can come from a file of its own (D-103).
+    !isCodeFile(path)
+  )
+    throw new EditError(
+      "Only Mogram YAML files, markdown cards and code files a listing shows can be written.",
+    );
 }
 
 /**
@@ -418,6 +495,89 @@ export function applyOp(files: ProjectFiles, op: AssistantOp): EditResult {
       }
       return applyConcept(files, diagram, { concept, bindings: input.roles });
     }
+    case "add_slide": {
+      const input = TOOL_INPUTS.add_slide.parse(op.input);
+      const deck = deckFolderOf(files, folder);
+      const diagram = diagramOf(files, deck);
+      const at = placeAfter(files, deck, input.after);
+      if (input.diagram !== undefined) {
+        if (!findDiagramFolders(files).includes(input.diagram))
+          throw new EditError(`There's no diagram in the folder "${input.diagram}".`);
+        return addSlide(files, diagram, {
+          folder: input.diagram,
+          ...(at === undefined ? {} : { at }),
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.story === undefined ? {} : { story: input.story }),
+          ...(input.from === undefined ? {} : { from: input.from }),
+          ...(input.to === undefined ? {} : { to: input.to }),
+        });
+      }
+      return newSlideFolder(files, diagram, {
+        name: input.name ?? input.title ?? "New slide",
+        ...(at === undefined ? {} : { at }),
+      });
+    }
+    case "move_slide": {
+      const input = TOOL_INPUTS.move_slide.parse(op.input);
+      const deck = deckFolderOf(files, folder);
+      const diagram = diagramOf(files, deck);
+      const item = slideItem(files, deck, input.slide);
+      const to = placeAfter(files, deck, input.after) ?? diagram.settings.deck?.entries.length ?? 0;
+      return moveEntries(files, diagram, { items: [item], to });
+    }
+    case "remove_slide": {
+      const input = TOOL_INPUTS.remove_slide.parse(op.input);
+      const deck = deckFolderOf(files, folder);
+      return removeEntries(files, diagramOf(files, deck), {
+        items: [slideItem(files, deck, input.slide)],
+      });
+    }
+    case "add_section": {
+      const input = TOOL_INPUTS.add_section.parse(op.input);
+      const deck = deckFolderOf(files, folder);
+      return addSection(files, diagramOf(files, deck), {
+        title: input.title,
+        ...(input.before === undefined ? {} : { at: slideItem(files, deck, input.before) }),
+      });
+    }
+    case "set_slide": {
+      const { slide, ...given } = TOOL_INPUTS.set_slide.parse(op.input);
+      const deck = deckFolderOf(files, folder);
+      // Only what was given changes.
+      const patch = Object.fromEntries(
+        Object.entries(given).filter(([, value]) => value !== undefined),
+      ) as SlideFields;
+      return updateSlide(files, diagramOf(files, deck), {
+        item: slideItem(files, deck, slide),
+        patch,
+      });
+    }
+    case "set_beat_words": {
+      const input = TOOL_INPUTS.set_beat_words.parse(op.input);
+      const diagram = diagramOf(files, folder);
+      const story =
+        input.story === undefined
+          ? diagram.stories[0]
+          : diagram.stories.find((each) => each.name === input.story);
+      if (story === undefined)
+        throw new EditError(
+          input.story === undefined
+            ? "This diagram has no story yet. Add one with add_elements (stories:)."
+            : `There's no story "${input.story}".`,
+        );
+      const beats = beatsOf(story);
+      const beat = beats[input.beat - 1];
+      if (beat === undefined)
+        throw new EditError(`Story "${story.name}" has ${beats.length} beats, not ${input.beat}.`);
+      return updateStep(files, diagram, {
+        story: story.name,
+        index: beat.first,
+        patch: {
+          ...(input.caption === undefined ? {} : { say: input.caption }),
+          ...(input.script === undefined ? {} : { script: input.script }),
+        },
+      });
+    }
     case "write_file": {
       const input = TOOL_INPUTS.write_file.parse(op.input);
       checkPath(input.path);
@@ -427,6 +587,42 @@ export function applyOp(files: ProjectFiles, op: AssistantOp): EditResult {
       });
     }
   }
+}
+
+/**
+ * The deck a folder belongs to (D-99): the folder itself when it's a deck, or the nearest one
+ * above it (a slide's folder sits inside its deck's), or the project's own.
+ */
+function deckFolderOf(files: ProjectFiles, folder: string): string {
+  const parts = folder === "" ? [] : folder.split("/");
+  for (let depth = parts.length; depth >= 0; depth--) {
+    const candidate = parts.slice(0, depth).join("/");
+    if (!findDiagramFolders(files).includes(candidate)) continue;
+    if (diagramOf(files, candidate).settings.deck !== null) return candidate;
+  }
+  throw new EditError("This isn't a deck. Slides belong to a deck (`deck:` in its settings).");
+}
+
+/** A slide's place in the deck's list as written, by its number as the deck plays. */
+function slideItem(files: ProjectFiles, deck: string, number: number): number {
+  const slides = deckSlides(new DiagramLoader(files), deck);
+  const slide = slides[number - 1];
+  if (slide === undefined)
+    throw new EditError(`There's no slide ${number}: the deck has ${slides.length}.`);
+  return slide.item;
+}
+
+/** Where something goes to come after slide `after` (0: first); undefined for the end. */
+function placeAfter(
+  files: ProjectFiles,
+  deck: string,
+  after: number | undefined,
+): number | undefined {
+  if (after === undefined) return undefined;
+  const slides = deckSlides(new DiagramLoader(files), deck);
+  if (after === 0) return slides[0]?.item ?? 0;
+  const slide = slides[after - 1];
+  return slide === undefined ? undefined : slide.item + 1;
 }
 
 /** A scene entry as the model writes it: a preset, `5x`, or the fields of a scene line. */

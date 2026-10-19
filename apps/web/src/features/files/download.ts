@@ -3,6 +3,17 @@
 import { strToU8, zipSync, type Zippable } from "fflate";
 import type { ProjectFiles } from "@mogram/core/model";
 import { isMogramFile, toName } from "@mogram/core/model";
+import { assetBytes } from "@/features/assets/remote";
+
+export async function projectArchive(files: ProjectFiles, folder: string): Promise<Uint8Array> {
+  const entries: Zippable = {};
+  for (const [path, content] of Object.entries(files)) {
+    entries[`${folder}/${path}`] =
+      (await assetBytes(content)) ??
+      (content.startsWith("data:") ? dataUrlBytes(content) : strToU8(content));
+  }
+  return zipSync(entries, { level: 6 });
+}
 
 /** Saves a Blob through a temporary link (works in every browser, no popups). */
 export function saveBlob(blob: Blob, filename: string): void {
@@ -38,12 +49,6 @@ export async function downloadProject(files: ProjectFiles, name: string): Promis
     saveBlob(new Blob([files[only] ?? ""], { type: "text/yaml;charset=utf-8" }), filename);
     return;
   }
-  const entries: Zippable = {};
-  for (const [path, content] of Object.entries(files)) {
-    entries[`${slug}/${path}`] = content.startsWith("data:")
-      ? dataUrlBytes(content)
-      : strToU8(content);
-  }
-  const zipped = zipSync(entries, { level: 6 });
+  const zipped = await projectArchive(files, slug);
   saveBlob(new Blob([zipped.slice().buffer], { type: "application/zip" }), `${slug}.zip`);
 }

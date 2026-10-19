@@ -1,7 +1,6 @@
 "use client";
 
 import { memo, useRef } from "react";
-import { SCENE_TRANSITION } from "@mogram/core/timeline";
 import { currentTime, useFrame, useTimeSource } from "../clock";
 import { connectionAnimates, connectionFrame, progressAt, type FlowLayer } from "../frames";
 import type { SceneConnection } from "../scene";
@@ -54,13 +53,18 @@ export const ConnectionNode = memo(function ConnectionNode({
   connection: SceneConnection;
 }) {
   const settings = useRender();
-  const { theme, fontFamily, transitionStart, mode } = settings;
+  const { theme, fontFamily, transitionStart, transitionSeconds, mode } = settings;
   const source = useTimeSource();
   const now = currentTime(source);
-  const transitioning = transitionStart !== null && now - transitionStart < SCENE_TRANSITION + 0.1;
+  const transitioning = transitionStart !== null && now - transitionStart < transitionSeconds + 0.1;
   const timeline = connection.carries ? (settings.capacity?.timeline ?? null) : null;
   const frameAt = (t: number) => {
-    const base = connectionFrame(connection, theme, t, progressAt(t, transitionStart));
+    const base = connectionFrame(
+      connection,
+      theme,
+      t,
+      progressAt(t, transitionStart, transitionSeconds),
+    );
     if (timeline === null) return base;
     const traffic = timeline.carried(connection.name, t);
     return { ...base, from: withTraffic(base.from, traffic), to: withTraffic(base.to, traffic) };

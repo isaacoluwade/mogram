@@ -52,7 +52,7 @@ function ComponentKind({ type }: { type: string }) {
  */
 export function CardPanel({ allowViewerState }: { allowViewerState: boolean }) {
   const controller = useViewerController();
-  const { openCard, inspected, tour, wandered, present, levelPath, scene, viewerEntries } =
+  const { openCard, inspected, tour, wandered, present, levelPath, scene, story, viewerEntries } =
     useViewerShallow((s) => ({
       openCard: s.openCard,
       inspected: s.inspected,
@@ -61,6 +61,7 @@ export function CardPanel({ allowViewerState }: { allowViewerState: boolean }) {
       present: s.present,
       levelPath: s.levelPath,
       scene: s.scene,
+      story: s.story,
       viewerEntries: s.viewerEntries,
     }));
   const name = openCard ?? inspected;
@@ -80,7 +81,7 @@ export function CardPanel({ allowViewerState }: { allowViewerState: boolean }) {
   );
   const card = element.card;
   const content = card === null ? null : cardContent(card, controller.levels.files, label);
-  const resolved = controller.levels.resolve(levelPath, scene, viewerEntries);
+  const resolved = controller.levels.resolve(levelPath, { scene, story }, viewerEntries);
   const state =
     component !== undefined || container !== undefined
       ? (resolved?.elements.get(name)?.state ?? "healthy")

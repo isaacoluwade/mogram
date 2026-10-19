@@ -6,6 +6,7 @@ import type { Route as AppRoute } from "next";
 import {
   ArrowLeft,
   ChevronRight,
+  Clapperboard,
   Maximize,
   Minus,
   Pause,
@@ -14,8 +15,9 @@ import {
   Plus,
   RotateCcw,
   Route,
+  ScrollText,
 } from "lucide-react";
-import { STORY_HOLD } from "@mogram/core/timeline";
+import { SCENE_HOLD } from "@mogram/core/timeline";
 import { reachableSteps } from "@mogram/core/tours";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -121,12 +123,19 @@ export function LevelBack() {
 export function ViewerActions({
   editHref,
   preview = false,
+  prompterHref,
+  deck = false,
 }: {
   editHref: string | null;
   preview?: boolean;
+  /** Where this diagram's prompter is, when it has a script to read. */
+  prompterHref?: string;
+  /** A deck offers Record mode: the page and nothing else, stepped by hand. */
+  deck?: boolean;
 }) {
   const controller = useViewerController();
   const tours = controller.topTours;
+  const hasStory = controller.levels.top.diagram.stories.length > 0;
   const tour = useViewer((s) => s.tour);
   return (
     <Panel className="flex h-11 items-center gap-1 px-1.5">
@@ -153,6 +162,17 @@ export function ViewerActions({
           </MenuContent>
         </Menu>
       ) : null}
+      {prompterHref !== undefined && hasStory ? (
+        <IconButton
+          label="Open the prompter"
+          tooltipSide="bottom"
+          onClick={() =>
+            window.open(prompterHref, "mogram-prompter", "popup,width=1024,height=600")
+          }
+        >
+          <ScrollText />
+        </IconButton>
+      ) : null}
       <IconButton
         label="Present"
         tooltipSide="bottom"
@@ -160,6 +180,15 @@ export function ViewerActions({
       >
         <Maximize />
       </IconButton>
+      {deck ? (
+        <IconButton
+          label="Record mode: the page only, → to step, P to play, Esc to leave"
+          tooltipSide="bottom"
+          onClick={() => void enterRecord(controller.store)}
+        >
+          <Clapperboard />
+        </IconButton>
+      ) : null}
       {editHref !== null ? (
         <>
           <ToolbarDivider />
@@ -173,6 +202,17 @@ export function ViewerActions({
       ) : null}
     </Panel>
   );
+}
+
+/** Record mode (D-99): the page and nothing else, full screen when the browser allows it. */
+async function enterRecord(store: ReturnType<typeof useViewerStore>): Promise<void> {
+  store.getState().setRecord(true);
+  try {
+    if (document.fullscreenElement === null)
+      await document.documentElement.requestFullscreen({ navigationUI: "hide" });
+  } catch {
+    // Without fullscreen the page still fills the window.
+  }
 }
 
 export async function enterPresent(store: ReturnType<typeof useViewerStore>): Promise<void> {
@@ -194,13 +234,13 @@ export function SceneBar() {
     playing: s.playing,
     changed: s.viewerEntries.length > 0,
   }));
-  const scenes = controller.levels.geometry("").diagram.scenes;
+  const scenes = controller.levels.top.diagram.scenes;
   const strip = useScrollFade<HTMLDivElement>();
 
-  // Playing steps through Normal and every scene, holding each for STORY_HOLD seconds.
+  // Playing steps through Normal and every scene, holding each for SCENE_HOLD seconds.
   useEffect(() => {
     if (!playing) return;
-    const timer = window.setInterval(() => controller.stepScene(1), STORY_HOLD * 1000);
+    const timer = window.setInterval(() => controller.stepScene(1), SCENE_HOLD * 1000);
     return () => window.clearInterval(timer);
   }, [playing, controller]);
 

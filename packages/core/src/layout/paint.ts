@@ -81,5 +81,17 @@ export function paintOrder(diagram: Diagram, layout: LayoutResult): PaintEntry[]
     for (const text of decorations("other")) out.push({ kind: "text", name: text.name });
   };
   visit(null);
+  // What a layout places (D-87) is drawn over everything else, so something moving from one
+  // place to another is never behind what it crosses.
+  for (const name of layout.movers) {
+    const placed = layout.elements.get(name);
+    if (placed === undefined) continue;
+    if (placed.kind === "component") out.push({ kind: "component", name });
+    else
+      out.push({
+        kind: diagram.decorations.get(name)?.variant === "zone" ? "zone" : "text",
+        name,
+      });
+  }
   return out;
 }

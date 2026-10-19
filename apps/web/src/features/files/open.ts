@@ -5,13 +5,14 @@ import DOMPurify from "dompurify";
 import { strFromU8, unzipSync } from "fflate";
 import type { ProjectFiles } from "@mogram/core/model";
 import { isMogramFile } from "@mogram/core/model";
-import { LIMITS, isTextFile, projectPath } from "@/lib/api/contracts";
+import { LIMITS, isCodeFile, isTextFile, projectPath } from "@/lib/api/contracts";
+import { parsePointer } from "@mogram/core/assets";
+import { mediaTypeForPath } from "@mogram/core/presets";
+import { importMedia } from "@/features/assets/import";
 
 export class OpenError extends Error {
   override readonly name = "OpenError";
 }
-
-const IMAGE = /\.(png|jpe?g|gif|webp)$/i;
 
 /** Uploaded SVG icons are sanitised before they ever reach the project (IC-4, AC-7). */
 export function cleanSvg(svg: string): string | null {
@@ -27,18 +28,6 @@ export function cleanSvg(svg: string): string | null {
   )
     return null;
   return clean;
-}
-
-function toBase64(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000)
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
-}
-
-function mime(path: string): string {
-  const ext = path.split(".").pop()?.toLowerCase();
-  return ext === "jpg" || ext === "jpeg" ? "image/jpeg" : `image/${ext ?? "png"}`;
 }
 
 /** Strips a shared top folder ("checkout/mogram.yaml" → "mogram.yaml"). */
@@ -64,17 +53,27 @@ async function addEntry(
   if (ignored(path)) return;
   if (!projectPath.safeParse(path).success)
     throw new OpenError(`"${path}" isn't a path Mogram can open.`);
-  if (bytes.length > LIMITS.fileBytes) throw new OpenError(`${path} is larger than 2 MB.`);
+  const mediaType = mediaTypeForPath(path);
+  if (bytes.length > (mediaType === undefined ? LIMITS.fileBytes : LIMITS.assetBytes))
+    throw new OpenError(`${path} is larger than ${mediaType === undefined ? "2" : "8"} MB.`);
   if (isTextFile(path) && bytes.length > LIMITS.textFileBytes)
     throw new OpenError(`${path} is larger than 1 MB.`);
+  if (isCodeFile(path) && bytes.length > LIMITS.codeFileBytes)
+    throw new OpenError(`${path} is larger than 200 KB.`);
   if (path.toLowerCase().endsWith(".svg")) {
     const clean = cleanSvg(strFromU8(bytes));
     if (clean === null) throw new OpenError(`${path} isn't an SVG Mogram can use.`);
     out[path] = clean;
-  } else if (isTextFile(path)) {
+  } else if (isTextFile(path) || isCodeFile(path)) {
     out[path] = strFromU8(bytes);
-  } else if (IMAGE.test(path)) {
-    out[path] = `data:${mime(path)};base64,${toBase64(bytes)}`;
+  } else if (mediaType !== undefined) {
+    try {
+      out[path] = await importMedia(path, bytes);
+    } catch (error) {
+      throw new OpenError(
+        `${path}: ${error instanceof Error ? error.message : "This media file couldn't be opened."}`,
+      );
+    }
   }
 }
 
@@ -98,11 +97,28 @@ export async function readProject(input: readonly File[]): Promise<ProjectFiles>
   }
   const raw: { path: string; bytes: Uint8Array }[] = [];
   for (const file of input) {
+    if (
+      file.size >
+      (/\.zip$/i.test(file.name)
+        ? LIMITS.assetProjectBytes
+        : mediaTypeForPath(file.name) === undefined
+          ? LIMITS.fileBytes
+          : LIMITS.assetBytes)
+    )
+      throw new OpenError(`${file.name} is too large to open.`);
     const bytes = new Uint8Array(await file.arrayBuffer());
     const relative =
       (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     if (/\.zip$/i.test(file.name)) {
-      const entries = unzipSync(bytes);
+      const entries = unzipSync(bytes, {
+        filter: (entry) => {
+          if (ignored(entry.name) || entry.name.endsWith("/")) return false;
+          const max =
+            mediaTypeForPath(entry.name) === undefined ? LIMITS.fileBytes : LIMITS.assetBytes;
+          if (entry.originalSize > max) throw new OpenError(`${entry.name} is too large to open.`);
+          return true;
+        },
+      });
       for (const [path, content] of Object.entries(entries))
         if (!path.endsWith("/")) raw.push({ path, bytes: content });
     } else {
@@ -118,8 +134,17 @@ export async function readProject(input: readonly File[]): Promise<ProjectFiles>
     await addEntry(out, path, entry.bytes);
   }
   const total = Object.values(out).reduce((sum, text) => sum + text.length, 0);
+  const assets = Object.values(out).flatMap((text) => {
+    const pointer = parsePointer(text);
+    return pointer === null ? [] : [pointer];
+  });
+  if (
+    assets.length > LIMITS.assetCount ||
+    assets.reduce((sum, pointer) => sum + pointer.bytes, 0) > LIMITS.assetProjectBytes
+  )
+    throw new OpenError("Assets can total at most 500 MB and 2000 files.");
   if (total > LIMITS.projectBytes) throw new OpenError("That diagram is larger than 5 MB.");
-  if (Object.keys(out).length > LIMITS.fileCount)
+  if (Object.keys(out).length - assets.length > LIMITS.fileCount)
     throw new OpenError(`A diagram can have at most ${LIMITS.fileCount} files.`);
   // A lone YAML file without the .mogram extension is accepted as the diagram itself.
   const mogram = Object.keys(out).filter(isMogramFile);

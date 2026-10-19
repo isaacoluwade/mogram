@@ -1,11 +1,46 @@
+import {
+  SLIDE_OPENING,
+  STILL_SLIDE,
+  slideClosing,
+  slideDiagram,
+  slideEnded,
+  slideOpening,
+  type DeckSlide,
+} from "@mogram/core/deck";
+import type { ViewerDeck } from "@/features/deck/viewer-deck";
+import { loaderFor } from "@/features/canvas/use-diagram";
 import type { ElementLink } from "@mogram/core/model";
 import type { Box } from "@mogram/core/layout";
 import type { Tour } from "@mogram/core/model";
 import type { FlowPreset, StatePreset } from "@mogram/core/presets";
 import { advance, back, cursorTo, startCursor, type TourCursor } from "@mogram/core/tours";
 import { stepScene as nextScene } from "@mogram/core/timeline";
+import {
+  REWIND_CUT,
+  STEP_GAP,
+  beatsPlayed,
+  captionAt,
+  chooseStory,
+  cursorAtBeat,
+  hasNext,
+  nextBeat,
+  pictureAt,
+  previousBeat,
+  stepAt,
+  stepChange,
+  stepHold,
+  type Moment,
+  type StoryCursor,
+} from "@mogram/core/picture";
+import type { Value } from "@mogram/core/values";
 import { createElement } from "react";
-import { fitBox, PHONE_MIN_ZOOM, PHONE_WIDTH, type Camera } from "@/features/canvas/camera";
+import {
+  fitBox,
+  MAX_ZOOM,
+  PHONE_MIN_ZOOM,
+  PHONE_WIDTH,
+  type Camera,
+} from "@/features/canvas/camera";
 import type { LevelSide, LevelZoomPlan } from "@/features/canvas/level-transition";
 import { buildScene } from "@/features/canvas/scene";
 import { STUB_ROOM, StubsOverlay } from "@/features/canvas/svg/stubs";
@@ -29,6 +64,8 @@ import {
   type LevelGeometry,
 } from "./levels";
 import type { ViewerStore } from "./viewer-store";
+import type { Sound } from "@/features/assets/voice-player";
+import { voiceFor, VOICE_TAIL, type Voice } from "@mogram/core/assets";
 
 const samePath = (a: readonly string[], b: readonly string[]): boolean =>
   a.length === b.length && a.every((v, i) => v === b[i]);
@@ -47,12 +84,31 @@ export class ViewerController {
    */
   private readonly parentCameras = new Map<string, Camera>();
   private version = 0;
+  /** Steps of the beat being played that haven't happened yet, and the next beat when playing. */
+  private storyTimer: number | null = null;
+  private storyRun = 0;
+  /** Plays each beat's recording while the story plays by itself (D-105); none on a server. */
+  sound: Sound | null = null;
+  /** How long each step of the beat being played lasts, by its recording; null without one. */
+  private beatShare: number | null = null;
+  /** What the camera is framing for the story: an element, or null for the whole diagram. */
+  private storyZoom: string | null = null;
 
   constructor(
     readonly store: ViewerStore,
     readonly clock: Clock,
+    /** The deck this diagram is a slide of (D-99), when it is one. */
+    private deck: ViewerDeck | null = null,
   ) {
-    this.levels = new ProjectLevels(store.getState().files);
+    const { files, root } = store.getState();
+    // A slide and its frame take the deck's settings, and its built-in values for this slide.
+    const deckDiagram = deck === null ? null : loaderFor(files).load(deck.folder).diagram;
+    this.levels = new ProjectLevels(files, root, (folder, diagram) => {
+      const now = this.deck;
+      if (now === null || deckDiagram === null) return diagram;
+      if (folder !== root && folder !== now.frame) return diagram;
+      return slideDiagram(deckDiagram, diagram, now.slides[now.index] ?? null, now.slides.length);
+    });
     this.animator = new CameraAnimator(
       () => store.getState().camera,
       (camera) => store.getState().setCamera(camera),
@@ -105,11 +161,16 @@ export class ViewerController {
     });
   }
 
+  /** Where the viewer is: the scene picked and how far into the story (D-86). */
+  get moment(): Moment {
+    return { scene: this.state.scene, story: this.state.story, controls: this.state.controls };
+  }
+
   /** A level drawn on its own at `camera`, for the zoom between levels. */
   private picture(path: readonly string[], camera: Camera): LevelSide | null {
     const geometry = this.geometry(path);
-    const { scene, viewerEntries } = this.state;
-    const current = this.levels.resolve(path, scene, viewerEntries);
+    const { viewerEntries } = this.state;
+    const current = this.levels.resolve(path, this.moment, viewerEntries);
     if (current === null) return null;
     const model = buildScene({
       diagram: geometry.diagram,
@@ -141,22 +202,23 @@ export class ViewerController {
   parentFlows(path: readonly string[]): Map<string, FlowPreset> {
     const flows = new Map<string, FlowPreset>();
     if (path.length === 0) return flows;
-    const { scene, viewerEntries } = this.state;
-    const parent = this.levels.resolve(path.slice(0, -1), scene, viewerEntries);
+    const parent = this.levels.resolve(path.slice(0, -1), this.moment, this.state.viewerEntries);
     for (const [name, status] of parent?.connections ?? []) flows.set(name, status.flow);
     return flows;
   }
 
   geometry(path: readonly string[] = this.state.levelPath): LevelGeometry {
-    return this.levels.geometry(this.levels.folderOf(path) ?? "");
+    return this.levels.geometry(this.levels.folderOf(path) ?? this.levels.root);
   }
 
   get topTours(): readonly Tour[] {
-    return this.levels.geometry("").diagram.tours;
+    return this.levels.top.diagram.tours;
   }
 
   /** What framing a level shows: its diagram, and room for the parent's stubs either side. */
   private fitArea(geometry: LevelGeometry, path: readonly string[]): Box {
+    // A page (D-98) is the whole picture: nothing beside it to keep in view.
+    if (geometry.layout.page !== null) return geometry.layout.page;
     const layoutBounds =
       geometry.layout.bounds.w === 0 ? { x: 0, y: 0, w: 400, h: 300 } : geometry.layout.bounds;
     // Nested levels show their parent's neighbours as stubs either side; keep those in view.
@@ -177,11 +239,20 @@ export class ViewerController {
   ): Camera {
     const { viewport, present, reservedBottom } = this.state;
     const bounds = this.fitArea(geometry, path);
+    const insets = withReserved(chromeInsets(viewport, present), reservedBottom);
+    // A page fills the room there is, at whatever zoom that takes: edge to edge when presenting.
+    // Presenting, nothing is kept clear: the words sit over the foot of the page, as subtitles do.
+    if (geometry.layout.page !== null)
+      return fitBox(bounds, viewport, {
+        padding: present ? 0 : 16,
+        maxZoom: MAX_ZOOM,
+        insets: present ? { top: 0, right: 0, bottom: 0, left: 0 } : insets,
+      });
     return fitBox(bounds, viewport, {
       padding: 40,
       maxZoom: 1.1,
       ...(viewport.width < PHONE_WIDTH ? { minZoom: PHONE_MIN_ZOOM } : {}),
-      insets: withReserved(chromeInsets(viewport, present), reservedBottom),
+      insets,
     });
   }
 
@@ -192,6 +263,16 @@ export class ViewerController {
     else {
       this.animator.cancel();
       this.state.setCamera(camera);
+    }
+  }
+
+  async reframe(): Promise<void> {
+    if (this.state.openCard !== null) {
+      await this.openCard(this.state.openCard, { instant: true });
+    } else if (this.state.levelPath.length === 0) {
+      this.frameStory(this.state.story, false, true);
+    } else {
+      await this.fit(false);
     }
   }
 
@@ -275,7 +356,7 @@ export class ViewerController {
 
   /** `[text](#name)` in a card (CA-4): relative to the card's level; dots go into nested levels. */
   async followLink(target: string): Promise<void> {
-    const { path, element } = splitTarget(target);
+    const { path, element } = splitTarget(target, this.levels, this.state.levelPath);
     const from = this.state.openCard;
     if (path.length === 0) {
       if (elementBox(this.geometry(), element) === null) return;
@@ -400,8 +481,415 @@ export class ViewerController {
   }
 
   stepScene(direction: 1 | -1): void {
-    const scenes = this.levels.geometry("").diagram.scenes.map((s) => s.name);
+    const scenes = this.levels.top.diagram.scenes.map((s) => s.name);
     this.setScene(nextScene(scenes, this.state.scene, direction));
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // Stories (D-86)
+
+  private get top() {
+    return this.levels.top.diagram;
+  }
+
+  private stopStoryTimer(): void {
+    if (this.storyTimer !== null) window.clearTimeout(this.storyTimer);
+    this.storyTimer = null;
+    this.storyRun++;
+    // A recording plays with its beat, and stops when the picture moves on without it.
+    this.sound?.stop();
+  }
+
+  /** The recording of what a beat says, kept in the deck's folder (or the diagram's). */
+  private voiceOf(cursors: readonly StoryCursor[]): Voice | null {
+    let script: string | null = null;
+    for (const cursor of cursors) {
+      const ref = cursor.played.at(-1);
+      script = (ref === undefined ? null : stepAt(this.top, ref))?.script ?? script;
+    }
+    if (script === null) return null;
+    return voiceFor(this.state.files, this.deck?.folder ?? this.levels.root, script);
+  }
+
+  /** Frames what the story's step says to (an element), or the whole diagram again. */
+  private frameStory(cursor: StoryCursor | null, animated: boolean, force = false): void {
+    if (this.state.levelPath.length > 0 || this.state.openCard !== null) return;
+    const zoom =
+      cursor === null
+        ? null
+        : pictureAt(this.top, {
+            scene: this.state.scene,
+            story: cursor,
+            controls: this.state.controls,
+          }).zoom;
+    if (zoom === this.storyZoom && !force) return;
+    this.storyZoom = zoom;
+    const box = zoom === null ? null : elementBox(this.geometry([]), zoom);
+    if (box === null) {
+      void this.fit(animated);
+      return;
+    }
+    const { viewport, present, reservedBottom } = this.state;
+    const target = focusCamera(
+      box,
+      viewport,
+      withReserved(chromeInsets(viewport, present), reservedBottom),
+    );
+    if (animated) void this.animator.to(target, 650);
+    else {
+      this.animator.cancel();
+      this.state.setCamera(target);
+    }
+  }
+
+  // -----------------------------------------------------------------------------------------------
+  // A slide of a deck (D-99)
+
+  /** Whether this slide has been handed over: it's on its way out, and plays no further. */
+  private left = false;
+
+  /**
+   * The deck has cut to another slide and this one is fading out: it stays as it is, and
+   * nothing it had under way moves the deck again.
+   */
+  leave(): void {
+    this.left = true;
+    this.stopStoryTimer();
+    this.state.setStoryPlaying(false);
+  }
+
+  /**
+   * Stops everything under way: a camera move, the story's next beat. The viewer is going (or,
+   * in development, React is trying its effects twice, so nothing is marked for good).
+   */
+  dispose(): void {
+    this.stopStoryTimer();
+    this.animator.cancel();
+  }
+
+  /** The slide this viewer is showing, when it's in a deck. */
+  private get slide(): DeckSlide | null {
+    return this.deck?.slides[this.deck.index] ?? null;
+  }
+
+  /** The frame's folder, when this slide is drawn over the deck's frame. */
+  get frameFolder(): string | null {
+    return this.slide?.frame === true ? (this.deck?.frame ?? null) : null;
+  }
+
+  /** Whether the deck shows each beat's words; true outside a deck. */
+  get captions(): boolean {
+    return this.deck?.captions ?? true;
+  }
+
+  /**
+   * The deck has moved on to a slide that carries straight on from this one: the same diagram,
+   * the same picture, a new stretch. Nothing on screen changes but the slide's number.
+   */
+  carryOn(deck: ViewerDeck): void {
+    this.deck = deck;
+    this.levels.reset();
+    this.state.setSlide(deck.index);
+  }
+
+  /** Puts the slide where its deck says it begins: its opening, its last picture, or part-way. */
+  private openSlide(): void {
+    const deck = this.deck;
+    const slide = this.slide;
+    if (deck === null || slide === null) return;
+    this.stopStoryTimer();
+    if (slide.scene !== null) this.state.setScene(slide.scene, this.clock.time() - 10);
+    const cursor =
+      deck.start.kind === "closing"
+        ? slideClosing(this.top, slide, this.state.controls)
+        : this.slideAfter(slide, deck.start.kind === "beats" ? deck.start.beats : 0);
+    this.state.setStory(cursor, this.clock.time(), 0);
+    this.frameStory(cursor, false);
+    // Opened by the Script window as a beat begins: that beat plays once the cut is over.
+    if (deck.start.kind === "beats" && deck.start.play === true) {
+      const run = this.storyRun;
+      this.storyTimer = window.setTimeout(() => {
+        if (run === this.storyRun) this.nextBeat();
+      }, SLIDE_OPENING * 1000);
+      return;
+    }
+    if (!deck.playing) return;
+    // The deck is playing itself: a slide with nothing to play holds a moment, then moves on.
+    this.state.setStoryPlaying(true);
+    const run = this.storyRun;
+    this.storyTimer = window.setTimeout(
+      () => {
+        if (run !== this.storyRun) return;
+        if (cursor === null || slideEnded(this.top, slide, cursor, this.state.controls))
+          this.leaveSlide();
+        else this.nextBeat();
+      },
+      (cursor === null ? STILL_SLIDE : SLIDE_OPENING) * 1000,
+    );
+  }
+
+  /** A slide once `beats` of its stretch have played. */
+  private slideAfter(slide: DeckSlide, beats: number): StoryCursor | null {
+    let cursor = slideOpening(this.top, slide, this.state.controls);
+    for (let beat = 0; cursor !== null && beat < beats; beat++) {
+      if (slideEnded(this.top, slide, cursor, this.state.controls)) break;
+      cursor = nextBeat(this.top, cursor, this.state.controls).at(-1) ?? cursor;
+    }
+    return cursor;
+  }
+
+  /**
+   * The Script window has begun the `beats`th beat of a slide (D-105): the next beat plays as
+   * it would by hand, a slide that carries on plays on in place, and anything else is a jump.
+   */
+  followScript(slide: number, beats: number): void {
+    const deck = this.deck;
+    const current = this.slide;
+    if (deck === null || current === null || this.left) return;
+    this.state.setStoryPlaying(false);
+    if (slide === deck.index) {
+      const played = this.storyBeat;
+      if (beats === played) return;
+      if (beats === played + 1) {
+        this.nextBeat();
+        return;
+      }
+      this.stopStoryTimer();
+      const cursor = this.slideAfter(current, beats);
+      this.state.setStory(cursor, this.clock.time(), this.state.motionPaused ? 0 : undefined);
+      this.frameStory(cursor, true);
+      return;
+    }
+    const ended = slideEnded(this.top, current, this.state.story, this.state.controls);
+    if (slide === deck.index + 1 && beats === 1 && deck.slides[slide]?.carriesOn && ended) {
+      this.stepDeck(1);
+      return;
+    }
+    deck.goTo(slide, beats);
+  }
+
+  /** The slide has played while the deck plays itself: on to the next, or stop at the end. */
+  private leaveSlide(): void {
+    if (this.left) return;
+    const next = this.deck?.next(true) ?? false;
+    if (next === false) this.state.setStoryPlaying(false);
+    else if (next !== true) {
+      // It carries straight on: the same story, its next beat.
+      this.carryOn(next);
+      this.nextBeat();
+    }
+  }
+
+  /**
+   * Forward in a deck: the slide's next beat, or the next slide once it has played. Back: the
+   * beat before, or the slide before's last picture.
+   */
+  stepDeck(direction: 1 | -1): void {
+    const deck = this.deck;
+    if (deck === null || this.left) return;
+    this.state.setStoryPlaying(false);
+    if (direction === 1) {
+      if (this.nextBeat()) return;
+      const next = deck.next(false);
+      if (typeof next === "object") {
+        this.carryOn(next);
+        this.nextBeat();
+      }
+      return;
+    }
+    if (this.previousBeat()) return;
+    const before = deck.previous();
+    if (typeof before === "object") {
+      this.carryOn(before);
+      this.previousBeat();
+    }
+  }
+
+  /** Opens a story (the first, unless named) with `beats` of it already played. */
+  openStory(name?: string, beats = 0, options: { instant?: boolean } = {}): boolean {
+    const story = name ?? this.top.stories[0]?.name;
+    const cursor =
+      story === undefined ? null : cursorAtBeat(this.top, story, beats, this.state.controls);
+    if (cursor === null) return false;
+    this.stopStoryTimer();
+    const instant = options.instant === true || this.state.motionPaused;
+    this.state.setStory(cursor, this.clock.time(), instant ? 0 : undefined);
+    this.frameStory(cursor, !instant);
+    return true;
+  }
+
+  /** Plays cursors one after another, each for as long as its step takes. */
+  private playCursors(cursors: readonly StoryCursor[]): void {
+    this.stopStoryTimer();
+    const last = cursors.at(-1);
+    if (last === undefined) {
+      this.state.setStoryPlaying(false);
+      return;
+    }
+    // A beat with a recording lasts as long as it, a little more, its steps spaced through it.
+    const voice = this.voiceOf(cursors);
+    const share = voice === null ? null : (voice.seconds + VOICE_TAIL) / cursors.length;
+    this.beatShare = share;
+    if (voice !== null && this.state.storyPlaying) this.sound?.play(voice);
+    // With motion held still there's nothing to watch between steps: land on the beat's end.
+    if (this.state.motionPaused) {
+      this.state.setStory(last, this.clock.time(), 0);
+      this.frameStory(last, false);
+      this.afterBeat(last);
+      return;
+    }
+    const run = this.storyRun;
+    const play = (index: number): void => {
+      const cursor = cursors[index];
+      if (cursor === undefined || run !== this.storyRun) return;
+      const ref = cursor.played.at(-1);
+      const step = ref === undefined ? null : stepAt(this.top, ref);
+      const change = cursor.rewound ? REWIND_CUT : step === null ? 0 : stepChange(step);
+      const ends = index === cursors.length - 1;
+      // Values that run across the step (a timer) take its change and its hold.
+      const hold =
+        step === null || cursor.rewound
+          ? 0
+          : share !== null
+            ? Math.max(0, share - change)
+            : stepHold(step, ends, ends ? captionAt(this.top, cursor) : null);
+      this.state.setStory(cursor, this.clock.time(), change, hold);
+      this.frameStory(cursor, true);
+      if (ends) {
+        this.afterBeat(cursor);
+        return;
+      }
+      const gap = cursor.rewound
+        ? 0
+        : share !== null
+          ? Math.max(0, share - change)
+          : (step?.hold ?? STEP_GAP);
+      this.storyTimer = window.setTimeout(() => play(index + 1), (change + gap) * 1000);
+    };
+    play(0);
+  }
+
+  /** At the end of a beat: when the story is playing, the next one follows once it's been read. */
+  private afterBeat(cursor: StoryCursor): void {
+    if (!this.state.storyPlaying) return;
+    const ref = cursor.played.at(-1);
+    const step = ref === undefined ? null : stepAt(this.top, ref);
+    // A choice waits for the viewer; so does the end.
+    if (step === null || step.choices.length > 0) {
+      this.state.setStoryPlaying(false);
+      return;
+    }
+    const slide = this.slide;
+    const over =
+      slide !== null
+        ? slideEnded(this.top, slide, cursor, this.state.controls)
+        : !hasNext(this.top, cursor, this.state.controls);
+    if (over && slide === null) {
+      this.state.setStoryPlaying(false);
+      return;
+    }
+    const wait =
+      this.beatShare ??
+      stepChange(step) + stepHold(step, true, captionAt(this.top, cursor), step.script);
+    const run = this.storyRun;
+    this.storyTimer = window.setTimeout(() => {
+      if (run !== this.storyRun) return;
+      // In a deck, the end of a slide's stretch is where the next slide begins.
+      if (over) this.leaveSlide();
+      else this.nextBeat();
+    }, wait * 1000);
+  }
+
+  /** Plays the next beat. False at the end of the story, or of a slide's stretch of it. */
+  nextBeat(): boolean {
+    const cursor = this.state.story;
+    if (cursor === null) return false;
+    const slide = this.slide;
+    if (slide !== null && slideEnded(this.top, slide, cursor, this.state.controls)) return false;
+    const cursors = nextBeat(this.top, cursor, this.state.controls);
+    this.playCursors(cursors);
+    return cursors.length > 0;
+  }
+
+  /** Back a beat. False at the opening of the story, or of a slide's stretch of it. */
+  previousBeat(): boolean {
+    const cursor = this.state.story;
+    const slide = this.slide;
+    const opening = slide === null ? null : slideOpening(this.top, slide, this.state.controls);
+    if (cursor !== null && opening !== null && cursor.played.length <= opening.played.length)
+      return false;
+    const before = cursor === null ? null : previousBeat(cursor);
+    if (before === null) return false;
+    this.stopStoryTimer();
+    this.state.setStoryPlaying(false);
+    this.state.setStory(before, this.clock.time(), this.state.motionPaused ? 0 : undefined);
+    this.frameStory(before, true);
+    return true;
+  }
+
+  /** Takes one of the choices a step offers: its story plays from here. */
+  chooseStory(play: string): void {
+    const cursor = this.state.story;
+    if (cursor === null) return;
+    this.playCursors(chooseStory(this.top, cursor, play, this.state.controls));
+  }
+
+  /** Plays the story on by itself, or stops it where it is. From the end, it starts again. */
+  setStoryPlaying(playing: boolean): void {
+    const cursor = this.state.story;
+    if (!playing) {
+      this.stopStoryTimer();
+      this.state.setStoryPlaying(false);
+      return;
+    }
+    const slide = this.slide;
+    if (cursor === null) {
+      if (slide === null) return;
+      this.state.setPlaying(false);
+      this.stopStoryTimer();
+      this.state.setStoryPlaying(true);
+      const run = this.storyRun;
+      this.storyTimer = window.setTimeout(() => {
+        if (run !== this.storyRun) return;
+        this.leaveSlide();
+      }, STILL_SLIDE * 1000);
+      return;
+    }
+    this.state.setPlaying(false);
+    if (slide !== null && slideEnded(this.top, slide, cursor, this.state.controls)) {
+      // In a deck, playing from the end of a slide goes on to the next one.
+      this.state.setStoryPlaying(true);
+      this.leaveSlide();
+      return;
+    }
+    if (!hasNext(this.top, cursor, this.state.controls)) this.openStory(cursor.story, 0);
+    this.state.setStoryPlaying(true);
+    this.nextBeat();
+  }
+
+  /**
+   * Sets one of the diagram's controls (D-88). The story is where it was, played again with the
+   * new setting, since a control can change which steps play.
+   */
+  setControl(name: string, value: Value): void {
+    const story = this.state.story;
+    this.state.setControl(name, value);
+    if (story === null) return;
+    this.stopStoryTimer();
+    this.state.setStoryPlaying(false);
+    const cursor = cursorAtBeat(this.top, story.story, beatsPlayed(story), this.state.controls);
+    if (cursor !== null) this.state.setStory(cursor, this.clock.time(), 0);
+  }
+
+  /** How many beats of the story have played, for links and the progress dots. */
+  get storyBeat(): number {
+    const slide = this.slide;
+    // In a deck, beats are counted within the slide's stretch.
+    if (slide !== null) {
+      const opening = slideOpening(this.top, slide, this.state.controls);
+      return Math.max(0, beatsPlayed(this.state.story) - beatsPlayed(opening));
+    }
+    return beatsPlayed(this.state.story);
   }
 
   // -----------------------------------------------------------------------------------------------
@@ -435,8 +923,8 @@ export class ViewerController {
     options: { instant?: boolean } = {},
   ): Promise<void> {
     if (cursor.scene !== this.state.scene) this.setScene(cursor.scene);
-    const { path, element } = splitTarget(cursor.step);
-    const before = previous === null ? null : splitTarget(previous.step);
+    const { path, element } = splitTarget(cursor.step, this.levels);
+    const before = previous === null ? null : splitTarget(previous.step, this.levels);
     if (before !== null && samePath(before.path, path) && samePath(this.state.levelPath, path)) {
       await this.openCard(element, { travelFrom: before.element });
       return;
@@ -502,7 +990,7 @@ export class ViewerController {
     const target = [...this.state.levelPath, element].join(".");
     const others = this.state.viewerEntries.filter((entry) => entry.target !== target);
     return (
-      this.levels.resolve(this.state.levelPath, this.state.scene, others)?.elements.get(element)
+      this.levels.resolve(this.state.levelPath, this.moment, others)?.elements.get(element)
         ?.state ?? "healthy"
     );
   }
@@ -514,9 +1002,23 @@ export class ViewerController {
 
   /** Opens straight to a level, scene, tour step or card, without animation. */
   async applyDeepLink(link: DeepLink): Promise<void> {
-    const top = this.levels.geometry("").diagram;
+    const top = this.levels.top.diagram;
+    if (this.deck !== null) {
+      this.openSlide();
+      await this.fit(false);
+      return;
+    }
     if (link.scene !== null && top.scenes.some((s) => s.name === link.scene))
       this.state.setScene(link.scene, this.clock.time() - 10);
+    // A diagram with a story opens at its beginning, or as far in as the link says.
+    if (top.stories.length > 0)
+      this.openStory(
+        top.stories.some((story) => story.name === link.story)
+          ? (link.story ?? undefined)
+          : undefined,
+        link.beat ?? 0,
+        { instant: true },
+      );
     if (link.tour !== null && this.tour(link.tour) !== null) {
       await this.startTour(link.tour, link.step, { instant: true });
       return;
@@ -529,10 +1031,47 @@ export class ViewerController {
 
   /** The deep link for what's on screen now. */
   currentLink(): DeepLink {
-    const { levelPath, scene, openCard, tour } = this.state;
+    const { levelPath, scene, openCard, tour, story } = this.state;
+    const root = this.levels.root === "" ? null : this.levels.root;
+    // In a deck, where someone is is a slide and how far into it.
+    if (this.deck !== null)
+      return {
+        root: this.deck.folder === "" ? null : this.deck.folder,
+        slide: this.deck.index + 1,
+        level: [],
+        scene: null,
+        card: null,
+        tour: null,
+        step: null,
+        story: null,
+        beat: this.storyBeat,
+      };
     if (tour !== null)
-      return { level: [], scene: null, card: null, tour: tour.tour, step: tour.step };
-    return { level: levelPath, scene, card: openCard, tour: null, step: null };
+      return {
+        root,
+        slide: null,
+        level: [],
+        scene: null,
+        card: null,
+        tour: tour.tour,
+        step: tour.step,
+        story: null,
+        beat: null,
+      };
+    // The first story from its opening is where every visit starts, so it isn't spelled out.
+    const beat = beatsPlayed(story);
+    const named = story !== null && (beat > 0 || story.story !== this.top.stories[0]?.name);
+    return {
+      root,
+      slide: null,
+      level: levelPath,
+      scene,
+      card: openCard,
+      tour: null,
+      step: null,
+      story: named ? story.story : null,
+      beat: named ? beat : null,
+    };
   }
 }
 

@@ -27,14 +27,14 @@ const tooLarge = (): Response => apiError(413, "too_large", "That request is too
  * Reads a request body as text, counting the bytes actually received: `Content-Length` is only a
  * hint (a chunked request has none), so the limit is enforced while streaming.
  */
-export async function readText(
+export async function readBytes(
   request: Request,
   maxBytes = MAX_BODY_BYTES,
-): Promise<string | Response> {
+): Promise<Uint8Array | Response> {
   const declared = Number(request.headers.get("content-length") ?? "0");
   if (declared > maxBytes) return tooLarge();
   const reader = request.body?.getReader();
-  if (reader === undefined) return "";
+  if (reader === undefined) return new Uint8Array();
   const chunks: Uint8Array[] = [];
   let received = 0;
   for (;;) {
@@ -53,7 +53,15 @@ export async function readText(
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(bytes);
+  return bytes;
+}
+
+export async function readText(
+  request: Request,
+  maxBytes = MAX_BODY_BYTES,
+): Promise<string | Response> {
+  const bytes = await readBytes(request, maxBytes);
+  return bytes instanceof Response ? bytes : new TextDecoder().decode(bytes);
 }
 
 /** A size-limited JSON body (see `readText`), or a Response explaining why it was refused. */

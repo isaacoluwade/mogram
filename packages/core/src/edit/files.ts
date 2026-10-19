@@ -24,7 +24,7 @@ import { addEntry } from "./elements";
 // -------------------------------------------------------------------------------------------------
 // Settings
 
-export type SettingKey = "name" | "description" | "theme" | "background" | "grid";
+export type SettingKey = "name" | "description" | "theme" | "page" | "background" | "grid";
 
 /** Diagram settings live in mogram.yaml or the single file (FI-8). */
 export function setSetting(
@@ -37,6 +37,10 @@ export function setSetting(
     const value = args.value === null || args.value.trim() === "" ? undefined : args.value.trim();
     if (args.key === "theme" && value === "midnight") {
       root.delete("theme");
+      return;
+    }
+    if (args.key === "page" && (value === undefined || value === "none")) {
+      root.delete("page");
       return;
     }
     if (value !== undefined && !root.has(args.key)) {

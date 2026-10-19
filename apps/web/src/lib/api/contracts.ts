@@ -1,7 +1,9 @@
+import type { ProjectAbout } from "@mogram/core/deck";
 import type { ConceptPlatform, ConceptTopic } from "@mogram/core/presets";
 import { z } from "zod";
 import type { VersionChanges, VersionSource } from "@/lib/history/rules";
 import { MAX_FILE_BYTES } from "@mogram/core/format";
+import { parsePointer } from "@mogram/core/assets";
 
 /**
  * API contracts shared by the browser and the server (D-7). Limits are part of the contract
@@ -17,6 +19,11 @@ export const LIMITS = {
   textFileBytes: MAX_FILE_BYTES,
   projectBytes: 5_000_000,
   thumbnailBytes: 250_000,
+  assetBytes: 8_000_000,
+  assetSeconds: 120,
+  assetCount: 2_000,
+  assetProjectBytes: 500_000_000,
+  codeFileBytes: 200_000,
 } as const;
 
 /** Project-relative paths: no leading slash, no `.`/`..` segments, conservative characters. */
@@ -35,6 +42,13 @@ export const projectPath = z
 
 /** Text files Mogram reads (diagram YAML, card markdown). */
 export const isTextFile = (path: string): boolean => /\.(ya?ml|mogram|md|txt)$/i.test(path);
+/** Files a code listing can show (D-103): source, config, Terraform, diffs and logs. */
+export const isCodeFile = (path: string): boolean =>
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|rs|java|c|cpp|h|hpp|cs|rb|sh|bash|zsh|json|html|css|scss|sql|tf|tfvars|hcl|toml|ini|diff|patch|log)$/i.test(
+    path,
+  ) || /(?:^|\/)Dockerfile$/i.test(path);
+export const PROJECT_ACCEPT =
+  ".yaml,.yml,.mogram,.zip,.md,.txt,.svg,.png,.jpg,.jpeg,.gif,.webp,.webm,.mp4,.m4a,.mp3,.wav,.ogg,.ts,.tsx,.js,.jsx,.mjs,.cjs,.py,.go,.rs,.java,.c,.cpp,.h,.hpp,.cs,.rb,.sh,.bash,.zsh,.json,.html,.css,.scss,.sql,.tf,.tfvars,.hcl,.toml,.ini,.diff,.patch,.log";
 
 export const projectFiles = z
   .record(projectPath, z.string().max(LIMITS.fileBytes))
@@ -46,8 +60,27 @@ export const projectFiles = z
     "YAML and markdown files can be at most 1 MB.",
   )
   .refine(
-    (files) => Object.keys(files).length <= LIMITS.fileCount,
+    (files) =>
+      Object.values(files).filter((text) => parsePointer(text) === null).length <= LIMITS.fileCount,
     `A diagram can have at most ${LIMITS.fileCount} files.`,
+  )
+  .refine((files) => {
+    const assets = Object.values(files).flatMap((text) => {
+      const pointer = parsePointer(text);
+      return pointer === null ? [] : [pointer];
+    });
+    return (
+      assets.length <= LIMITS.assetCount &&
+      assets.reduce((sum, pointer) => sum + pointer.bytes, 0) <= LIMITS.assetProjectBytes
+    );
+  }, "Assets can total at most 500 MB and 2000 files.")
+  .refine(
+    (files) =>
+      Object.entries(files).every(
+        ([path, text]) =>
+          !isCodeFile(path) || new TextEncoder().encode(text).length <= LIMITS.codeFileBytes,
+      ),
+    "Code files can be at most 200 KB.",
   )
   .refine(
     (files) =>
@@ -131,6 +164,10 @@ export interface ConceptSummary {
   readonly kind: "pattern" | "explainer";
 }
 
+export interface DeckSummary {
+  readonly slides: number;
+}
+
 export interface DiagramSummary {
   readonly id: string;
   readonly name: string;
@@ -140,6 +177,10 @@ export interface DiagramSummary {
   readonly thumbnail: string | null;
   /** Set when the diagram is a concept (D-83, D-85), so the library can offer it. */
   readonly concept: ConceptSummary | null;
+  /** Set when this diagram is a deck, so the dashboard can show its slide count. */
+  readonly deck: DeckSummary | null;
+  /** What it is and how far along: slides, scenes, beats written and recorded. */
+  readonly about: ProjectAbout;
 }
 
 export interface DiagramDetail extends DiagramSummary {

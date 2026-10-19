@@ -2,6 +2,8 @@
 
 import { createContext, use, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import { diagramFileSet } from "@mogram/core/format";
+import type { ProjectFiles } from "@mogram/core/model";
 import type { Checkpoint } from "@/lib/history/rules";
 import type { HistorySource } from "@/features/history/source";
 import { NARROW_WIDTH } from "../store/editor-store";
@@ -63,6 +65,11 @@ export function useOpenViewer(): (query: string) => Promise<void> {
     },
     [host, router],
   );
+}
+
+/** The folder a link asks to edit by itself, when the project has a diagram there (D-97). */
+export function rootIn(files: ProjectFiles, root: string): string {
+  return root !== "" && diagramFileSet(files, root) !== null ? root : "";
 }
 
 /**

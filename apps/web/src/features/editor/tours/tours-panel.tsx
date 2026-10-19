@@ -33,17 +33,18 @@ import { cn } from "@/lib/cn";
 import { useEditor, useEditorShallow, useEditorStore } from "../editor-context";
 import { exitNested } from "../levels";
 import { useOpenViewer } from "../persistence/host";
-import { storyDiagram } from "../store/editor-store";
+import { topDiagram } from "../store/editor-store";
 import { CommitInput } from "../inspector/fields";
 
 /** Tour authoring (TO-9, TO-10): click elements in order, then add choices where it branches. */
 export function ToursPanel({ onClose }: { onClose: () => void }) {
   const store = useEditorStore();
   const diagram = useEditor((s) => s.parsed().diagram);
-  const { authoring, nested, files } = useEditorShallow((s) => ({
+  const { authoring, nested, files, root } = useEditorShallow((s) => ({
     authoring: s.tourAuthoring,
     nested: s.levelPath.length > 0,
     files: s.files,
+    root: s.root,
   }));
   const [selected, setSelected] = useState<string | null>(diagram.tours[0]?.name ?? null);
   const tour = diagram.tours.find((t) => t.name === selected) ?? diagram.tours[0] ?? null;
@@ -77,11 +78,11 @@ export function ToursPanel({ onClose }: { onClose: () => void }) {
         // inside nested diagrams (`aks.checkout`).
         <EmptyState
           icon={<Route />}
-          title={`Tours belong to ${storyDiagram(files).settings.name}`}
+          title={`Tours belong to ${topDiagram(files, root).settings.name}`}
           description="A tour starts from the top diagram and can step into nested diagrams on the way. Go back to the top to write or change one."
           action={
             <Button variant="secondary" size="sm" onClick={() => exitNested(store, 0)}>
-              <ArrowLeft /> Back to {storyDiagram(files).settings.name}
+              <ArrowLeft /> Back to {topDiagram(files, root).settings.name}
             </Button>
           }
         />
